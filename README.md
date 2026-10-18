@@ -1,4 +1,4 @@
-# Fluentcord
+# VoidCord
 
 An offline-friendly Discord client shell made with Tauri 2, React and TypeScript. The preview UI runs on local sample data. The Rust backend now includes an account-aware Discord REST/gateway routing module; OAuth credential provisioning and frontend commands still need to be connected.
 
