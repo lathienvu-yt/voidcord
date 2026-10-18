@@ -32,6 +32,7 @@ export interface DiscordUser {
   bio?: string;
   pronouns?: string;
   bot?: boolean;
+  premium_type?: number;
   avatar_decoration_data?: DiscordAvatarDecoration | null;
   collectibles?: DiscordCollectibles | null;
   primary_guild?: DiscordPrimaryGuild | null;

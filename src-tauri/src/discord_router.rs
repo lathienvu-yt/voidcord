@@ -133,7 +133,7 @@ impl Default for DiscordRouter {
 impl DiscordRouter {
     pub fn new(tokens: TokenManager) -> Self {
         use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
-        
+
         let mut headers = HeaderMap::new();
         // Match the Chrome property you use in your gateway loop!
         headers.insert(
@@ -184,6 +184,81 @@ impl DiscordRouter {
             return Err(DiscordError::InvalidPath);
         }
         self.perform_rest(identity, method, path.to_owned(), body, None).await
+    }
+
+    /// Upload attachments and send a message with the explicitly selected account.
+    pub async fn send_message_with_files(
+        &self,
+        identity: AccountIdentity,
+        channel_id: &str,
+        content: &str,
+        files: Vec<std::path::PathBuf>,
+    ) -> Result<Value, DiscordError> {
+        if channel_id.is_empty() || channel_id.chars().any(|c| !c.is_ascii_digit()) {
+            return Err(DiscordError::InvalidPath);
+        }
+        if files.is_empty() || files.len() > 10 {
+            return Err(DiscordError::Http { status: StatusCode::BAD_REQUEST, body: "Choose between 1 and 10 files".to_owned() });
+        }
+        let token = {
+            let tokens = self.tokens.read().await;
+            tokens.get(identity)?.clone()
+        };
+        // Ask Discord for the current identity's tier. The backend repeats this
+        // check at send time; UI supplied tier values are never trusted.
+        let account_response = self.client.get(format!("{DISCORD_API}/users/@me"))
+            .header(header::AUTHORIZATION, token.0.as_ref()).send().await?;
+        let account_status = account_response.status();
+        let account: Value = account_response.json().await?;
+        if !account_status.is_success() {
+            return Err(DiscordError::Http { status: account_status, body: account.get("message").and_then(Value::as_str).unwrap_or("Could not verify account upload tier").to_owned() });
+        }
+        let premium_type = account.get("premium_type").and_then(Value::as_u64).unwrap_or(0);
+        let size_limit: u64 = match premium_type {
+            2 => 500 * 1024 * 1024,
+            1 | 3 => 50 * 1024 * 1024,
+            _ => 20 * 1024 * 1024,
+        };
+        let payload_json = serde_json::json!({ "content": content });
+        let mut form = reqwest::multipart::Form::new()
+            .text("payload_json", payload_json.to_string());
+        let mut total_size = 0u64;
+        for (index, file_path) in files.into_iter().enumerate() {
+            let metadata = tokio::fs::metadata(&file_path).await.map_err(|error| DiscordError::Http { status: StatusCode::BAD_REQUEST, body: format!("Could not read selected attachment: {error}") })?;
+            if !metadata.is_file() {
+                return Err(DiscordError::Http { status: StatusCode::BAD_REQUEST, body: "An attachment path is not a file".to_owned() });
+            }
+            let file_size = metadata.len();
+            if file_size > size_limit {
+                return Err(DiscordError::Http { status: StatusCode::PAYLOAD_TOO_LARGE, body: format!("This account's upload tier allows files up to {} MiB", size_limit / (1024 * 1024)) });
+            }
+            total_size = total_size.saturating_add(file_size);
+            if total_size > size_limit {
+                return Err(DiscordError::Http { status: StatusCode::PAYLOAD_TOO_LARGE, body: format!("Attachments exceed this account's {} MiB per-message upload allowance", size_limit / (1024 * 1024)) });
+            }
+            let filename = file_path.file_name().and_then(|name| name.to_str()).unwrap_or("attachment").chars()
+                .filter(|c| !c.is_control() && *c != '/' && *c != '\\').take(180).collect::<String>();
+            let file = tokio::fs::File::open(&file_path).await.map_err(|error| DiscordError::Http { status: StatusCode::BAD_REQUEST, body: format!("Could not open selected attachment: {error}") })?;
+            let stream = tokio_util::io::ReaderStream::new(file);
+            let body = reqwest::Body::wrap_stream(stream);
+            let part = reqwest::multipart::Part::stream_with_length(body, file_size).file_name(filename);
+            form = form.part(format!("files[{index}]"), part);
+        }
+        let response = self.client
+            .post(format!("{DISCORD_API}/channels/{channel_id}/messages"))
+            .header(header::AUTHORIZATION, token.0.as_ref())
+            .multipart(form)
+            .send().await?;
+        let status = response.status();
+        let bytes = response.bytes().await?;
+        if !status.is_success() {
+            let detail = serde_json::from_slice::<DiscordErrorBody>(&bytes)
+                .map(|error| format!("{} (Discord code {:?})", error.message.unwrap_or_default(), error.code))
+                .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
+            return Err(DiscordError::Http { status, body: detail });
+        }
+        if bytes.is_empty() { return Ok(Value::Null); }
+        Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
     pub async fn retry_captcha(
@@ -302,7 +377,15 @@ impl DiscordRouter {
         };
         *self.gateway_sender.write().await = None;
         let url = url::Url::parse(DISCORD_GATEWAY).map_err(|_| DiscordError::InvalidWebSocketUrl)?;
-        let (mut socket, _) = connect_async(url.as_str()).await?;
+
+        let (mut socket, _) = match connect_async(url.as_str()).await {
+            Ok(res) => res,
+            Err(e) => {
+                eprintln!("[VoidCord gateway] Failed to connect: {e:?}");
+                return Err(DiscordError::WebSocket(e));
+            }
+        };
+
         let (gateway_tx, mut gateway_rx) = watch::channel(Value::Null);
         let mut pending_member_request: Option<Value> = None;
         let mut next_member_request_at = tokio::time::Instant::now();
@@ -322,33 +405,67 @@ impl DiscordRouter {
                         return Err(DiscordError::WebSocketClosed);
                     }
                     let payload = gateway_rx.borrow_and_update().clone();
-                    pending_member_request = (!payload.is_null()).then_some(payload);
+                    if payload.is_null() {
+                        continue;
+                    }
+                    if payload.get("op").and_then(Value::as_u64) == Some(14) {
+                        pending_member_request = Some(payload);
+                    } else {
+                        if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
+                            eprintln!("[VoidCord gateway] Send error: {e:?}");
+                            break;
+                        }
+                    }
                 }
                 _ = tokio::time::sleep_until(next_member_request_at), if pending_member_request.is_some() => {
                     if let Some(payload) = pending_member_request.take() {
-                        socket.send(WsMessage::Text(payload.to_string())).await?;
+                        if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
+                            eprintln!("[VoidCord gateway] Member request send error: {e:?}");
+                            break;
+                        }
                         next_member_request_at = tokio::time::Instant::now() + Duration::from_secs(2);
                     }
                 }
                 _ = heartbeat.tick(), if heartbeat_interval.is_some() => {
                     let payload = serde_json::json!({"op": 1, "d": sequence});
-                    socket.send(WsMessage::Text(payload.to_string())).await?;
+                    if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
+                        eprintln!("[VoidCord gateway] Heartbeat send error: {e:?}");
+                        break;
+                    }
                 }
                 message = socket.next() => {
-                    let Some(message) = message else { return Err(DiscordError::WebSocketClosed); };
-                    match message? {
+                    let Some(message_result) = message else {
+                        return Err(DiscordError::WebSocketClosed);
+                    };
+
+                    // Prevent freezing or crashing on malformed frames
+                    let ws_msg = match message_result {
+                        Ok(m) => m,
+                        Err(e) => {
+                            eprintln!("[VoidCord gateway] WS frame error (recovering): {e:?}");
+                            continue;
+                        }
+                    };
+
+                    match ws_msg {
                         WsMessage::Text(text) => {
-                            let event: Value = serde_json::from_str(&text)?;
+                            let event: Value = match serde_json::from_str(&text) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    eprintln!("[VoidCord gateway] JSON parse error: {e:?}");
+                                    continue;
+                                }
+                            };
+
                             let op = event.get("op").and_then(Value::as_u64);
                             if let Some(seq) = event.get("s").and_then(Value::as_u64) {
                                 sequence = Some(seq);
                             }
 
-                            // OP 10: Hello -> initialize heartbeat and send Identify
                             if op == Some(10) {
                                 if let Some(ms) = event.pointer("/d/heartbeat_interval").and_then(Value::as_u64) {
-                                    heartbeat_interval = Some(Duration::from_millis(ms));
                                     let interval = Duration::from_millis(ms);
+                                    heartbeat_interval = Some(interval);
                                     heartbeat = tokio::time::interval_at(
                                         tokio::time::Instant::now() + interval,
                                         interval,
@@ -357,7 +474,6 @@ impl DiscordRouter {
                                 }
 
                                 if !identified {
-                                    // User tokens identify without 'intents' (which is bot-only)
                                     let identify = serde_json::json!({
                                         "op": 2,
                                         "d": {
@@ -373,46 +489,30 @@ impl DiscordRouter {
                                             }
                                         }
                                     });
-                                    socket.send(WsMessage::Text(identify.to_string())).await?;
+                                    if let Err(e) = socket.send(WsMessage::Text(identify.to_string())).await {
+                                        eprintln!("[VoidCord gateway] Identify send error: {e:?}");
+                                        break;
+                                    }
                                     identified = true;
                                 }
                             }
 
-                            // The gateway can request an immediate heartbeat or tell
-                            // us to reconnect. Honor both instead of waiting for timeout.
                             if op == Some(1) {
                                 let payload = serde_json::json!({"op": 1, "d": sequence});
-                                socket.send(WsMessage::Text(payload.to_string())).await?;
-                            } else if op == Some(7) {
+                                let _ = socket.send(WsMessage::Text(payload.to_string())).await;
+                            } else if op == Some(7) || op == Some(9) {
                                 return Err(DiscordError::WebSocketClosed);
-                            } else if op == Some(9) {
-                                identified = false;
-                                tokio::time::sleep(Duration::from_secs(1)).await;
-                                let identify = serde_json::json!({
-                                    "op": 2,
-                                    "d": {
-                                        "token": token.0.as_ref(),
-                                        "capabilities": 30717,
-                                        "properties": {
-                                            "os": "Windows",
-                                            "browser": "Chrome",
-                                            "device": "",
-                                            "system_locale": "en-US",
-                                            "client_version": "1.0.9000",
-                                            "release_channel": "stable"
-                                        }
-                                    }
-                                });
-                                socket.send(WsMessage::Text(identify.to_string())).await?;
-                                identified = true;
                             }
 
                             if event.get("t").and_then(Value::as_str) == Some("READY") {
                                 *self.gateway_sender.write().await = Some(gateway_tx.clone());
                             }
+
                             on_event(event);
                         }
-                        WsMessage::Ping(payload) => socket.send(WsMessage::Pong(payload)).await?,
+                        WsMessage::Ping(payload) => {
+                            let _ = socket.send(WsMessage::Pong(payload)).await;
+                        }
                         WsMessage::Close(frame) => {
                             eprintln!("[VoidCord gateway] WebSocket closed: {frame:?}");
                             return Err(DiscordError::WebSocketClosed);
@@ -422,6 +522,7 @@ impl DiscordRouter {
                 }
             }
         }
+        Err(DiscordError::WebSocketClosed)
     }
 }
 

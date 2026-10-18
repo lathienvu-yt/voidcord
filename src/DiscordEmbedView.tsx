@@ -32,6 +32,24 @@ export function DiscordEmbedView({
 
   const imageUrl = resolveUrl(embed.image?.url);
   const thumbnailUrl = resolveUrl(embed.thumbnail?.url);
+  const customFields = Array.isArray(embed.fields) ? embed.fields.filter(field => !!field) : [];
+  const customFieldMap = new Map(customFields.map(field => [String(field.name || "").toLowerCase(), field.value]));
+  const officialHeader = customFieldMap.get("header");
+  const officialBody = customFieldMap.get("body");
+  const officialLearnMore = customFieldMap.get("learn_more_link");
+  const officialCtas = customFieldMap.get("ctas");
+  const officialDetails = customFields.filter(field => !["header", "body", "learn_more_link", "ctas", "timestamp", "theme", "icon_type", "content_type", "classification_id"].includes(String(field.name || "").toLowerCase()));
+  if (officialBody && (officialHeader || /discord/i.test(embed.title || ""))) {
+    return (
+      <div className="discord-official-embed" role="note">
+        {embed.title && <h3>{embed.title}</h3>}
+        {officialHeader && <strong>{officialHeader}</strong>}
+        <div className="discord-official-embed-body"><DiscordMarkdown content={officialBody} channels={channels} users={users} onChannelClick={onChannelClick} /></div>
+        {officialDetails.length > 0 && <dl>{officialDetails.map((field, index) => <div key={`${field.name}-${index}`}><dt>{field.name}</dt><dd>{field.value}</dd></div>)}</dl>}
+        {(officialLearnMore || officialCtas) && <a href={officialLearnMore || officialCtas} target="_blank" rel="noopener noreferrer">Learn More</a>}
+      </div>
+    );
+  }
   const imageOnly = !embed.title
     && !embed.description
     && !embed.author?.name
@@ -133,9 +151,9 @@ export function DiscordEmbedView({
           )}
 
           {/* Fields */}
-          {embed.fields && embed.fields.length > 0 && (
+          {Array.isArray(embed.fields) && embed.fields.some(field => !!field) && (
             <div className="embed-fields-grid">
-              {embed.fields.map((field, idx) => (
+              {customFields.map((field, idx) => (
                 <div
                   key={idx}
                   className={`embed-field ${field.inline ? "inline" : "full"}`}

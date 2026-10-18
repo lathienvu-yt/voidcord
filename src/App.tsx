@@ -3,10 +3,11 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { load } from "@tauri-apps/plugin-store";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  Archive, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Gamepad2, Gift, Hash, History,
+  Archive, Ban, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
   Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Pin, Play, Search, Send, Settings, ShoppingBag,
-  Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Sticker, Terminal, Trash2, Trophy, UserPlus, Users, Volume2, VolumeX, WifiOff, Wrench, X,
+  Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut
 } from "lucide-react";
 
@@ -19,11 +20,12 @@ import {
 import { DiscordMarkdown } from "./DiscordMarkdown";
 import { DiscordEmbedView } from "./DiscordEmbedView";
 import { DiscordComponents } from "./DiscordComponents";
+import SettingsMenu from "./SettingsMenu";
 import {
-  deleteDeletedMessage, markCachedMessageDeleted, readArchivedMedia, readCachedAppData, readCachedDraft,
-  readCachedMessages, readDeletedChannels, readDeletedMessages, writeArchivedMedia, writeCachedAppData,
+  deleteDeletedMessage, deleteEditedMessage, markCachedMessageDeleted, readArchivedMedia, readCachedAppData, readCachedDraft,
+  readCachedMessages, readDeletedChannels, readDeletedMessages, readEditedMessages, writeArchivedMedia, writeCachedAppData,
   writeCachedDraft, writeCachedMessages, writeDeletedChannel, writeDeletedMessage, DeletedChannelLog,
-  DeletedMessageLog,
+  DeletedMessageLog, EditedMessageLog, writeEditedMessage,
 } from "./offlineCache";
 import "./style.css";
 
@@ -32,10 +34,24 @@ import "./style.css";
 function isTextChannel(c: DiscordChannel) {
   return c.type === CHANNEL_TYPE_TEXT || c.type === CHANNEL_TYPE_ANNOUNCEMENT;
 }
+
+const EMOJI_PICKER_ITEMS = [
+  { category: "Smileys", items: ["😀","😃","😄","😁","😆","😅","😂","🤣","😊","😇","🙂","🙃","😉","😍","🥰","😘","😋","😎","🤔","🙄","😴","😭","😡","🤯","🥳","😬","🤗","🫡","💀","🤡","👀","🙏","👏","🙌","👍","👎","❤️","🧡","💛","💚","💙","💜","🖤","🤍","💯","✨","🔥","🎉","✅","❌"] },
+  { category: "Nature", items: ["🐶","🐱","🐭","🐹","🐰","🦊","🐻","🐼","🐨","🐸","🐵","🐧","🐦","🦄","🐝","🦋","🌸","🌹","🌻","🌈","☀️","🌙","⭐","⚡"] },
+  { category: "Food", items: ["🍎","🍊","🍋","🍉","🍇","🍓","🫐","🍒","🍑","🥭","🍍","🥝","🍕","🍔","🍟","🌭","🍿","🍩","🍪","🎂","☕","🧋"] },
+  { category: "Activities", items: ["⚽","🏀","🏈","⚾","🎮","🕹️","🎯","🎨","🎤","🎧","🎬","🏆","🎁","🎈","🎵","🎶"] },
+  { category: "Travel", items: ["🚗","🚕","🚌","🚎","🏎️","🚲","✈️","🚀","🚂","🚢","🏠","🏖️","🌍","🗽"] },
+];
+const EMOJI_SEARCH_TERMS: Record<string, string> = {
+  "😀": "grinning smile happy", "😃": "smile happy", "😄": "smile happy", "😁": "grin happy", "😆": "laugh", "😅": "sweat laugh", "😂": "joy laugh tears", "🤣": "rofl laugh", "😊": "blush smile", "😉": "wink", "😍": "heart eyes love", "🥰": "love hearts", "😘": "kiss", "😋": "yum", "😎": "cool sunglasses", "🤔": "think", "🙄": "eyeroll", "😴": "sleep", "😭": "cry sad", "😡": "angry mad", "🥳": "party celebrate", "🤗": "hug", "🙏": "pray thanks", "👏": "clap", "👍": "thumbs up yes", "👎": "thumbs down no", "❤️": "heart love red", "💯": "100 perfect", "✨": "sparkles", "🔥": "fire hot", "🎉": "party celebrate", "✅": "check yes", "❌": "cross no", "🐶": "dog", "🐱": "cat", "🦊": "fox", "🐻": "bear", "🐼": "panda", "🐸": "frog", "🦄": "unicorn", "🌸": "flower", "🌈": "rainbow", "⭐": "star", "🍕": "pizza", "🍔": "burger", "🍟": "fries", "🍩": "donut", "☕": "coffee", "🎮": "game controller gaming", "⚽": "soccer football", "🏀": "basketball", "🎁": "gift", "🎵": "music", "🚗": "car", "✈️": "airplane plane", "🚀": "rocket",
+};
+
+type ComposerAttachment = { uploadId: string; filename: string; size: number };
 function isMessageChannel(c: DiscordChannel) {
   return isTextChannel(c) || c.type === CHANNEL_TYPE_DM || c.type === CHANNEL_TYPE_GROUP_DM;
 }
 function channelDisplayName(c: DiscordChannel) {
+  if (!c || typeof c !== "object") return "Select a channel";
   if (c.name) return c.name;
   if (c.type === CHANNEL_TYPE_DM) {
     const recipient = c.recipients?.[0];
@@ -180,7 +196,7 @@ function canForwardMessage(message: DiscordMessage): boolean {
 }
 
 // Group consecutive messages from the same author (< 7-min gap → compact)
-function groupMessages(msgs: DiscordMessage[]) {
+function groupMessages(msgs: DiscordMessage[], ignoredUserIds: Set<string> = new Set()) {
   const groups: DiscordMessage[][] = [];
   for (const m of msgs) {
     const last = groups[groups.length - 1];
@@ -188,7 +204,8 @@ function groupMessages(msgs: DiscordMessage[]) {
     const gap =
       prev &&
       new Date(m.timestamp).getTime() - new Date(prev.timestamp).getTime() < 7 * 60_000;
-    if (last && prev?.author.id === m.author.id && gap) {
+    if (last && prev?.author.id === m.author.id && gap
+      && !ignoredUserIds.has(m.author?.id || "") && !ignoredUserIds.has(prev.author?.id || "")) {
       last.push(m);
     } else {
       groups.push([m]);
@@ -222,7 +239,16 @@ type MediaViewerState = { url: string; kind: "image" | "video"; name?: string };
 type MediaLensState = { left: number; top: number; backgroundSize: string; backgroundPosition: string };
 type CaptchaChallenge = { request_id: string; service: string; site_key: string | null; rq_data: string | null };
 type CaptchaPromptState = { challenge: CaptchaChallenge; onSolve: (captchaKey: string) => void; onCancel: () => void };
-type AppPreferences = { accent: "blurple" | "violet" | "emerald"; compactMessages: boolean; reduceMotion: boolean; autoplayVideos: boolean };
+type AppPreferences = {
+  accent: "blurple" | "violet" | "emerald";
+  compactMessages: boolean;
+  reduceMotion: boolean;
+  autoplayVideos: boolean;
+  channelSidebarWidth: number;
+  chatFontScale: number;
+  serverOrder: string[];
+  serverFolders: Record<string, string>;
+};
 
 const CAPTCHA_ERROR_PREFIX = "VOIDCORD_CAPTCHA:";
 
@@ -301,7 +327,7 @@ function loadHCaptchaScript(): Promise<void> {
 }
 
 function readPreferences(): AppPreferences {
-  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false };
+  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {} };
   try {
     const saved = JSON.parse(localStorage.getItem("voidcord:preferences") || "{}");
     return {
@@ -309,6 +335,10 @@ function readPreferences(): AppPreferences {
       compactMessages: typeof saved.compactMessages === "boolean" ? saved.compactMessages : defaults.compactMessages,
       reduceMotion: typeof saved.reduceMotion === "boolean" ? saved.reduceMotion : defaults.reduceMotion,
       autoplayVideos: typeof saved.autoplayVideos === "boolean" ? saved.autoplayVideos : defaults.autoplayVideos,
+      channelSidebarWidth: Number.isFinite(saved.channelSidebarWidth) ? Math.max(180, Math.min(360, saved.channelSidebarWidth)) : defaults.channelSidebarWidth,
+      chatFontScale: Number.isFinite(saved.chatFontScale) ? Math.max(85, Math.min(125, saved.chatFontScale)) : defaults.chatFontScale,
+      serverOrder: Array.isArray(saved.serverOrder) ? saved.serverOrder.filter((id: unknown): id is string => typeof id === "string") : [],
+      serverFolders: saved.serverFolders && typeof saved.serverFolders === "object" && !Array.isArray(saved.serverFolders) ? saved.serverFolders : {},
     };
   } catch {
     return defaults;
@@ -330,9 +360,52 @@ function AvatarDecorationOverlay({ user, className = "" }: { user: DiscordUser; 
   return url ? <img src={url} alt="" aria-hidden="true" className={`avatar-decoration-overlay ${className}`} /> : null;
 }
 
+function normalizeGuildList(value: unknown): DiscordGuild[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((guild): guild is DiscordGuild =>
+    !!guild && typeof guild === "object" && typeof guild.id === "string" && guild.id.length > 0 &&
+    typeof guild.name === "string" && guild.name.length > 0
+  );
+}
+
+type UserPlatform = "desktop" | "mobile" | "web" | "voidcord";
+function platformsFromPresence(presence: any): UserPlatform[] {
+  const clientStatus = presence?.client_status || {};
+  const activities = Array.isArray(presence?.activities) ? presence.activities : [];
+  const marker = activities.some((activity: any) =>
+    /voidcord/i.test(`${activity?.name || ""} ${activity?.state || ""} ${activity?.details || ""}`)
+  );
+  const platforms: UserPlatform[] = [];
+  if (marker || clientStatus.voidcord) platforms.push("voidcord");
+  if (clientStatus.desktop) platforms.push("desktop");
+  if (clientStatus.mobile) platforms.push("mobile");
+  if (clientStatus.web) platforms.push("web");
+  return platforms;
+}
+
+function PlatformIndicators({ platforms }: { platforms: UserPlatform[] }) {
+  if (!platforms.length) return null;
+  const labels: Record<UserPlatform, string> = { desktop: "PC", mobile: "Mobile", web: "Web", voidcord: "VoidCord" };
+  const symbols: Record<UserPlatform, string> = { desktop: "▣", mobile: "▯", web: "◎", voidcord: "V" };
+  return <span className="platform-indicators" aria-label={`Active on ${platforms.map(platform => labels[platform]).join(", ")}`}>
+    {platforms.map(platform => <span key={platform} className={`platform-indicator platform-${platform}`} title={labels[platform]} aria-hidden="true">{symbols[platform]}</span>)}
+  </span>;
+}
+
 // ── Login screen ────────────────────────────────────────────────────────────
 
-function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser) => void }) {
+type SavedDiscordAccount = { user: DiscordUser; token: string };
+
+async function persistDiscordAccount(user: DiscordUser, token: string): Promise<SavedDiscordAccount[]> {
+  const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
+  const current = await store.get<SavedDiscordAccount[]>("accounts") || [];
+  const next = [{ user, token }, ...current.filter(account => account.user?.id !== user.id)];
+  await store.set("accounts", next);
+  await store.set("token", token);
+  return next;
+}
+
+function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: SavedDiscordAccount[]) => void }) {
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -363,9 +436,8 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser) => void }) {
           });
         });
       }
-      const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
-      await store.set("token", token.trim());
-      onLogin(user);
+      const accounts = await persistDiscordAccount(user, token.trim());
+      onLogin(user, accounts);
     } catch (e: any) {
       setError(String(e));
     } finally {
@@ -504,10 +576,114 @@ function CaptchaDialog({
   );
 }
 
+function AccountSwitcher({
+  activeUser,
+  accounts,
+  onClose,
+  onConnected,
+}: {
+  activeUser: DiscordUser;
+  accounts: SavedDiscordAccount[];
+  onClose: () => void;
+  onConnected: (user: DiscordUser, token: string, accounts: SavedDiscordAccount[]) => void;
+}) {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [captchaPrompt, setCaptchaPrompt] = useState<CaptchaPromptState | null>(null);
+
+  const authenticate = async (candidate: string) => {
+    try {
+      return await tauriInvoke<DiscordUser>("set_token", { token: candidate });
+    } catch (requestError) {
+      const challenge = parseCaptchaChallenge(requestError);
+      if (!challenge) throw requestError;
+      return await new Promise<DiscordUser>((resolve, reject) => {
+        setCaptchaPrompt({
+          challenge,
+          onSolve: captchaKey => {
+            setCaptchaPrompt(null);
+            void tauriInvoke<DiscordUser>("retry_captcha_request", { requestId: challenge.request_id, captchaKey }).then(resolve, reject);
+          },
+          onCancel: () => {
+            setCaptchaPrompt(null);
+            reject(new Error("CAPTCHA challenge cancelled"));
+          },
+        });
+      });
+    }
+  };
+
+  const connect = async (candidate: string) => {
+    if (!candidate.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const user = await authenticate(candidate.trim());
+      const next = await persistDiscordAccount(user, candidate.trim());
+      onConnected(user, candidate.trim(), next);
+    } catch (reason) {
+      const activeToken = accounts.find(account => account.user.id === activeUser.id)?.token;
+      if (activeToken) await tauriInvoke("set_token", { token: activeToken }).catch(() => undefined);
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+      setBusyId(null);
+    }
+  };
+
+  const removeAccount = async (userId: string) => {
+    const next = accounts.filter(account => account.user.id !== userId);
+    const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
+    await store.set("accounts", next);
+    onConnected(activeUser, "", next);
+  };
+
+  return (
+    <div className="account-switcher-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="account-switcher-modal" role="dialog" aria-modal="true" aria-labelledby="account-switcher-title">
+        <header className="account-switcher-header">
+          <div><h2 id="account-switcher-title">Switch accounts</h2><p>Save as many accounts as you need on this device.</p></div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close account switcher"><X size={17} /></button>
+        </header>
+        <div className="account-switcher-list">
+          {accounts.map(account => {
+            const current = account.user.id === activeUser.id;
+            return (
+              <div className={`account-switcher-row ${current ? "current" : ""}`} key={account.user.id}>
+                <img src={avatarUrl(account.user, 48)} alt="" />
+                <div className="account-switcher-name"><strong>{displayName(account.user)}</strong><small>@{account.user.username}{current ? " · Current" : ""}</small></div>
+                {current
+                  ? <span className="account-current-badge">Current</span>
+                  : <>
+                    <button type="button" className="account-switch-button" disabled={busy} onClick={() => { setBusyId(account.user.id); void connect(account.token); }}>Switch</button>
+                    <button type="button" className="account-remove-button" title={`Remove ${displayName(account.user)} from saved accounts`} onClick={() => void removeAccount(account.user.id)}><X size={14} /></button>
+                  </>}
+              </div>
+            );
+          })}
+          {accounts.length === 0 && <p className="account-switcher-empty">No saved accounts yet.</p>}
+        </div>
+        <form className="account-add-form" onSubmit={event => { event.preventDefault(); void connect(token); }}>
+          <label htmlFor="add-account-token">Add another account</label>
+          <div className="account-add-row"><input id="add-account-token" type="password" autoComplete="off" placeholder="Paste account token" value={token} onChange={event => setToken(event.target.value)} /><button type="submit" disabled={busy || !token.trim()}>{busy && !busyId ? <Loader2 size={14} className="spinning" /> : "Add"}</button></div>
+          {busy && <small className="account-switcher-progress">{busyId ? "Switching account…" : "Connecting account…"}</small>}
+          {error && <p className="account-switcher-error">{error}</p>}
+        </form>
+      </section>
+      {captchaPrompt && <CaptchaDialog challenge={captchaPrompt.challenge} onSolve={captchaPrompt.onSolve} onCancel={captchaPrompt.onCancel} />}
+    </div>
+  );
+}
+
 // ── Main App ────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [me, setMe] = useState<DiscordUser | null>(null);
+  const [savedAccounts, setSavedAccounts] = useState<SavedDiscordAccount[]>([]);
+  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
+  const [accountSessionVersion, setAccountSessionVersion] = useState(0);
   const [authLoading, setAuthLoading] = useState(true);
 
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
@@ -522,6 +698,14 @@ export default function App() {
   const [isDmView, setIsDmView] = useState(true);
   const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "nitro" | "shop" | "quests" | "chat">("friends");
   const [relationships, setRelationships] = useState<DiscordRelationship[]>([]);
+  const [ignoredUserIds, setIgnoredUserIds] = useState<Set<string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("voidcord:ignored-users") || "[]");
+      return new Set(Array.isArray(saved) ? saved.filter((id: unknown): id is string => typeof id === "string") : []);
+    } catch { return new Set(); }
+  });
+  const [revealedIgnoredMessageIds, setRevealedIgnoredMessageIds] = useState<Set<string>>(() => new Set());
+  const [revealedIgnoredProfileIds, setRevealedIgnoredProfileIds] = useState<Set<string>>(() => new Set());
   const [friendRequestView, setFriendRequestView] = useState<"incoming" | "outgoing">("incoming");
   const [messageRequests, setMessageRequests] = useState<DiscordChannel[]>([]);
   const [messageRequestsLoading, setMessageRequestsLoading] = useState(false);
@@ -546,6 +730,7 @@ export default function App() {
     }
   });
   const [selectedChannel, setSelectedChannel] = useState<DiscordChannel | null>(null);
+  const selectedChannelRef = useRef<DiscordChannel | null>(null);
   const [channelAccess, setChannelAccess] = useState<"ok" | "MISSING_ACCESS" | "MISSING_PERMS">("ok");
   const [knownLockedChannels, setKnownLockedChannels] = useState<Set<string>>(new Set());
   const [offlineCache, setOfflineCache] = useState(false);
@@ -569,6 +754,7 @@ export default function App() {
   const [guildMembers, setGuildMembers] = useState<any[]>([]);
   const [guildRoles, setGuildRoles] = useState<any[]>([]);
   const [memberPresences, setMemberPresences] = useState<Record<string, string>>({});
+  const [memberPlatforms, setMemberPlatforms] = useState<Record<string, UserPlatform[]>>({});
   const [memberCustomStatuses, setMemberCustomStatuses] = useState<Record<string, string>>({});
   
   const [selectedMemberProfile, setSelectedMemberProfile] = useState<any | null>(null);
@@ -583,11 +769,15 @@ export default function App() {
   const [dmProfileData, setDmProfileData] = useState<any>(null);
   const [dmProfileLoading, setDmProfileLoading] = useState(false);
   const [messageLoggerOpen, setMessageLoggerOpen] = useState(false);
+  const [messageLoggerMode, setMessageLoggerMode] = useState<"deleted" | "edited">("deleted");
   const [deletedLogs, setDeletedLogs] = useState<DeletedMessageLog[]>([]);
+  const [editedLogs, setEditedLogs] = useState<EditedMessageLog[]>([]);
   const [loggerLoading, setLoggerLoading] = useState(false);
   const [loggerError, setLoggerError] = useState("");
   const [selectedDeletedLog, setSelectedDeletedLog] = useState<DeletedMessageLog | null>(null);
   const [restoredDeletedMessage, setRestoredDeletedMessage] = useState<DiscordMessage | null>(null);
+  const [selectedEditedLog, setSelectedEditedLog] = useState<EditedMessageLog | null>(null);
+  const [restoredEditedMessage, setRestoredEditedMessage] = useState<DiscordMessage | null>(null);
   const [deletedChannelViewerOpen, setDeletedChannelViewerOpen] = useState(false);
   const [deletedChannelLogs, setDeletedChannelLogs] = useState<DeletedChannelLog[]>([]);
   const [deletedChannelLogsLoading, setDeletedChannelLogsLoading] = useState(false);
@@ -595,10 +785,20 @@ export default function App() {
   const [deletedChannelMessages, setDeletedChannelMessages] = useState<DiscordMessage[]>([]);
 
   const [draft, setDraft] = useState("");
+  const draftRef = useRef("");
+  const [composerFiles, setComposerFiles] = useState<ComposerAttachment[]>([]);
+  const [accountUploadLimitBytes, setAccountUploadLimitBytes] = useState(20 * 1024 * 1024);
+  const [composerPicker, setComposerPicker] = useState<"gif" | "emoji" | null>(null);
+  const [emojiQuery, setEmojiQuery] = useState("");
+  const [gifQuery, setGifQuery] = useState("");
+  const [gifUrl, setGifUrl] = useState("");
   const [memberOpen, setMemberOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [protoSettingsOpen, setProtoSettingsOpen] = useState(false);
+  const [settingsTheme, setSettingsTheme] = useState<"dark" | "light">("dark");
   const [settingsTab, setSettingsTab] = useState<"account" | "themes">("account");
   const [preferences, setPreferences] = useState<AppPreferences>(readPreferences);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
   const [mediaViewer, setMediaViewer] = useState<MediaViewerState | null>(null);
   const [mediaZoom, setMediaZoom] = useState(1);
   const [mediaZoomOrigin, setMediaZoomOrigin] = useState("50% 50%");
@@ -797,7 +997,7 @@ export default function App() {
         ? await invoke<any>("join_guild_invite", { inviteCode: serverInvite })
         : await invoke<any>("create_guild", { name: newServerName });
       const guildId = serverDialogMode === "create" ? result?.id : result?.guild?.id;
-      const refreshedGuilds = await invoke<DiscordGuild[]>("get_guilds");
+      const refreshedGuilds = normalizeGuildList(await invoke<DiscordGuild[]>("get_guilds"));
       setGuilds(refreshedGuilds);
       void writeCachedAppData("guilds", refreshedGuilds);
       const joinedGuild = refreshedGuilds.find(guild => guild.id === guildId);
@@ -869,6 +1069,7 @@ export default function App() {
 
   const openMessageLogger = async () => {
     setMessageLoggerOpen(true);
+    setMessageLoggerMode("deleted");
     setLoggerLoading(true);
     setLoggerError("");
     try {
@@ -877,6 +1078,23 @@ export default function App() {
       if (logs[0]) await selectDeletedLog(logs[0]);
     } catch (error) {
       setLoggerError(`Could not read the local message log: ${error}`);
+    } finally {
+      setLoggerLoading(false);
+    }
+  };
+
+  const openEditedMessageLogger = async () => {
+    setMessageLoggerOpen(true);
+    setMessageLoggerMode("edited");
+    setLoggerLoading(true);
+    setLoggerError("");
+    try {
+      const logs = await readEditedMessages();
+      setEditedLogs(logs);
+      if (logs[0]) await selectEditedLog(logs[0]);
+      else { setSelectedEditedLog(null); setRestoredEditedMessage(null); }
+    } catch (error) {
+      setLoggerError(`Could not read the local edit log: ${error}`);
     } finally {
       setLoggerLoading(false);
     }
@@ -904,6 +1122,44 @@ export default function App() {
     } catch (error) {
       setRestoredDeletedMessage(entry.message);
       notify(`Could not restore deleted media: ${error}`);
+    }
+  };
+
+  const selectEditedLog = async (entry: EditedMessageLog) => {
+    setSelectedEditedLog(entry);
+    try {
+      const attachments = await Promise.all((entry.message.attachments || []).map(async attachment => {
+        const url = await readArchivedMedia(`${entry.id}:${attachment.id}`);
+        return url ? { ...attachment, url, proxy_url: url } : attachment;
+      }));
+      const embeds = await Promise.all((entry.message.embeds || []).map(async (embed, index) => {
+        const [image, thumbnail] = await Promise.all([
+          readArchivedMedia(`${entry.id}:embed:${index}:image`),
+          readArchivedMedia(`${entry.id}:embed:${index}:thumbnail`),
+        ]);
+        return {
+          ...embed,
+          image: image && embed.image ? { ...embed.image, url: image, proxy_url: image } : embed.image,
+          thumbnail: thumbnail && embed.thumbnail ? { ...embed.thumbnail, url: thumbnail, proxy_url: thumbnail } : embed.thumbnail,
+        };
+      }));
+      setRestoredEditedMessage({ ...entry.message, attachments, embeds });
+    } catch (error) {
+      setRestoredEditedMessage(entry.message);
+      notify(`Could not restore edited media: ${error}`);
+    }
+  };
+
+  const removeEditedLog = async (entry: EditedMessageLog) => {
+    try {
+      await deleteEditedMessage(entry.id);
+      setEditedLogs(previous => previous.filter(item => item.id !== entry.id));
+      if (selectedEditedLog?.id === entry.id) {
+        setSelectedEditedLog(null);
+        setRestoredEditedMessage(null);
+      }
+    } catch (error) {
+      notify(`Could not remove edit log entry: ${error}`);
     }
   };
 
@@ -1000,6 +1256,14 @@ export default function App() {
   }, [selectedChannel?.id, messages]);
 
   useEffect(() => {
+    selectedChannelRef.current = selectedChannel;
+  }, [selectedChannel]);
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
+  useEffect(() => {
     if (!selectedChannel?.id || draftReadyChannel !== selectedChannel.id) return;
     void writeCachedDraft(selectedChannel.id, draft).catch(() => {});
   }, [selectedChannel?.id, draftReadyChannel, draft]);
@@ -1008,17 +1272,23 @@ export default function App() {
     (async () => {
       try {
         const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
-        const saved = await store.get<string>("token");
+        const accounts = await store.get<SavedDiscordAccount[]>("accounts") || [];
+        setSavedAccounts(accounts);
+        const saved = await store.get<string>("token") || accounts[0]?.token;
         if (saved) {
           const cachedUser = await readCachedAppData<DiscordUser>("current-user").catch(() => undefined);
           if (cachedUser) {
             setMe(cachedUser);
             setAuthLoading(false);
+            const migratedAccounts = await persistDiscordAccount(cachedUser, saved).catch(() => accounts);
+            setSavedAccounts(migratedAccounts);
           }
           try {
             const user = await invoke<DiscordUser>("set_token", { token: saved });
             setMe(user);
             void writeCachedAppData("current-user", user);
+            const migratedAccounts = await persistDiscordAccount(user, saved);
+            setSavedAccounts(migratedAccounts);
           } catch {
             if (!cachedUser) throw new Error("No cached user profile");
           }
@@ -1037,7 +1307,7 @@ export default function App() {
       let lastReadChannel: { channelId: string; guildId?: string } | null = null;
       try {
         const saved = JSON.parse(localStorage.getItem("voidcord:last-read-channel") || "null");
-        if (saved && typeof saved.channelId === "string") {
+        if (accountSessionVersion === 0 && saved && typeof saved.channelId === "string") {
           lastReadChannel = {
             channelId: saved.channelId,
             ...(typeof saved.guildId === "string" ? { guildId: saved.guildId } : {}),
@@ -1047,29 +1317,32 @@ export default function App() {
         // Ignore malformed optional local navigation state.
       }
 
-      const [cachedGuilds, cachedDms] = await Promise.all([
-        readCachedAppData<DiscordGuild[]>("guilds").catch(() => undefined),
-        readCachedAppData<DiscordChannel[]>("dm-channels").catch(() => undefined),
-      ]);
-      if (cachedGuilds) setGuilds(cachedGuilds);
+      const [cachedGuilds, cachedDms] = accountSessionVersion === 0
+        ? await Promise.all([
+          readCachedAppData<DiscordGuild[]>("guilds").catch(() => undefined),
+          readCachedAppData<DiscordChannel[]>("dm-channels").catch(() => undefined),
+        ])
+        : [undefined, undefined];
+      const validCachedGuilds = normalizeGuildList(cachedGuilds);
+      if (cachedGuilds) setGuilds(validCachedGuilds);
       if (cachedDms) setDmChannels(cachedDms);
       if (!navigator.onLine) {
         const cachedDm = cachedDms?.find(channel => channel.id === lastReadChannel?.channelId);
         if (cachedDm) {
           void selectChannel(cachedDm);
         } else if (lastReadChannel?.guildId) {
-          const cachedGuild = cachedGuilds?.find(guild => guild.id === lastReadChannel?.guildId);
+          const cachedGuild = validCachedGuilds.find(guild => guild.id === lastReadChannel?.guildId);
           if (cachedGuild) void selectGuild(cachedGuild, lastReadChannel.channelId);
         }
         return;
       }
 
-      let availableGuilds = cachedGuilds || [];
+      let availableGuilds = validCachedGuilds;
       try {
         const list = await invoke<DiscordGuild[]>("get_guilds");
-        availableGuilds = list;
-        setGuilds(list);
-        void writeCachedAppData("guilds", list);
+        availableGuilds = normalizeGuildList(list);
+        setGuilds(availableGuilds);
+        void writeCachedAppData("guilds", availableGuilds);
       } catch (e) {
         notify(`Failed to load servers: ${e}`);
       }
@@ -1127,7 +1400,7 @@ export default function App() {
         notify(`Gateway error: ${e}`);
       }
     })();
-  }, [me?.id, online]);
+  }, [me?.id, online, accountSessionVersion]);
 
   useEffect(() => {
     const unsubs: UnlistenFn[] = [];
@@ -1196,19 +1469,54 @@ export default function App() {
     listen<{ channel_id: string; message: DiscordMessage }>(
       "discord:message_update",
       ({ payload }) => {
-        const cached = messageHistoryRef.current[payload.channel_id] || [];
-        messageHistoryRef.current[payload.channel_id] = cached.map(message =>
-          message.id === payload.message.id
-            ? { ...message, ...payload.message, deleted_at: message.deleted_at }
-            : message
-        );
-        void writeCachedMessages(payload.channel_id, [payload.message])
-          .catch(error => notify(`Could not cache edited message: ${error}`));
-        if (payload.channel_id === selectedChannel?.id) {
-          setMessages(prev =>
-            prev.map(m => m.id === payload.message.id ? { ...m, ...payload.message } : m)
+        void (async () => {
+          const cached = messageHistoryRef.current[payload.channel_id] || [];
+          let previous = cached.find(message => message.id === payload.message.id);
+          if (!previous) {
+            previous = (await readCachedMessages(payload.channel_id).catch(() => undefined))
+              ?.find(message => message.id === payload.message.id);
+          }
+          const changed = !!previous && (
+            previous.content !== payload.message.content
+            || JSON.stringify(previous.attachments || []) !== JSON.stringify(payload.message.attachments || [])
+            || JSON.stringify(previous.embeds || []) !== JSON.stringify(payload.message.embeds || [])
           );
-        }
+          if (previous && changed) {
+            const editedAt = payload.message.edited_timestamp ? new Date(payload.message.edited_timestamp).getTime() : Date.now();
+            const id = `${payload.message.id}:${editedAt}:${Math.random().toString(36).slice(2, 8)}`;
+            const channel = dmChannels.find(item => item.id === payload.channel_id)
+              || channels.find(item => item.id === payload.channel_id)
+              || (selectedChannelRef.current?.id === payload.channel_id ? selectedChannelRef.current : undefined);
+            const entry: EditedMessageLog = {
+              id,
+              messageId: previous.id,
+              channelId: payload.channel_id,
+              channelName: channel ? channelDisplayName(channel) : payload.channel_id,
+              editedAt,
+              message: previous,
+            };
+            try {
+              await archiveMessageMedia({ ...previous, id });
+              await writeEditedMessage(entry);
+              if (messageLoggerOpen && messageLoggerMode === "edited") setEditedLogs(logs => [entry, ...logs.filter(item => item.id !== entry.id)]);
+            } catch (error) {
+              notify(`Could not save edited message history: ${error}`);
+            }
+          }
+
+          const nextMessage = previous
+            ? { ...previous, ...payload.message, deleted_at: previous.deleted_at }
+            : payload.message;
+          const existing = messageHistoryRef.current[payload.channel_id] || [];
+          messageHistoryRef.current[payload.channel_id] = existing.some(message => message.id === payload.message.id)
+            ? existing.map(message => message.id === payload.message.id ? nextMessage : message)
+            : [...existing, nextMessage].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+          void writeCachedMessages(payload.channel_id, [nextMessage])
+            .catch(error => notify(`Could not cache edited message: ${error}`));
+          if (payload.channel_id === selectedChannelRef.current?.id) {
+            setMessages(prev => prev.map(message => message.id === payload.message.id ? nextMessage : message));
+          }
+        })();
       }
     ).then(u => unsubs.push(u));
 
@@ -1312,6 +1620,7 @@ export default function App() {
       const status = payload?.status;
       if (userId && status) {
         setMemberPresences(prev => ({ ...prev, [userId]: status }));
+        setMemberPlatforms(previous => ({ ...previous, [userId]: platformsFromPresence(payload) }));
         const customStatus = payload?.activities?.find((activity: any) => activity.type === 4)?.state || "";
         setMemberCustomStatuses(previous => ({ ...previous, [userId]: customStatus }));
         if (userId === me?.id) {
@@ -1349,6 +1658,8 @@ export default function App() {
           console.warn("Could not read cached guild members before applying gateway updates", error);
           return undefined;
         });
+        // Ignore cache reads that finish after the user switches servers.
+        if (guildId !== selectedGuildRef.current?.id) return;
         const removed = new Set(removedIds);
         const byId = new Map<string, any>();
         for (const member of cached?.guildMembers || guildMembers) {
@@ -1411,10 +1722,10 @@ export default function App() {
     }).then(u => unsubs.push(u));
 
     return () => { unsubs.forEach(u => u()); };
-  }, [selectedChannel?.id, scrollToBottom, me?.id, dmChannels, channels, guildRoles, guildMembers, selectedChannel, selectedGuild, guilds, isDmView, activeDmTab, archiveMessageMedia, messageLoggerOpen, deletedChannelViewerOpen, notify, notifySystem]);
+  }, [selectedChannel?.id, scrollToBottom, me?.id, dmChannels, channels, guildRoles, guildMembers, selectedChannel, selectedGuild, guilds, isDmView, activeDmTab, archiveMessageMedia, messageLoggerOpen, messageLoggerMode, deletedChannelViewerOpen, notify, notifySystem]);
 
   const selectGuild = async (guild: DiscordGuild, preferredChannelId?: string) => {
-    if (!guild?.id) {
+    if (!guild?.id || typeof guild.name !== "string") {
       console.warn("Ignored a server selection without a valid guild ID");
       return;
     }
@@ -1432,6 +1743,9 @@ export default function App() {
     setChannels([]);
     setGuildMembers([]);
     setGuildRoles([]);
+    setMemberPresences({});
+    setMemberPlatforms({});
+    setMemberCustomStatuses({});
     guildRoleDataRef.current = [];
     currentGuildMemberRolesRef.current = [];
 
@@ -1867,6 +2181,9 @@ export default function App() {
   }, [isDmView, selectedChannel?.id, me?.id, notify]);
 
   const handleOpenMemberProfile = async (userObj: any, openFullProfile = false) => {
+    if (ignoredUserIds.has(userObj.id)) {
+      setRevealedIgnoredProfileIds(current => { const next = new Set(current); next.delete(userObj.id); return next; });
+    }
     setSelectedMemberProfile(userObj);
     setMemberProfileData(null);
     setFullProfileOpen(false);
@@ -1937,17 +2254,44 @@ export default function App() {
     }
   };
 
-  const changeRelationship = async (userId: string, action: "accept" | "ignore" | "add" | "remove") => {
+  const changeRelationship = async (userId: string, action: "accept" | "ignore" | "add" | "remove" | "block" | "unblock") => {
     setRelationshipBusy(userId);
     try {
       await invoke("update_relationship", { userId, action });
       await refreshRelationships();
-      notify(action === "accept" || action === "add" ? "Friend added" : action === "ignore" ? "Request ignored" : "Friend removed");
+      notify(action === "accept" || action === "add" ? "Friend added" : action === "ignore" ? "Request ignored" : action === "block" ? "User blocked" : action === "unblock" ? "User unblocked" : "Friend removed");
     } catch (e) {
       notify(`Could not update friend: ${e}`);
     } finally {
       setRelationshipBusy(null);
     }
+  };
+
+  const toggleIgnoredUser = (userId: string) => {
+    const next = new Set(ignoredUserIds);
+    if (next.has(userId)) next.delete(userId);
+    else next.add(userId);
+    setIgnoredUserIds(next);
+    try { localStorage.setItem("voidcord:ignored-users", JSON.stringify([...next])); } catch { /* optional local preference */ }
+    setRevealedIgnoredProfileIds(current => { const updated = new Set(current); updated.delete(userId); return updated; });
+    notify(next.has(userId) ? "User ignored on this device" : "User unignored");
+  };
+
+  const openDiscordReportFlow = async (userId?: string, message?: DiscordMessage, channel?: DiscordChannel) => {
+    const reportUrl = "https://discord.com/safety/360044103651-reporting-abusive-behavior-to-discord";
+    try {
+      if (message && channel) {
+        await navigator.clipboard.writeText(`https://discord.com/channels/${channel.guild_id || "@me"}/${channel.id}/${message.id}`);
+        notify("Message link copied. Discord’s report guide is opening.");
+      } else if (userId) {
+        await navigator.clipboard.writeText(userId);
+        notify("User ID copied. Discord’s report guide is opening.");
+      }
+    } catch {
+      notify("Opening Discord’s report guide");
+    }
+    try { await openUrl(reportUrl); }
+    catch (error) { notify(`Could not open Discord’s report guide: ${error}`); }
   };
 
   const sendFriendRequest = async () => {
@@ -2039,9 +2383,51 @@ export default function App() {
     setOwnProfileLoading(false);
   };
 
+  const handleAccountConnected = (user: DiscordUser, token: string, accounts: SavedDiscordAccount[]) => {
+    setSavedAccounts(accounts);
+    if (!token) return;
+    ++guildLoadRequest.current;
+    ++channelLoadRequest.current;
+    setAccountSwitcherOpen(false);
+    setProfileCardOpen(false);
+    setIsDmView(true);
+    setActiveDmTab("friends");
+    setSelectedGuild(null);
+    selectedGuildRef.current = null;
+    setSelectedChannel(null);
+    selectedChannelRef.current = null;
+    setChannels([]);
+    setDmChannels([]);
+    setMessages([]);
+    setGuilds([]);
+    setGuildMembers([]);
+    setGuildRoles([]);
+    setRelationships([]);
+    setMessageRequests([]);
+    setSelectedMessageRequest(null);
+    setSelectedDeletedChannel(null);
+    setRequestMessages([]);
+    setDraft("");
+    setComposerFiles([]);
+    setEditingMessageId(null);
+    setCanSend(true);
+    setTypingUsers(new Set());
+    messageHistoryRef.current = {};
+    try { localStorage.removeItem("voidcord:last-read-channel"); } catch { /* optional navigation preference */ }
+    setMe(user);
+    setAccountSessionVersion(version => version + 1);
+    setGatewayStatus("connecting");
+    void writeCachedAppData("current-user", user);
+  };
+
   const sendMessage = async () => {
     const content = draft.trim();
-    if (!content || !selectedChannel || sending) return;
+    if ((!content && composerFiles.length === 0) || !selectedChannel || sending) return;
+    if (officialDiscordDm) {
+      notify("This official Discord conversation is read-only in VoidCord");
+      return;
+    }
+    const sendingChannel = selectedChannel;
     if (editingMessageId) {
       setSending(true);
       try {
@@ -2067,25 +2453,74 @@ export default function App() {
       return;
     }
     setSending(true);
-    setDraft("");
     try {
-      const sent = await invoke<DiscordMessage>("send_message", { channelId: selectedChannel.id, content });
+      const sent = composerFiles.length
+        ? await invoke<DiscordMessage>("send_message_with_files", {
+          channelId: sendingChannel.id,
+          content,
+          files: composerFiles.map(file => file.uploadId),
+        })
+        : await invoke<DiscordMessage>("send_message", { channelId: sendingChannel.id, content });
       if (sent && sent.id) {
-        setMessages(prev => {
-          if (prev.some(m => m.id === sent.id)) return prev;
-          return [...prev, sent];
-        });
-        void writeCachedDraft(selectedChannel.id, "");
-        setRecentlyMessaged(order => [selectedChannel.id, ...order.filter(id => id !== selectedChannel.id)]);
-        scrollToBottom();
+        if (draftRef.current.trim() === content) {
+          setDraft("");
+          void writeCachedDraft(sendingChannel.id, "");
+        }
+        setComposerFiles([]);
+        if (selectedChannelRef.current?.id === sendingChannel.id) {
+          setMessages(prev => {
+            if (prev.some(m => m.id === sent.id)) return prev;
+            return [...prev, sent];
+          });
+          scrollToBottom();
+        }
+        setRecentlyMessaged(order => [sendingChannel.id, ...order.filter(id => id !== sendingChannel.id)]);
       }
     } catch (e) {
       notify(`Send failed: ${e}`);
-      setDraft(content);
     } finally {
       setSending(false);
-      inputRef.current?.focus();
+      if (selectedChannelRef.current?.id === sendingChannel.id) inputRef.current?.focus();
     }
+  };
+
+  const uploadLimitLabel = `${Math.floor(accountUploadLimitBytes / (1024 * 1024))} MiB`;
+
+  const chooseComposerFiles = async () => {
+    try {
+      const uploadLimitBytes = await invoke<number>("get_upload_limit");
+      setAccountUploadLimitBytes(uploadLimitBytes);
+      const selectedLimitLabel = `${Math.floor(uploadLimitBytes / (1024 * 1024))} MiB`;
+      const incoming = await invoke<ComposerAttachment[]>("select_attachment_files");
+      if (!incoming.length) return;
+      const combined = [...composerFiles, ...incoming];
+      if (combined.length > 10) {
+        notify("You can attach up to 10 files per message");
+        return;
+      }
+      const tooLarge = combined.find(file => file.size > uploadLimitBytes);
+      if (tooLarge) {
+        notify(`${tooLarge.filename} exceeds this account's ${selectedLimitLabel} file limit`);
+        return;
+      }
+      setComposerFiles(combined);
+    } catch (error) {
+      notify(`Could not select attachments: ${error}`);
+    }
+  };
+
+  const insertComposerText = (text: string) => {
+    const input = inputRef.current;
+    const start = input?.selectionStart ?? draft.length;
+    const end = input?.selectionEnd ?? start;
+    const next = `${draft.slice(0, start)}${text}${draft.slice(end)}`;
+    const caret = start + text.length;
+    setDraft(next);
+    setComposerPicker(null);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(caret, caret);
+    });
   };
 
   const insertUserMention = (user: DiscordUser) => {
@@ -2587,17 +3022,43 @@ export default function App() {
   };
 
   const filteredMessages = useMemo(() =>
-    query ? messages.filter(m => m.content.toLowerCase().includes(query.toLowerCase())) : messages,
+    messages.filter(message => !query || (message.content || "").toLowerCase().includes(query.toLowerCase())),
     [messages, query]
   );
 
-  const groups = useMemo(() => groupMessages(filteredMessages), [filteredMessages]);
+  const groups = useMemo(() => groupMessages(filteredMessages, ignoredUserIds), [filteredMessages, ignoredUserIds]);
+  const ignoredMessageCount = useMemo(() => messages.filter(message => ignoredUserIds.has(message.author?.id || "")).length, [messages, ignoredUserIds]);
+  const orderedGuilds = useMemo(() => {
+    const order = new Map(preferences.serverOrder.map((id, index) => [id, index]));
+    const original = new Map(guilds.map((guild, index) => [guild.id, index]));
+    return [...guilds].sort((a, b) => (order.get(a.id) ?? (preferences.serverOrder.length + (original.get(a.id) || 0))) - (order.get(b.id) ?? (preferences.serverOrder.length + (original.get(b.id) || 0))));
+  }, [guilds, preferences.serverOrder]);
+  const officialDiscordDm = !!selectedChannel && !selectedChannel.guild_id &&
+    !!selectedChannel.recipients?.some(user => user?.bot && user.username?.toLowerCase() === "discord");
+
+  const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setSidebarResizing(true);
+    const move = (pointer: PointerEvent) => setPreferences(current => ({
+      ...current,
+      channelSidebarWidth: Math.max(180, Math.min(360, pointer.clientX - 58)),
+    }));
+    const stop = () => {
+      setSidebarResizing(false);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+  };
   const selectedProfileBio = memberProfileData?.user?.bio || memberProfileData?.user_profile?.bio || "";
   const selectedProfileRoleColor = !isDmView && selectedMemberProfile
     ? getUserRoleColor(selectedMemberProfile.id, guildMembers, guildRoles)
     : undefined;
   const selectedProfileIsFriend = !!selectedMemberProfile
     && friendRelationships.some(relationship => relationship.user.id === selectedMemberProfile.id);
+  const selectedProfileIsBlocked = !!selectedMemberProfile
+    && relationships.some(relationship => relationship.user?.id === selectedMemberProfile.id && relationship.type === 2);
 
   if (authLoading) {
     return (
@@ -2609,14 +3070,16 @@ export default function App() {
   }
 
   if (!me) {
-    return <LoginScreen onLogin={user => {
+    return <LoginScreen onLogin={(user, accounts) => {
       setMe(user);
+      setSavedAccounts(accounts);
       void writeCachedAppData("current-user", user);
     }} />;
   }
 
   return (
-    <main className={`app dark accent-${preferences.accent} ${preferences.compactMessages ? "compact-messages" : ""} ${preferences.reduceMotion ? "reduce-motion" : ""}`}>
+    <main className={`app dark accent-${preferences.accent} ${settingsTheme === "light" ? "settings-theme-light" : ""} ${preferences.compactMessages ? "compact-messages" : ""} ${preferences.reduceMotion ? "reduce-motion" : ""} ${sidebarResizing ? "sidebar-resizing" : ""}`} style={{ "--chat-font-size": `${14 * preferences.chatFontScale / 100}px` } as React.CSSProperties}>
+      {accountSwitcherOpen && <AccountSwitcher activeUser={me} accounts={savedAccounts} onClose={() => setAccountSwitcherOpen(false)} onConnected={handleAccountConnected} />}
       {!online && (
         <div className="top-net-banner">
           <WifiOff size={13} />
@@ -2682,21 +3145,30 @@ export default function App() {
 
             <div className="rail-sep" />
 
-            {guilds.filter((guild): guild is DiscordGuild => !!guild?.id && typeof guild.name === "string").map((g, i) => {
+            {orderedGuilds.map((g, i) => {
               const isActive = !isDmView && selectedGuild?.id === g.id;
+              const folder = preferences.serverFolders[g.id]?.trim();
+              const previous = i > 0 ? preferences.serverFolders[orderedGuilds[i - 1].id]?.trim() : undefined;
               return (
-                <button
-                  key={g.id}
-                  className={`server-icon ${isActive ? "active" : ""}`}
-                  title={g.name}
-                  style={{ animationDelay: `${i * 30}ms` } as React.CSSProperties}
-                  onClick={() => {
-                    setIsDmView(false);
-                    selectGuild(g);
-                  }}
-                >
-                  <GuildIcon guild={g} />
-                </button>
+                <React.Fragment key={g.id}>
+                  {folder && folder !== previous && <div className="server-folder-label" title={folder}>{folder}</div>}
+                  <button
+                    className={`server-icon ${isActive ? "active" : ""}`}
+                    title={`${folder ? `${folder} · ` : ""}${g.name} (right-click to organize)`}
+                    style={{ animationDelay: `${i * 30}ms` } as React.CSSProperties}
+                    onContextMenu={event => {
+                      event.preventDefault();
+                      const nextFolder = window.prompt("Folder name (leave blank for no folder):", preferences.serverFolders[g.id] || "");
+                      if (nextFolder !== null) setPreferences(current => ({ ...current, serverFolders: { ...current.serverFolders, [g.id]: nextFolder.trim() } }));
+                    }}
+                    onClick={() => {
+                      setIsDmView(false);
+                      void selectGuild(g);
+                    }}
+                  >
+                    <GuildIcon guild={g} />
+                  </button>
+                </React.Fragment>
               );
             })}
           </div>
@@ -2716,7 +3188,7 @@ export default function App() {
         </nav>
 
         {/* Sidebar */}
-        <aside className={`sidebar ${profileCardOpen ? "profile-open" : ""}`}>
+        <aside className={`sidebar ${profileCardOpen ? "profile-open" : ""}`} style={{ width: preferences.channelSidebarWidth }}>
           {isDmView ? (
             <>
               <div className="dm-search-header">
@@ -2825,7 +3297,7 @@ export default function App() {
             <div className="user-bar-controls">
               <button className={`user-bar-btn ${micMuted ? "muted" : ""}`} title={micMuted ? "Unmute" : "Mute"} onClick={() => setMicMuted(m => !m)}><Mic size={15} /></button>
               <button className={`user-bar-btn ${deafened ? "deafened" : ""}`} title={deafened ? "Undeafen" : "Deafen"} onClick={() => setDeafened(d => !d)}><Headphones size={15} /></button>
-              <button className="user-bar-btn" title="Settings" onClick={() => setSettingsOpen(true)}><Settings size={15} /></button>
+              <button className="user-bar-btn" title="Settings" onClick={() => setProtoSettingsOpen(true)}><Settings size={15} /></button>
             </div>
           </div>
           {profileCardOpen && (
@@ -2897,6 +3369,10 @@ export default function App() {
                   <option value="dnd">Do Not Disturb</option>
                   <option value="invisible">Invisible</option>
                 </select>
+                <button className="profile-open-full-btn account-switcher-profile-button" onClick={() => {
+                  setProfileCardOpen(false);
+                  setAccountSwitcherOpen(true);
+                }}><Users size={14} /> Switch accounts</button>
                 {customStatusEditing && (
                   <div className="profile-custom-status">
                     <input
@@ -2934,6 +3410,7 @@ export default function App() {
               })()}
             </div>
           )}
+          <div className="sidebar-resize-grip" onPointerDown={beginSidebarResize} role="separator" aria-orientation="vertical" aria-label="Resize channel sidebar" />
         </aside>
 
         {/* Friends and requests */}
@@ -3125,7 +3602,7 @@ export default function App() {
                             <div className="request-message-body">
                               <div><strong>{displayName(message.author)}</strong><small>{formatTimestamp(message.timestamp)}</small></div>
                               {message.content && <div className="msg-text"><DiscordMarkdown content={message.content} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} /></div>}
-                              {message.embeds?.map((embed, index) => <DiscordEmbedView key={`${message.id}-${index}`} embed={embed} attachments={message.attachments} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} />)}
+                              {message.embeds?.filter(embed => !!embed && typeof embed === "object").map((embed, index) => <DiscordEmbedView key={`${message.id}-${index}`} embed={embed} attachments={message.attachments} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} />)}
                               {message.attachments?.map(attachment => attachment.content_type?.startsWith("image/")
                                 ? <img key={attachment.id} src={attachment.url} alt={attachment.filename} className="msg-attachment-img" style={{ maxWidth: 400, maxHeight: 300, borderRadius: 6 }} />
                                 : <a key={attachment.id} className="msg-file-link" href={attachment.url}>{attachment.filename}</a>)}
@@ -3169,6 +3646,7 @@ export default function App() {
               <button className="icon-btn" title="Pins"><Pin size={18} /></button>
               <button className={`icon-btn ${memberOpen ? "active" : ""}`} title="Member list" onClick={() => setMemberOpen(v => !v)}><Sparkles size={18} /></button>
               <button className="icon-btn" title="Deleted message log" aria-label="Deleted message log" onClick={() => void openMessageLogger()}><History size={18} /></button>
+              <button className="icon-btn" title="Edited message log" aria-label="Edited message log" onClick={() => void openEditedMessageLogger()}><Edit3 size={17} /></button>
               <button className="icon-btn" title="Deleted channel viewer" aria-label="Deleted channel viewer" onClick={() => void openDeletedChannelViewer()}><Archive size={18} /></button>
               <div className="search-box">
                 <Search size={13} />
@@ -3190,6 +3668,7 @@ export default function App() {
             {offlineCache && channelAccess !== "MISSING_ACCESS" && (
               <div className="offline-cache-note"><WifiOff size={14} /> Offline copy · messages saved on this device</div>
             )}
+            {ignoredMessageCount > 0 && <div className="ignored-messages-note">{ignoredMessageCount} ignored {ignoredMessageCount === 1 ? "message is" : "messages are"} hidden · Show reveals one message</div>}
             {msgLoading && (
               <div style={{ display: "flex", justifyContent: "center", padding: 24 }}>
                 <Loader2 size={22} className="spinning" style={{ color: "var(--text-muted)" }} />
@@ -3225,14 +3704,7 @@ export default function App() {
               </div>
             )}
 
-            {!msgLoading && channelAccess === "MISSING_PERMS" && (
-              <div className="locked-channel-screen">
-                <div className="locked-channel-lock" style={{ fontSize: 48 }}>🚫</div>
-                <h2>Read-only channel</h2>
-                <p>You can view messages but cannot send in this channel.</p>
-              </div>
-            )}
-
+            <div className="message-bottom-spacer" />
             {!msgLoading && groups.map((group, gi) => {
               const first = group[0];
               const isMe = first.author.id === me.id;
@@ -3242,12 +3714,24 @@ export default function App() {
                 <div className="msg-group" key={`g-${gi}`}>
                   {group.map((m, mi) => {
                     const isFirst = mi === 0;
+                    const authorIsIgnored = ignoredUserIds.has(m.author?.id || "");
+                    const ignoredMessageRevealed = revealedIgnoredMessageIds.has(m.id);
                     const mentionsMe = messageMentionsUser(m, me.id)
                       || (!!selectedChannel?.guild_id
                         && messageMentionsRole(m, currentGuildMemberRolesRef.current));
                     const authorColor = selectedChannel?.guild_id
                       ? getUserRoleColor(m.author.id, guildMembers, guildRoles, m.member?.roles)
                       : undefined;
+
+                    if (authorIsIgnored && !ignoredMessageRevealed) {
+                      return (
+                        <div key={m.id} className="ignored-message-placeholder">
+                          <span>Message from an ignored user</span>
+                          <button type="button" onClick={() => setRevealedIgnoredMessageIds(current => new Set(current).add(m.id))}>Show</button>
+                          <button type="button" className="ignored-hide-action" onClick={() => toggleIgnoredUser(m.author.id)}>Unignore</button>
+                        </div>
+                      );
+                    }
 
                     return isFirst ? (
                       <div key={m.id} className={`message ${isMe ? "mine" : ""} ${mentionsMe ? "mentioned-you" : ""} ${m.deleted_at ? "deleted-message" : ""} msg-new`} onContextMenu={event => openContextMenu(event, { kind: "message", message: m, channel: selectedChannel! })}>
@@ -3321,24 +3805,32 @@ export default function App() {
                 <Loader2 size={14} className="spinning" />
               </div>
             )}
-            {channelAccess === "MISSING_ACCESS" ? (
-              <div className="composer-locked-bar">🔒 You do not have permission to view or send messages in this channel.</div>
-            ) : !canSend && !editingMessageId ? (
-              <div className="composer-locked-bar">🚫 You do not have permission to send messages in <strong>{channelDisplayName(selectedChannel!)}</strong>.</div>
-            ) : (
-              <div className={`composer-box ${editingMessageId ? "editing-message" : ""}`}>
+            <div className={`composer-box ${editingMessageId ? "editing-message" : ""} ${!canSend || officialDiscordDm || channelAccess === "MISSING_ACCESS" ? "composer-readonly" : ""}`}>
+                {officialDiscordDm && <span className="composer-readonly-hint">Official Discord messages are read-only</span>}
+                {!officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
+                {channelAccess === "MISSING_ACCESS" && <span className="composer-readonly-hint">You don’t have access to this channel</span>}
                 {editingMessageId && (
                   <div className="message-editing-indicator">
                     <span>Editing message</span>
                     <button type="button" onClick={() => { setEditingMessageId(null); setDraft(""); }} aria-label="Cancel editing"><X size={13} /></button>
                   </div>
                 )}
-                <button className="plus-btn" title="Attach">+</button>
+                <button className="plus-btn" title={`Attach files — ${uploadLimitLabel} account limit`} onClick={() => void chooseComposerFiles()} disabled={!selectedChannel || officialDiscordDm || !canSend}>+</button>
+                {composerFiles.length > 0 && (
+                  <div className="composer-attachments" aria-label={`Attachments to send, up to ${uploadLimitLabel}`}>
+                    {composerFiles.map((file, index) => (
+                      <span className="composer-attachment" key={`${file.uploadId}-${index}`} title={`${file.filename} (${(file.size / 1024 / 1024).toFixed(2)} MiB)`}>
+                        <span>{file.filename}</span>
+                        <button type="button" aria-label={`Remove ${file.filename}`} onClick={() => setComposerFiles(files => files.filter((_, fileIndex) => fileIndex !== index))}><X size={12} /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <input
                   ref={inputRef}
                   placeholder={editingMessageId ? "Edit message…" : selectedChannel ? `Message ${isDmView ? "" : "#"}${channelDisplayName(selectedChannel)}` : "Select a channel…"}
                   value={draft}
-                  disabled={!selectedChannel || (!canSend && !editingMessageId)}
+                  disabled={!selectedChannel || officialDiscordDm || channelAccess === "MISSING_ACCESS" || (!canSend && !editingMessageId)}
                   autoComplete="off"
                   onChange={e => {
                     setDraft(e.target.value);
@@ -3371,15 +3863,39 @@ export default function App() {
                   </div>
                 )}
                 <div className="composer-right">
-                  <button className="composer-icon" title="GIF"><Gift size={17} /></button>
+                  <button className={`composer-icon ${composerPicker === "gif" ? "active" : ""}`} title="GIF" onClick={() => setComposerPicker(current => current === "gif" ? null : "gif")}><Gift size={17} /></button>
                   <button className="composer-icon" title="Sticker"><Sticker size={17} /></button>
-                  <button className="composer-icon" title="Emoji"><SmilePlus size={17} /></button>
-                  <button className="send-btn" onClick={sendMessage} disabled={!draft.trim() || sending} title={editingMessageId ? "Save edit" : "Send"}>
+                  <button className={`composer-icon ${composerPicker === "emoji" ? "active" : ""}`} title="Emoji" onClick={() => setComposerPicker(current => current === "emoji" ? null : "emoji")}><SmilePlus size={17} /></button>
+                  <button className="send-btn" onClick={sendMessage} disabled={(!draft.trim() && composerFiles.length === 0) || sending || officialDiscordDm || channelAccess === "MISSING_ACCESS" || !canSend} title={officialDiscordDm ? "Official Discord conversations are read-only" : editingMessageId ? "Save edit" : "Send"}>
                     {sending ? <Loader2 size={14} className="spinning" /> : editingMessageId ? <Check size={14} /> : <Send size={14} />}
                   </button>
                 </div>
+                {composerPicker === "emoji" && (
+                  <div className="composer-picker emoji-picker" role="dialog" aria-label="Emoji picker">
+                    <input className="picker-search" value={emojiQuery} onChange={event => setEmojiQuery(event.target.value)} placeholder="Search emoji" autoFocus />
+                    <div className="emoji-picker-scroll">
+                      {EMOJI_PICKER_ITEMS.map(group => {
+                        const items = group.items.filter(emoji => !emojiQuery || emoji.includes(emojiQuery) || EMOJI_SEARCH_TERMS[emoji]?.includes(emojiQuery.toLowerCase()));
+                        if (!items.length) return null;
+                        return <section key={group.category}><h4>{group.category}</h4><div className="emoji-grid">{items.map((emoji, index) => <button key={`${emoji}-${index}`} type="button" title={emoji} onClick={() => insertComposerText(emoji)}>{emoji}</button>)}</div></section>;
+                      })}
+                      {emojiQuery && !EMOJI_PICKER_ITEMS.some(group => group.items.some(emoji => emoji.includes(emojiQuery) || EMOJI_SEARCH_TERMS[emoji]?.includes(emojiQuery.toLowerCase()))) && <p className="picker-empty">No matching emoji in the built-in set.</p>}
+                    </div>
+                  </div>
+                )}
+                {composerPicker === "gif" && (
+                  <div className="composer-picker gif-picker" role="dialog" aria-label="GIF picker">
+                    <div className="gif-picker-heading"><strong>GIFs</strong><span>Paste a GIF URL or search GIPHY</span></div>
+                    <form className="gif-search-row" onSubmit={event => { event.preventDefault(); if (gifQuery.trim()) void openUrl(`https://giphy.com/search/${encodeURIComponent(gifQuery.trim())}`); }}>
+                      <input className="picker-search" value={gifQuery} onChange={event => setGifQuery(event.target.value)} placeholder="Search GIFs on GIPHY" />
+                      <button type="submit" className="gif-search-button" disabled={!gifQuery.trim()}><Search size={14} /> Search</button>
+                    </form>
+                    <div className="gif-url-row"><input className="picker-search" value={gifUrl} onChange={event => setGifUrl(event.target.value)} placeholder="Paste a direct GIF URL" /><button type="button" className="gif-search-button" disabled={!/^https?:\/\//i.test(gifUrl.trim())} onClick={() => insertComposerText(`${gifUrl.trim()} `)}>Insert</button></div>
+                    {/^https?:\/\//i.test(gifUrl.trim()) && <div className="gif-preview"><img src={gifUrl.trim()} alt="GIF preview" onError={event => { event.currentTarget.style.display = "none"; }} /></div>}
+                    <p className="picker-note">GIF URLs are sent as a message link. Search opens GIPHY in your browser; paste a direct media URL here to preview and insert it.</p>
+                  </div>
+                )}
               </div>
-            )}
           </div>
         </section>
         )}
@@ -3470,7 +3986,7 @@ export default function App() {
                         <div className="member-info">
                           <strong style={{ color: userRoleColor || undefined }}>{name}</strong>
                           {userObj.bot && <span className="bot-tag" style={{ fontSize: 9, marginLeft: 4 }}>BOT</span>}
-                          <small>{userObj.username}</small>
+                          <small className="member-subline">{userObj.username}<PlatformIndicators platforms={memberPlatforms[userObj.id] || []} /></small>
                         </div>
                       </div>
                     );
@@ -3486,6 +4002,15 @@ export default function App() {
       {selectedMemberProfile && (
         <div className="modal-backdrop" onClick={() => setSelectedMemberProfile(null)}>
           <div className={`discord-profile-popout member-profile-card-modal ${fullProfileOpen ? "profile-full-mode" : ""}`} onContextMenu={event => openContextMenu(event, { kind: "user", user: selectedMemberProfile, source: "profile", guildId: selectedGuild?.id })} onClick={e => e.stopPropagation()}>
+            {ignoredUserIds.has(selectedMemberProfile.id) && !revealedIgnoredProfileIds.has(selectedMemberProfile.id) && (
+              <div className="profile-ignored-overlay">
+                <UserX size={28} />
+                <strong>This user is ignored</strong>
+                <span>Their messages and profile are hidden for you.</span>
+                <button type="button" onClick={() => setRevealedIgnoredProfileIds(current => new Set(current).add(selectedMemberProfile.id))}>View profile</button>
+                <button type="button" className="profile-ignored-unignore" onClick={() => toggleIgnoredUser(selectedMemberProfile.id)}>Unignore user</button>
+              </div>
+            )}
             <div
               className="profile-banner"
               style={{
@@ -3533,6 +4058,9 @@ export default function App() {
                       ? <button onClick={() => void changeRelationship(selectedMemberProfile.id, "remove")}><Users size={15} /> Remove Friend</button>
                       : <button onClick={() => void changeRelationship(selectedMemberProfile.id, "add")}><UserPlus size={15} /> Add Friend</button>
                   )}
+                  {selectedMemberProfile.id !== me.id && <button onClick={() => void changeRelationship(selectedMemberProfile.id, selectedProfileIsBlocked ? "unblock" : "block")}><Ban size={15} /> {selectedProfileIsBlocked ? "Unblock" : "Block"}</button>}
+                  {selectedMemberProfile.id !== me.id && <button onClick={() => toggleIgnoredUser(selectedMemberProfile.id)}><UserX size={15} /> {ignoredUserIds.has(selectedMemberProfile.id) ? "Unignore" : "Ignore"}</button>}
+                  {selectedMemberProfile.id !== me.id && <button onClick={() => void openDiscordReportFlow(selectedMemberProfile.id)}><Flag size={15} /> Report user…</button>}
                 </div>
               </div>
             ) : <div className="profile-popout-body">
@@ -3587,6 +4115,9 @@ export default function App() {
                         ? <button className="profile-menu-item" onClick={() => void changeRelationship(selectedMemberProfile.id, "remove")}><Users size={15} /><span>Remove Friend</span></button>
                         : <button className="profile-menu-item" onClick={() => void changeRelationship(selectedMemberProfile.id, "add")}><UserPlus size={15} /><span>Add Friend</span></button>
                     )}
+                    {selectedMemberProfile.id !== me.id && <button className="profile-menu-item" onClick={() => void changeRelationship(selectedMemberProfile.id, selectedProfileIsBlocked ? "unblock" : "block")}><Ban size={15} /><span>{selectedProfileIsBlocked ? "Unblock" : "Block"}</span></button>}
+                    {selectedMemberProfile.id !== me.id && <button className="profile-menu-item" onClick={() => toggleIgnoredUser(selectedMemberProfile.id)}><UserX size={15} /><span>{ignoredUserIds.has(selectedMemberProfile.id) ? "Unignore" : "Ignore"}</span></button>}
+                    {selectedMemberProfile.id !== me.id && <button className="profile-menu-item" onClick={() => void openDiscordReportFlow(selectedMemberProfile.id)}><Flag size={15} /><span>Report user…</span></button>}
                     <button className="profile-menu-item" onClick={() => {
                       navigator.clipboard.writeText(selectedMemberProfile.id);
                       notify("Copied User ID to clipboard!");
@@ -3604,22 +4135,26 @@ export default function App() {
 
       {messageLoggerOpen && (
         <div className="modal-backdrop message-logger-backdrop" onClick={() => setMessageLoggerOpen(false)}>
-          <section className="message-logger-modal" role="dialog" aria-modal="true" aria-label="Deleted message log" onClick={event => event.stopPropagation()}>
+          <section className="message-logger-modal" role="dialog" aria-modal="true" aria-label={`${messageLoggerMode === "deleted" ? "Deleted" : "Edited"} message log`} onClick={event => event.stopPropagation()}>
             <header className="message-logger-header">
               <div>
-                <h2>Deleted Message Log</h2>
-                <p>Locally cached messages and archived media deleted while VoidCord was running.</p>
+                <h2>{messageLoggerMode === "deleted" ? "Deleted Message Log" : "Edited Message History"}</h2>
+                <p>{messageLoggerMode === "deleted" ? "Locally cached messages and archived media deleted while VoidCord was running." : "Previous versions captured when VoidCord receives a message edit."}</p>
               </div>
               <button className="icon-btn" aria-label="Close message log" onClick={() => setMessageLoggerOpen(false)}><X size={18} /></button>
             </header>
+            <div className="logger-mode-tabs" role="tablist" aria-label="Message history type">
+              <button type="button" role="tab" aria-selected={messageLoggerMode === "deleted"} className={messageLoggerMode === "deleted" ? "active" : ""} onClick={() => { if (messageLoggerMode !== "deleted") void openMessageLogger(); }}>Deleted</button>
+              <button type="button" role="tab" aria-selected={messageLoggerMode === "edited"} className={messageLoggerMode === "edited" ? "active" : ""} onClick={() => { if (messageLoggerMode !== "edited") void openEditedMessageLogger(); }}>Edited</button>
+            </div>
             <div className="message-logger-content">
               <div className="message-logger-list">
                 {loggerLoading && <div className="logger-empty"><Loader2 size={18} className="spinning" /> Loading saved messages…</div>}
                 {loggerError && <div className="logger-error">{loggerError}</div>}
-                {!loggerLoading && !loggerError && deletedLogs.length === 0 && (
-                  <div className="logger-empty">No deleted messages have been saved on this device yet.</div>
+                {!loggerLoading && !loggerError && (messageLoggerMode === "deleted" ? deletedLogs.length === 0 : editedLogs.length === 0) && (
+                  <div className="logger-empty">{messageLoggerMode === "deleted" ? "No deleted messages have been saved on this device yet." : "No message edits have been recorded yet. VoidCord must be running to capture an edit."}</div>
                 )}
-                {deletedLogs.map(entry => (
+                {messageLoggerMode === "deleted" && deletedLogs.map(entry => (
                   <div
                     className={`message-logger-entry ${selectedDeletedLog?.id === entry.id ? "selected" : ""}`}
                     key={entry.id}
@@ -3647,9 +4182,31 @@ export default function App() {
                     ><Trash2 size={15} /></button>
                   </div>
                 ))}
+                {messageLoggerMode === "edited" && editedLogs.map(entry => (
+                  <div
+                    className={`message-logger-entry ${selectedEditedLog?.id === entry.id ? "selected" : ""}`}
+                    key={entry.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => void selectEditedLog(entry)}
+                    onKeyDown={event => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        void selectEditedLog(entry);
+                      }
+                    }}
+                  >
+                    <span className="logger-entry-info">
+                      <strong>{displayName(entry.message.author)}</strong>
+                      <small>{entry.channelName} · edited {new Date(entry.editedAt).toLocaleString()}</small>
+                      <span>{entry.message.content || entry.message.attachments?.[0]?.filename || "Media / embed message"}</span>
+                    </span>
+                    <button type="button" className="logger-delete-button" title="Remove saved edit entry" aria-label="Remove saved edit entry" onClick={event => { event.stopPropagation(); void removeEditedLog(entry); }}><Trash2 size={15} /></button>
+                  </div>
+                ))}
               </div>
               <div className="message-logger-preview">
-                {selectedDeletedLog && restoredDeletedMessage ? (
+                {messageLoggerMode === "deleted" && selectedDeletedLog && restoredDeletedMessage ? (
                   <>
                     <div className="logger-preview-meta">
                       <strong>{displayName(restoredDeletedMessage.author)}</strong>
@@ -3660,8 +4217,19 @@ export default function App() {
                       <MessageContent message={restoredDeletedMessage} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} autoplayVideos={preferences.autoplayVideos} />
                     </div>
                   </>
+                ) : messageLoggerMode === "edited" && selectedEditedLog && restoredEditedMessage ? (
+                  <>
+                    <div className="logger-preview-meta">
+                      <strong>{displayName(restoredEditedMessage.author)}</strong>
+                      <span>{selectedEditedLog.channelName} · sent {formatTimestamp(restoredEditedMessage.timestamp)}</span>
+                      <span>Edited {new Date(selectedEditedLog.editedAt).toLocaleString()} · previous version</span>
+                    </div>
+                    <div className="logger-preview-message">
+                      <MessageContent message={restoredEditedMessage} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} autoplayVideos={preferences.autoplayVideos} />
+                    </div>
+                  </>
                 ) : (
-                  <div className="logger-empty">Select a deleted message to inspect its saved content and media.</div>
+                  <div className="logger-empty">{messageLoggerMode === "deleted" ? "Select a deleted message to inspect its saved content and media." : "Select an edit to inspect the previous message version."}</div>
                 )}
               </div>
             </div>
@@ -3773,24 +4341,67 @@ export default function App() {
             <div className="feature-modal-tabs">
               <button type="button" className={settingsTab === "account" ? "active" : ""} onClick={() => setSettingsTab("account")}>Preferences</button>
               <button type="button" className={settingsTab === "themes" ? "active" : ""} onClick={() => setSettingsTab("themes")}>Appearance</button>
+              <button type="button" onClick={() => setProtoSettingsOpen(true)}>Settings scopes</button>
             </div>
             {settingsTab === "account" ? (
               <div className="settings-options">
                 <label className="settings-option"><span><strong>Compact messages</strong><small>Reduce spacing between messages in chat.</small></span><input type="checkbox" checked={preferences.compactMessages} onChange={event => setPreferences(current => ({ ...current, compactMessages: event.target.checked }))} /></label>
                 <label className="settings-option"><span><strong>Reduce motion</strong><small>Disable decorative interface animations.</small></span><input type="checkbox" checked={preferences.reduceMotion} onChange={event => setPreferences(current => ({ ...current, reduceMotion: event.target.checked }))} /></label>
                 <label className="settings-option"><span><strong>Autoplay videos</strong><small>Automatically play videos in messages when possible.</small></span><input type="checkbox" checked={preferences.autoplayVideos} onChange={event => setPreferences(current => ({ ...current, autoplayVideos: event.target.checked }))} /></label>
+                <label className="feature-field"><span>Chat text size · {preferences.chatFontScale}%</span><input type="range" min="85" max="125" step="5" value={preferences.chatFontScale} onChange={event => setPreferences(current => ({ ...current, chatFontScale: Number(event.target.value) }))} /></label>
+                <h3 className="settings-section-title">Ignored users</h3>
+                <p className="settings-help">Ignored users are hidden only in this VoidCord installation. This preference does not sync to Discord.</p>
+                {ignoredUserIds.size === 0 ? <p className="settings-help">No ignored users.</p> : (
+                  <div className="ignored-users-list">
+                    {[...ignoredUserIds].map(userId => {
+                      const user = [...mentionUsers, ...guildMembers, ...dmChannels.flatMap(channel => channel.recipients || [])].find(item => item?.id === userId);
+                      return <div className="ignored-user-row" key={userId}><span>{user ? displayName(user) : `User ${userId}`}</span><button type="button" onClick={() => toggleIgnoredUser(userId)}>Unignore</button></div>;
+                    })}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="settings-options">
                 <label className="feature-field"><span>Accent color</span><select value={preferences.accent} onChange={event => setPreferences(current => ({ ...current, accent: event.target.value as AppPreferences["accent"] }))}>
                   <option value="blurple">Blurple</option><option value="violet">Violet</option><option value="emerald">Emerald</option>
                 </select></label>
+                <label className="feature-field"><span>Channel sidebar width · {preferences.channelSidebarWidth}px</span><input type="range" min="180" max="360" step="4" value={preferences.channelSidebarWidth} onChange={event => setPreferences(current => ({ ...current, channelSidebarWidth: Number(event.target.value) }))} /></label>
+                <h3 className="settings-section-title">Server folders and order</h3>
+                <p className="settings-help">Group servers by folder name. Use arrows to change their order in the server rail.</p>
+                <div className="server-organize-list">
+                  {orderedGuilds.map((guild, index) => (
+                    <div className="server-organize-row" key={guild.id}>
+                      <span title={guild.name}>{guild.name}</span>
+                      <input aria-label={`Folder for ${guild.name}`} placeholder="Folder" value={preferences.serverFolders[guild.id] || ""} onChange={event => setPreferences(current => ({ ...current, serverFolders: { ...current.serverFolders, [guild.id]: event.target.value } }))} />
+                      <button type="button" aria-label={`Move ${guild.name} up`} disabled={index === 0} onClick={() => setPreferences(current => {
+                        const ids = orderedGuilds.map(item => item.id);
+                        [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
+                        return { ...current, serverOrder: ids };
+                      })}>↑</button>
+                      <button type="button" aria-label={`Move ${guild.name} down`} disabled={index === orderedGuilds.length - 1} onClick={() => setPreferences(current => {
+                        const ids = orderedGuilds.map(item => item.id);
+                        [ids[index + 1], ids[index]] = [ids[index], ids[index + 1]];
+                        return { ...current, serverOrder: ids };
+                      })}>↓</button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             <div className="feature-modal-actions"><button type="button" onClick={() => setSettingsOpen(false)}>Done</button></div>
           </section>
         </div>
       )}
+
+      {protoSettingsOpen && <SettingsMenu
+        onClose={() => setProtoSettingsOpen(false)}
+        onOpenClientSettings={() => { setProtoSettingsOpen(false); setSettingsOpen(true); }}
+        onThemeChange={setSettingsTheme}
+        ignoredUserIds={ignoredUserIds}
+        blockedUserIds={relationships.filter(relationship => relationship.type === 2).map(relationship => relationship.user.id)}
+        onToggleIgnore={toggleIgnoredUser}
+        onBlockUser={(userId, blocked) => void changeRelationship(userId, blocked ? "block" : "unblock")}
+      />}
 
       {forwardTarget && (
         <div className="feature-modal-backdrop" onMouseDown={event => {
@@ -3989,6 +4600,25 @@ export default function App() {
                   <MessageSquare size={14} /> Message
                 </button>
               )}
+              {contextMenu.user.id !== me.id && (
+                <>
+                  <button role="menuitem" disabled={relationshipBusy === contextMenu.user.id} onClick={() => {
+                    const userId = contextMenu.user.id;
+                    setContextMenu(null);
+                    void changeRelationship(userId, relationships.some(item => item.user?.id === userId && item.type === 2) ? "unblock" : "block");
+                  }}><Ban size={14} /> {relationships.some(item => item.user?.id === contextMenu.user.id && item.type === 2) ? "Unblock" : "Block"}</button>
+                  <button role="menuitem" onClick={() => {
+                    const userId = contextMenu.user.id;
+                    setContextMenu(null);
+                    toggleIgnoredUser(userId);
+                  }}><UserX size={14} /> {ignoredUserIds.has(contextMenu.user.id) ? "Unignore" : "Ignore"}</button>
+                  <button role="menuitem" onClick={() => {
+                    const userId = contextMenu.user.id;
+                    setContextMenu(null);
+                    void openDiscordReportFlow(userId);
+                  }}><Flag size={14} /> Report user…</button>
+                </>
+              )}
               {contextMenu.source === "member" && selectedChannel && contextMenu.user.id !== me.id && (
                 <button role="menuitem" onClick={() => {
                   const user = contextMenu.user;
@@ -4095,6 +4725,13 @@ export default function App() {
               >
                 <Copy size={14} /> Copy Message Text
               </button>
+              {contextMenu.message.author.id !== me.id && !contextMenu.message.deleted_at && (
+                <button role="menuitem" onClick={() => {
+                  const { message, channel } = contextMenu;
+                  setContextMenu(null);
+                  void openDiscordReportFlow(message.author.id, message, channel);
+                }}><Flag size={14} /> Report Message…</button>
+              )}
               <button role="menuitem" onClick={() => void copyContextValue(contextMenu.message.id, "Message ID")}>
                 <Copy size={14} /> Copy Message ID
               </button>
@@ -4221,7 +4858,7 @@ function MessageContent({
 
       {m.embeds && m.embeds.length > 0 && (
         <div className="msg-embeds-container">
-          {m.embeds.map((embed, i) => (
+          {m.embeds.filter(embed => !!embed && typeof embed === "object").map((embed, i) => (
             <DiscordEmbedView key={i} embed={embed} attachments={m.attachments} channels={channels} users={users} onChannelClick={onChannelClick} onMediaOpen={onMediaOpen} />
           ))}
         </div>

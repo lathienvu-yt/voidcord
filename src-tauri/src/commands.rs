@@ -6,9 +6,13 @@
 use reqwest::Method;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
+use crate::voice_gateway::{VoiceGateway, VoiceGatewayConfig};
 use crate::discord_router::{AccountIdentity, TokenManager};
+use crate::settings_proto::SettingsProtoV1Envelope;
 use crate::AppState;
+
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -49,14 +53,33 @@ pub async fn set_token(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Value, String> {
+    let previous_token = state.token.lock().await.clone();
     rebuild_router(&state, &token).await;
-    *state.token.lock().await = Some(token.clone());
-
-    let me = state
-        .router
+    let me = match state.router
         .rest(AccountIdentity::ReadOnly, Method::GET, "users/@me", None)
         .await
-        .map_err(map_err)?;
+    {
+        Ok(user) => user,
+        Err(error) => {
+            let message = map_err(error);
+            // Keep the attempted token active while a CAPTCHA retry is pending,
+            // because the router owns the paused request and its challenge state.
+            if !message.starts_with("VOIDCORD_CAPTCHA:") {
+                if let Some(previous) = previous_token {
+                    rebuild_router(&state, &previous).await;
+                } else {
+                    state.router.update_tokens(TokenManager::default()).await;
+                }
+            }
+            return Err(message);
+        }
+    };
+
+    if let Some(gateway_task) = state.gateway_task.lock().await.take() {
+        gateway_task.abort();
+    }
+    rebuild_router(&state, &token).await;
+    *state.token.lock().await = Some(token.clone());
 
     let _ = app.emit("discord:ready", &me);
     Ok(me)
@@ -285,6 +308,76 @@ pub async fn send_message(
         )
         .await
         .map_err(map_err)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentSelection {
+    upload_id: String,
+    filename: String,
+    size: u64,
+}
+
+#[tauri::command]
+pub async fn select_attachment_files(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<AttachmentSelection>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_files(move |paths| { let _ = sender.send(paths); });
+    let Some(paths) = receiver.await.map_err(|_| "File picker was cancelled".to_owned())? else { return Ok(Vec::new()); };
+    if paths.len() > 10 { return Err("You can attach up to 10 files per message".to_owned()); }
+    let mut result = Vec::with_capacity(paths.len());
+    let mut stored_paths = Vec::with_capacity(paths.len());
+    for path in paths {
+        let path = path.into_path().map_err(|error| format!("Could not resolve selected file: {error}"))?;
+        let metadata = tokio::fs::metadata(&path).await.map_err(|error| format!("Could not read selected file: {error}"))?;
+        if !metadata.is_file() { return Err("Selected attachment is not a file".to_owned()); }
+        let filename = path.file_name().and_then(|name| name.to_str()).unwrap_or("attachment").to_owned();
+        let upload_id = format!("upload-{}", uuid::Uuid::new_v4());
+        result.push(AttachmentSelection { upload_id, filename, size: metadata.len() });
+        stored_paths.push(path);
+    }
+    let mut selections = state.selected_uploads.lock().await;
+    selections.retain(|_, (created_at, _)| created_at.elapsed() < std::time::Duration::from_secs(3600));
+    for (selection, path) in result.iter().zip(stored_paths) {
+        selections.insert(selection.upload_id.clone(), (tokio::time::Instant::now(), vec![path]));
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_upload_limit(state: State<'_, AppState>) -> Result<u64, String> {
+    let user = state.router.rest(AccountIdentity::Primary, Method::GET, "users/@me", None).await.map_err(map_err)?;
+    let premium_type = user.get("premium_type").and_then(Value::as_u64).unwrap_or(0);
+    Ok(match premium_type {
+        2 => 500 * 1024 * 1024,
+        1 | 3 => 50 * 1024 * 1024,
+        _ => 20 * 1024 * 1024,
+    })
+}
+
+/// Send a message with files selected by the native file picker.
+#[tauri::command]
+pub async fn send_message_with_files(
+    channel_id: String,
+    content: String,
+    files: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if files.len() > 10 { return Err("You can attach up to 10 files".to_owned()); }
+    let paths = {
+        let mut selected = state.selected_uploads.lock().await;
+        let mut paths = Vec::with_capacity(files.len());
+        for upload_id in files {
+            let Some((created_at, mut selected_paths)) = selected.remove(&upload_id) else {
+                return Err("An attachment selection expired; please choose the file again".to_owned());
+            };
+            if created_at.elapsed() > std::time::Duration::from_secs(3600) {
+                return Err("An attachment selection expired; please choose the file again".to_owned());
+            }
+            paths.append(&mut selected_paths);
+        }
+        paths
+    };
+    state.router.send_message_with_files(AccountIdentity::Primary, &channel_id, &content, paths).await.map_err(map_err)
 }
 
 /// Forward a readable source message using Discord's message-reference type FORWARD.
@@ -628,12 +721,12 @@ pub async fn update_relationship(
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let method = match action.as_str() {
-        "accept" | "add" => Method::PUT,
-        "ignore" | "remove" => Method::DELETE,
+        "accept" | "add" | "block" => Method::PUT,
+        "ignore" | "remove" | "unblock" => Method::DELETE,
         _ => return Err(format!("Unsupported relationship action: {action}")),
     };
     let body = if method == Method::PUT {
-        Some(json!({ "type": 1 }))
+        Some(json!({ "type": if action == "block" { 2 } else { 1 } }))
     } else {
         None
     };
@@ -689,6 +782,29 @@ pub async fn get_current_user_settings(state: State<'_, AppState>) -> Result<Val
             Method::GET,
             "users/@me/settings",
             None,
+        )
+        .await
+        .map_err(map_err)
+}
+
+/// Send an observed settings-proto/1 delta. The protobuf field payload remains
+/// opaque because this capture does not establish its semantic field names.
+#[tauri::command]
+pub async fn sync_settings_proto_v1(
+    settings_payload: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let envelope = SettingsProtoV1Envelope::from_base64(&settings_payload)
+        .map_err(map_err)?;
+    let body = serde_json::to_value(envelope).map_err(map_err)?;
+
+    state
+        .router
+        .rest(
+            AccountIdentity::Primary,
+            Method::PATCH,
+            "users/@me/settings-proto/1",
+            Some(body),
         )
         .await
         .map_err(map_err)
@@ -776,6 +892,34 @@ pub async fn request_guild_member_list(
         .map_err(map_err)
 }
 
+/// Send a user voice-state update through the active gateway session.
+/// Voice media negotiation is handled separately after Discord returns both
+/// VOICE_STATE_UPDATE and VOICE_SERVER_UPDATE.
+#[tauri::command]
+pub async fn set_voice_state(
+    guild_id: String,
+    channel_id: Option<String>,
+    self_mute: bool,
+    self_deaf: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if guild_id.parse::<u64>().is_err() {
+        return Err("A valid guild ID is required for voice channels".to_owned());
+    }
+    if channel_id.as_deref().is_some_and(|id| id.parse::<u64>().is_err()) {
+        return Err("Channel ID must be a numeric Discord snowflake".to_owned());
+    }
+    state.router.send_gateway_payload(json!({
+        "op": 4,
+        "d": {
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "self_mute": self_mute,
+            "self_deaf": self_deaf
+        }
+    })).await.map_err(map_err)
+}
+
 /// Fetch the current user's role IDs for accurate local channel permission checks.
 #[tauri::command]
 pub async fn get_current_guild_member(
@@ -859,11 +1003,14 @@ pub async fn start_gateway(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
+    if let Some(gateway_task) = state.gateway_task.lock().await.take() {
+        gateway_task.abort();
+    }
     // Clone router + app handle so they can move into the spawned task
     let router = state.router.clone();
     let app = app.clone();
 
-    tokio::spawn(async move {
+    let gateway_task = tokio::spawn(async move {
         // Retry loop — reconnect on disconnect
         loop {
             emit_rust_log(&app, "debug", "gateway", "Connecting to Discord gateway");
@@ -956,6 +1103,12 @@ pub async fn start_gateway(
                         "PRESENCE_UPDATE" => {
                             let _ = app2.emit("discord:presence_update", d);
                         }
+                        "VOICE_STATE_UPDATE" => {
+                            let _ = app2.emit("discord:voice_state_update", d);
+                        }
+                        "VOICE_SERVER_UPDATE" => {
+                            let _ = app2.emit("discord:voice_server_update", d);
+                        }
                         "READY" => {
                             emit_rust_log(&app2, "info", "gateway", "Gateway READY received");
                             let _ = app2.emit(
@@ -987,6 +1140,8 @@ pub async fn start_gateway(
         }
     });
 
+    *state.gateway_task.lock().await = Some(gateway_task);
+
     Ok(())
 }
 /// Fetch all roles in a guild.
@@ -1006,6 +1161,71 @@ pub async fn get_guild_roles(
         .await
         .map_err(map_err)
 }
+
+
+
+/// Kết nối tới Voice Channel bằng Voice Gateway & UDP Transport
+#[tauri::command]
+pub async fn connect_voice(
+    guild_id: String,
+    channel_id: String,
+    endpoint: String,
+    session_id: String,
+    token: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    // 1. Ngắt voice session cũ nếu đang chạy
+    if let Some(task) = state.voice_task.lock().await.take() {
+        task.abort();
+    }
+
+    // 2. Lấy user_id hiện tại từ token session
+    let user = state
+        .router
+        .rest(AccountIdentity::ReadOnly, Method::GET, "users/@me", None)
+        .await
+        .map_err(map_err)?;
+
+    let user_id = user
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("Could not resolve user ID")?
+        .to_owned();
+
+    let config = VoiceGatewayConfig {
+        endpoint,
+        guild_id,
+        channel_id,
+        user_id,
+        session_id,
+        token,
+    };
+
+    // 3. Khởi tạo VoiceGateway
+    let gateway = VoiceGateway::new(config).await?;
+
+    // 4. Spawn task chạy ngầm Voice Gateway session
+    let voice_task = tokio::spawn(async move {
+        emit_rust_log(&app, "info", "voice", "Starting Voice Gateway connection...");
+        if let Err(err) = gateway.run().await {
+            emit_rust_log(&app, "error", "voice", format!("Voice session error: {err}"));
+        }
+    });
+
+    *state.voice_task.lock().await = Some(voice_task);
+    Ok(())
+}
+
+/// Ngắt kết nối Voice Channel
+#[tauri::command]
+pub async fn disconnect_voice(state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(task) = state.voice_task.lock().await.take() {
+        task.abort();
+    }
+    Ok(())
+}
+
 /// Open or close Webview Developer Tools (Console).
 #[tauri::command]
 pub async fn toggle_devtools(app: AppHandle) -> Result<(), String> {

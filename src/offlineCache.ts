@@ -1,7 +1,7 @@
 import { DiscordChannel, DiscordMessage } from "./types";
 
 const DB_NAME = "voidcord-local-cache";
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 function openCache(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -26,6 +26,10 @@ function openCache(): Promise<IDBDatabase> {
         deletedIds.createIndex("channelId", "channelId");
       }
       if (!db.objectStoreNames.contains("deletedChannels")) db.createObjectStore("deletedChannels", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("editedMessages")) {
+        const editedMessages = db.createObjectStore("editedMessages", { keyPath: "id" });
+        editedMessages.createIndex("channelId", "channelId");
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Could not open VoidCord's local cache"));
@@ -206,6 +210,54 @@ export interface DeletedMessageLog {
   channelName: string;
   deletedAt: number;
   message: DiscordMessage;
+}
+
+export interface EditedMessageLog {
+  id: string;
+  messageId: string;
+  channelId: string;
+  channelName: string;
+  editedAt: number;
+  message: DiscordMessage;
+}
+
+export async function readEditedMessages(): Promise<EditedMessageLog[]> {
+  const db = await openCache();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction("editedMessages", "readonly").objectStore("editedMessages").getAll();
+    request.onsuccess = () => {
+      db.close();
+      resolve((request.result as EditedMessageLog[]).sort((a, b) => b.editedAt - a.editedAt));
+    };
+    request.onerror = () => { db.close(); reject(request.error); };
+  });
+}
+
+export async function writeEditedMessage(entry: EditedMessageLog): Promise<void> {
+  const db = await openCache();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("editedMessages", "readwrite");
+    tx.objectStore("editedMessages").put(entry);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+
+export async function deleteEditedMessage(id: string): Promise<void> {
+  const db = await openCache();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["editedMessages", "archivedMedia"], "readwrite");
+    tx.objectStore("editedMessages").delete(id);
+    const mediaStore = tx.objectStore("archivedMedia");
+    const request = mediaStore.getAll();
+    request.onsuccess = () => {
+      (request.result as { id: string }[])
+        .filter(media => media.id.startsWith(`${id}:`))
+        .forEach(media => mediaStore.delete(media.id));
+    };
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
 }
 
 export async function readDeletedMessages(): Promise<DeletedMessageLog[]> {
