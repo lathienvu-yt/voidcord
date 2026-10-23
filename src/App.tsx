@@ -301,10 +301,17 @@ function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
       const match = token.match(/\d{15,22}/);
       if (!match) throw new Error(option.name + " needs a Discord mention or ID.");
       value = match[0];
-    } else if (option.type === 3 && Array.isArray(option.choices) && !option.choices.some((choice: any) => choice.value === token)) {
-      throw new Error(option.name + " must be one of: " + option.choices.map((choice: any) => choice.name).join(", "));
     } else if (option.type === 11) {
       throw new Error("Attachment options aren't supported yet. Choose a command that doesn't require an uploaded file.");
+    }
+
+    if (Array.isArray(option.choices) && option.choices.length > 0) {
+      const choice = option.choices.find((candidate: any) => String(candidate.value) === String(value));
+      if (!choice) {
+        throw new Error(option.name + " must be one of: " + option.choices.map((candidate: any) => candidate.name).join(", "));
+      }
+      // Keep the original JSON type: integer/number choices must not be sent as strings.
+      value = choice.value;
     }
     result.push({ name: option.name, type: option.type, value });
   }
