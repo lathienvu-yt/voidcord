@@ -241,6 +241,45 @@ const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
   30: "updated the stage topic",
 };
 
+function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
+  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\\S+)/g)]
+    .map(match => (match[1] ?? match[2] ?? match[3] ?? "").replace(/\\(["\\])/g, "$1"));
+  let options = Array.isArray(command?.options) ? command.options : [];
+  if (options.some((option: any) => option.type === 1 || option.type === 2)) {
+    const subcommandName = tokens.shift();
+    const subcommand = options.find((option: any) => option.name === subcommandName && (option.type === 1 || option.type === 2));
+    if (!subcommand) throw new Error("Choose a subcommand from the command's available options.");
+    options = Array.isArray(subcommand.options) ? subcommand.options : [];
+  }
+  const result: any[] = [];
+  for (const option of options) {
+    if (option.type === 1 || option.type === 2) continue;
+    const token = tokens.shift();
+    if (token === undefined) {
+      if (option.required) throw new Error("Missing required option: " + option.name);
+      continue;
+    }
+    let value: any = token;
+    if (option.type === 4) {
+      value = Number(token);
+      if (!Number.isInteger(value)) throw new Error(option.name + " must be an integer.");
+    } else if (option.type === 10) {
+      value = Number(token);
+      if (!Number.isFinite(value)) throw new Error(option.name + " must be a number.");
+    } else if (option.type === 5) {
+      if (!/^(true|false)$/i.test(token)) throw new Error(option.name + " must be true or false.");
+      value = token.toLowerCase() === "true";
+    } else if ([6, 7, 8, 9].includes(option.type)) {
+      const match = token.match(/\\d{15,22}/);
+      if (!match) throw new Error(option.name + " needs a Discord mention or ID.");
+      value = match[0];
+    }
+    result.push({ name: option.name, type: option.type, value });
+  }
+  if (tokens.length) throw new Error("Too many arguments for /" + command.name + ".");
+  return result;
+}
+
 function canForwardMessage(message: DiscordMessage): boolean {
   return [0, 19, 20, 23].includes(message.type)
     && !message.poll
@@ -810,6 +849,7 @@ export default function App() {
   const [guildMembers, setGuildMembers] = useState<any[]>([]);
   const [gatewayVoiceStates, setGatewayVoiceStates] = useState<GatewayVoiceState[]>([]);
   const [privateVoiceCalls, setPrivateVoiceCalls] = useState<Set<string>>(() => new Set());
+  const [incomingCallChannels, setIncomingCallChannels] = useState<Record<string, any>>({});
   const [guildRoles, setGuildRoles] = useState<any[]>([]);
   const [memberPresences, setMemberPresences] = useState<Record<string, string>>({});
   const [memberPlatforms, setMemberPlatforms] = useState<Record<string, UserPlatform[]>>({});
@@ -901,6 +941,10 @@ export default function App() {
   const [systemNotice, setSystemNotice] = useState<NoticeState | null>(null);
   const notificationSequence = useRef(0);
   const [sending, setSending] = useState(false);
+  const [replyToMessage, setReplyToMessage] = useState<DiscordMessage | null>(null);
+  const [slashCommands, setSlashCommands] = useState<any[]>([]);
+  const [selectedSlashCommand, setSelectedSlashCommand] = useState<any | null>(null);
+  const [gatewaySessionId, setGatewaySessionId] = useState("");
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [contextBusy, setContextBusy] = useState(false);
@@ -983,6 +1027,25 @@ export default function App() {
   const notifySystem = useCallback((msg: string, ms = 4200) => {
     setSystemNotice({ id: ++notificationSequence.current, message: msg, duration: ms, exiting: false });
   }, []);
+
+  useEffect(() => {
+    const match = draft.match(/^\\/([^\\s]*)$/);
+    if (!match || !selectedChannel || selectedSlashCommand) {
+      setSlashCommands([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await invoke<any>("search_application_commands", { channelId: selectedChannel.id, query: match[1] });
+        const commands = Array.isArray(response) ? response : Array.isArray(response?.application_commands) ? response.application_commands : Array.isArray(response?.commands) ? response.commands : [];
+        if (!cancelled) setSlashCommands(commands.filter((command: any) => typeof command?.name === "string" && typeof command?.id === "string" && typeof command?.application_id === "string").slice(0, 15));
+      } catch (error) {
+        if (!cancelled) { setSlashCommands([]); console.debug("Slash command search unavailable", error); }
+      }
+    }, 250);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [draft, selectedChannel?.id, selectedSlashCommand, invoke]);
 
   const refreshAudioDevices = useCallback(async () => {
     setAudioDevicesLoading(true);
@@ -1754,6 +1817,8 @@ export default function App() {
       const channelId = typeof payload?.channel_id === "string" ? payload.channel_id : "";
       if (!channelId) return;
       setPrivateVoiceCalls(previous => new Set(previous).add(channelId));
+      const ringingIds = Array.isArray(payload?.ringing) ? payload.ringing.map((entry: any) => typeof entry === "string" ? entry : String(entry?.id || entry?.user_id || "")) : [];
+      if (me?.id && ringingIds.includes(me.id)) setIncomingCallChannels(previous => ({ ...previous, [channelId]: payload }));
       if (Array.isArray(payload.voice_states)) {
         setGatewayVoiceStates(previous => {
           const states = (payload.voice_states as GatewayVoiceState[])
@@ -1780,6 +1845,7 @@ export default function App() {
     listen<any>("discord:call_delete", ({ payload }) => {
       const channelId = typeof payload?.channel_id === "string" ? payload.channel_id : "";
       if (channelId) {
+        setIncomingCallChannels(previous => { const next = { ...previous }; delete next[channelId]; return next; });
         setPrivateVoiceCalls(previous => {
           const next = new Set(previous);
           next.delete(channelId);
@@ -2038,7 +2104,8 @@ export default function App() {
       applyPresenceUpdates([payload]);
     }).then(u => unsubs.push(u));
 
-    listen("discord:gateway_ready", () => {
+    listen<any>("discord:gateway_ready", ({ payload }) => {
+      if (typeof payload?.session_id === "string") setGatewaySessionId(payload.session_id);
       const guild = selectedGuildRef.current;
       if (!guild) return;
       const channelIds = channels
@@ -2916,21 +2983,37 @@ export default function App() {
       }
       return;
     }
+    if (content.startsWith("/")) {
+      const commandName = content.slice(1).split(/\\s/, 1)[0];
+      const command = selectedSlashCommand?.name === commandName ? selectedSlashCommand : slashCommands.find(candidate => candidate.name === commandName);
+      if (!command) { notify("Pick a command from the slash-command suggestions first."); return; }
+      if (!gatewaySessionId) { notify("The Discord gateway session is not ready yet. Reconnect and try again."); return; }
+      setSending(true);
+      try {
+        const rawArguments = content.slice(commandName.length + 1).trim();
+        const options = parseSlashCommandOptions(command, rawArguments);
+        const nonce = String((BigInt(Date.now()) << 12n) + BigInt(Math.floor(Math.random() * 4096)));
+        await invoke("execute_application_command", { channelId: sendingChannel.id, guildId: sendingChannel.guild_id || null, sessionId: gatewaySessionId, command, options, nonce });
+        setDraft(""); setSelectedSlashCommand(null); setSlashCommands([]);
+        void writeCachedDraft(sendingChannel.id, "");
+        notify("/" + command.name + " submitted");
+      } catch (error) { notify("Slash command failed: " + error); }
+      finally { setSending(false); inputRef.current?.focus(); }
+      return;
+    }
     setSending(true);
     try {
+      const replyToMessageId = replyToMessage?.channel_id === sendingChannel.id ? replyToMessage.id : null;
       const sent = composerFiles.length
-        ? await invoke<DiscordMessage>("send_message_with_files", {
-          channelId: sendingChannel.id,
-          content,
-          files: composerFiles.map(file => file.uploadId),
-        })
-        : await invoke<DiscordMessage>("send_message", { channelId: sendingChannel.id, content });
+        ? await invoke<DiscordMessage>("send_message_with_files", { channelId: sendingChannel.id, content, files: composerFiles.map(file => file.uploadId), replyToMessageId })
+        : await invoke<DiscordMessage>("send_message", { channelId: sendingChannel.id, content, replyToMessageId });
       if (sent && sent.id) {
         if (draftRef.current.trim() === content) {
           setDraft("");
           void writeCachedDraft(sendingChannel.id, "");
         }
         setComposerFiles([]);
+        setReplyToMessage(null);
         if (selectedChannelRef.current?.id === sendingChannel.id) {
           setMessages(prev => {
             if (prev.some(m => m.id === sent.id)) return prev;
@@ -3650,6 +3733,22 @@ export default function App() {
         </div>
       </header>
 
+      {Object.keys(incomingCallChannels).length > 0 && (() => {
+        const incomingId = Object.keys(incomingCallChannels)[0];
+        const incomingChannel = dmChannels.find(channel => channel.id === incomingId);
+        if (!incomingChannel) return null;
+        const caller = incomingChannel.recipients?.find(user => user.id !== me.id);
+        return <div className="incoming-call-banner" role="status">
+          <div className="incoming-call-copy"><Phone size={17} /><span><strong>Incoming call</strong><small>{caller ? displayName(caller) : channelDisplayName(incomingChannel)}</small></span></div>
+          <button type="button" className="incoming-call-accept" onClick={() => {
+            setIncomingCallChannels(previous => { const next = { ...previous }; delete next[incomingId]; return next; });
+            setIsDmView(true); setActiveDmTab("chat"); void selectChannel(incomingChannel); void joinPrivateCall(incomingChannel);
+          }}><Phone size={14} /> Accept</button>
+          <button type="button" className="incoming-call-decline" onClick={() => {
+            void invoke("decline_private_call", { channelId: incomingId }).then(() => setIncomingCallChannels(previous => { const next = { ...previous }; delete next[incomingId]; return next; })).catch(error => notify("Could not decline call: " + error));
+          }}><X size={14} /> Decline</button>
+        </div>;
+      })()}
       <section className="desktop">
         {/* Server Rail */}
         <nav className="serverrail" aria-label="Servers">
@@ -4537,6 +4636,9 @@ export default function App() {
                 {officialDiscordDm && <span className="composer-readonly-hint">Official Discord messages are read-only</span>}
                 {!officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
                 {channelAccess === "MISSING_ACCESS" && <span className="composer-readonly-hint">You don’t have access to this channel</span>}
+                {replyToMessage && replyToMessage.channel_id === selectedChannel?.id && !editingMessageId && (
+                  <div className="reply-composer-preview"><div><strong>Replying to {displayName(replyToMessage.author)}</strong><span>{replyToMessage.content || "Attachment or system message"}</span></div><button type="button" aria-label="Cancel reply" onClick={() => setReplyToMessage(null)}><X size={14} /></button></div>
+                )}
                 {editingMessageId && (
                   <div className="message-editing-indicator">
                     <span>Editing message</span>
@@ -4561,7 +4663,9 @@ export default function App() {
                   disabled={!selectedChannel || officialDiscordDm || channelAccess === "MISSING_ACCESS" || (!canSend && !editingMessageId)}
                   autoComplete="off"
                   onChange={e => {
-                    setDraft(e.target.value);
+                    const nextValue = e.target.value;
+                    setDraft(nextValue);
+                    setSelectedSlashCommand(current => current && nextValue.startsWith("/" + current.name) ? current : null);
                     setMentionCaret(e.target.selectionStart || 0);
                     setMentionSelection(0);
                   }}
@@ -4569,6 +4673,14 @@ export default function App() {
                   onKeyUp={e => setMentionCaret(e.currentTarget.selectionStart || 0)}
                   onKeyDown={handleComposerKeyDown}
                 />
+                {slashCommands.length > 0 && /^\\/[^\\s]*$/.test(draft) && (
+                  <div className="slash-command-autocomplete" role="listbox" aria-label="Slash commands">
+                    {slashCommands.map((command, index) => <button type="button" role="option" key={command.application_id + ":" + command.id} onMouseDown={event => event.preventDefault()} onClick={() => {
+                      setSelectedSlashCommand(command); setDraft("/" + command.name + " "); setSlashCommands([]);
+                      requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length); });
+                    }}><span className="slash-command-icon">/</span><span><strong>/{command.name}</strong><small>{command.description || "Application command"}</small></span></button>)}
+                  </div>
+                )}
                 {mentionQuery && mentionSuggestions.length > 0 && (
                   <div className="mention-autocomplete" role="listbox" aria-label="Mention suggestions">
                     {mentionSuggestions.map((user, index) => (
@@ -5449,6 +5561,9 @@ export default function App() {
           {contextMenu.kind === "message" && (
             <>
               <div className="app-context-menu-heading">Message by {displayName(contextMenu.message.author)}</div>
+              <button role="menuitem" disabled={!!contextMenu.message.deleted_at || !isMessageChannel(contextMenu.channel)} onClick={() => {
+                setReplyToMessage(contextMenu.message); setContextMenu(null); requestAnimationFrame(() => inputRef.current?.focus());
+              }}>Reply</button>
               <button
                 role="menuitem"
                 disabled={!canForwardMessage(contextMenu.message)}
@@ -5577,6 +5692,9 @@ function MessageContent({
 }) {
   return (
     <>
+      {m.message_reference && m.message_reference.type !== 1 && (
+        <div className="reply-message-reference"><span>↪ {m.referenced_message ? displayName(m.referenced_message.author) : "Reply to message"}</span><div>{m.referenced_message?.content || (m.referenced_message ? "Attachment or system message" : "Original message unavailable")}</div></div>
+      )}
       {m.message_reference?.type === 1 && m.message_snapshots?.map((snapshot, index) => (
         <div className="forwarded-message" key={`${m.id}-snapshot-${index}`}>
           <div className="forwarded-message-label">↗ Forwarded message</div>
