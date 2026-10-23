@@ -441,10 +441,10 @@ pub async fn execute_application_command(
     if channel_id.parse::<u64>().is_err() || session_id.trim().is_empty() {
         return Err("A connected gateway session and valid channel are required".to_owned());
     }
-    let command_id = command.get("id").and_then(Value::as_str).ok_or("Command is missing its ID")?;
-    let application_id = command.get("application_id").and_then(Value::as_str).ok_or("Command is missing its application ID")?;
-    let command_name = command.get("name").and_then(Value::as_str).ok_or("Command is missing its name")?;
-    let command_version = command.get("version").and_then(Value::as_str).unwrap_or(command_id);
+    let command_id = command.get("id").and_then(Value::as_str).ok_or("Command is missing its ID")?.to_owned();
+    let application_id = command.get("application_id").and_then(Value::as_str).ok_or("Command is missing its application ID")?.to_owned();
+    let command_name = command.get("name").and_then(Value::as_str).ok_or("Command is missing its name")?.to_owned();
+    let command_version = command.get("version").and_then(Value::as_str).unwrap_or(&command_id).to_owned();
     let command_type = command.get("type").and_then(Value::as_u64).unwrap_or(1);
     let payload = json!({
         "type": 2,
