@@ -22,6 +22,12 @@ pub struct AppState {
 }
 
 fn main() {
+    let default_log_level = if cfg!(debug_assertions) { "debug" } else { "info" };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_log_level))
+        .format_timestamp_millis()
+        .init();
+    log::info!("VoidCord Rust backend starting (debug_assertions={})", cfg!(debug_assertions));
+
     let app_builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -95,4 +101,6 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VoidCord");
+
+    log::info!("VoidCord application exited");
 }
