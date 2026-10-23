@@ -1034,7 +1034,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const match = draft.match(/^\/([^\s]*)$);
+    const match = draft.match(/^\/([^\s]*)$/);
     if (!match || !selectedChannel || selectedSlashCommand) {
       setSlashCommands([]);
       return;
@@ -4670,7 +4670,12 @@ export default function App() {
                   onChange={e => {
                     const nextValue = e.target.value;
                     setDraft(nextValue);
-                    setSelectedSlashCommand(current => current && nextValue.startsWith("/" + current.name) ? current : null);
+                    setSelectedSlashCommand(
+                      (current: any | null) =>
+                        current && nextValue.startsWith("/" + current.name)
+                          ? current
+                          : null
+                    );
                     setMentionCaret(e.target.selectionStart || 0);
                     setMentionSelection(0);
                   }}
