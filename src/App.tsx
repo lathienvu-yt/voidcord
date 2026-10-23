@@ -4754,14 +4754,17 @@ export default function App() {
                     <strong>/{selectedSlashCommand.name} parameters</strong>
                     <span>Type values after the command, or insert a named parameter:</span>
                     <div className="slash-command-parameter-list">
-                      {selectedSlashCommand.options.map((option: any) => (
-                        <button key={option.name} type="button" title={option.description || option.name} onMouseDown={event => event.preventDefault()} onClick={() => {
-                          const insertion = "--" + option.name + " ";
+                      {selectedSlashCommand.options.flatMap((option: any) => option.type === 2
+                        ? (option.options || []).filter((child: any) => child.type === 1).map((child: any) => ({ ...child, _insert: option.name + " " + child.name + " " }))
+                        : [{ ...option, _insert: [1, 2].includes(option.type) ? option.name + " " : "--" + option.name + " " }]
+                      ).map((option: any) => (
+                        <button key={option.name + ":" + option._insert} type="button" title={option.description || option.name} onMouseDown={event => event.preventDefault()} onClick={() => {
+                          const insertion = option._insert;
                           const nextDraft = draft.endsWith(" ") ? draft + insertion : draft + " " + insertion;
                           setDraft(nextDraft);
                           requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(nextDraft.length, nextDraft.length); });
                         }}>
-                          <code>--{option.name}</code>{option.required ? <em>required</em> : <em>optional</em>}
+                          <code>{option._insert.trim()}</code>{option.required ? <em>required</em> : <em>{[1, 2].includes(option.type) ? "subcommand" : "optional"}</em>}
                         </button>
                       ))}
                     </div>
