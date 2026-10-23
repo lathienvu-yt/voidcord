@@ -246,10 +246,15 @@ function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
     .map(match => (match[1] ?? match[2] ?? match[3] ?? "").replace(/\\(["\\])/g, "$1"));
   let options = Array.isArray(command?.options) ? command.options : [];
   if (options.some((option: any) => option.type === 1 || option.type === 2)) {
-    const subcommandName = tokens.shift();
-    const subcommand = options.find((option: any) => option.name === subcommandName && (option.type === 1 || option.type === 2));
-    if (!subcommand) throw new Error("Choose a subcommand from the command's available options.");
-    options = Array.isArray(subcommand.options) ? subcommand.options : [];
+    let selected = options.find((option: any) => option.name === tokens[0] && (option.type === 1 || option.type === 2));
+    if (!selected) throw new Error("Choose a subcommand from the command's available options.");
+    tokens.shift();
+    if (selected.type === 2) {
+      const subcommandName = tokens.shift();
+      selected = (selected.options || []).find((option: any) => option.name === subcommandName && option.type === 1);
+      if (!selected) throw new Error("Choose a subcommand from the selected group.");
+    }
+    options = Array.isArray(selected.options) ? selected.options : [];
   }
   const result: any[] = [];
   for (const option of options) {
