@@ -233,6 +233,7 @@ const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
   11: "boosted the server to Level 3",
   12: "followed a channel",
   18: "created a thread",
+  20: "used a slash command",
   22: "sent an invite reminder",
   24: "triggered an AutoMod action",
   27: "started a stage",
