@@ -24,6 +24,18 @@ fn map_err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+fn encode_query_component(input: &str) -> String {
+    let mut encoded = String::new();
+    for byte in input.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
 fn emit_rust_log(app: &AppHandle, level: &str, target: &str, message: impl Into<String>) {
     let _ = app.emit(
         "voidcord:rust-log",
@@ -303,18 +315,26 @@ fn encode_base64(bytes: &[u8]) -> String {
 pub async fn send_message(
     channel_id: String,
     content: String,
+    reply_to_message_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    state
-        .router
-        .rest(
-            AccountIdentity::Primary,
-            Method::POST,
-            &format!("channels/{channel_id}/messages"),
-            Some(json!({ "content": content })),
-        )
-        .await
-        .map_err(map_err)
+    let mut payload = json!({ "content": content });
+    if let Some(message_id) = reply_to_message_id {
+        if message_id.parse::<u64>().is_err() {
+            return Err("A valid message ID is required to reply".to_owned());
+        }
+        payload["message_reference"] = json!({
+            "message_id": message_id,
+            "channel_id": channel_id,
+            "fail_if_not_exists": false
+        });
+    }
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::POST,
+        &format!("channels/{channel_id}/messages"),
+        Some(payload),
+    ).await.map_err(map_err)
 }
 
 #[derive(serde::Serialize)]
@@ -367,6 +387,7 @@ pub async fn send_message_with_files(
     channel_id: String,
     content: String,
     files: Vec<String>,
+    reply_to_message_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     if files.len() > 10 { return Err("You can attach up to 10 files".to_owned()); }
@@ -384,7 +405,80 @@ pub async fn send_message_with_files(
         }
         paths
     };
-    state.router.send_message_with_files(AccountIdentity::Primary, &channel_id, &content, paths).await.map_err(map_err)
+    state.router.send_message_with_files(AccountIdentity::Primary, &channel_id, &content, paths, reply_to_message_id.as_deref()).await.map_err(map_err)
+}
+
+/// Search Discord's available application slash commands for the current channel.
+#[tauri::command]
+pub async fn search_application_commands(
+    channel_id: String,
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if channel_id.parse::<u64>().is_err() {
+        return Err("A valid channel ID is required".to_owned());
+    }
+    let query = encode_query_component(query.trim());
+    state.router.rest(
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("channels/{channel_id}/application-commands/search?type=1&query={query}&limit=15&offset=0"),
+        None,
+    ).await.map_err(map_err)
+}
+
+/// Invoke a discovered application command through Discord's interactions endpoint.
+#[tauri::command]
+pub async fn execute_application_command(
+    channel_id: String,
+    guild_id: Option<String>,
+    session_id: String,
+    command: Value,
+    options: Vec<Value>,
+    nonce: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if channel_id.parse::<u64>().is_err() || session_id.trim().is_empty() {
+        return Err("A connected gateway session and valid channel are required".to_owned());
+    }
+    let command_id = command.get("id").and_then(Value::as_str).ok_or("Command is missing its ID")?;
+    let application_id = command.get("application_id").and_then(Value::as_str).ok_or("Command is missing its application ID")?;
+    let command_name = command.get("name").and_then(Value::as_str).ok_or("Command is missing its name")?;
+    let command_version = command.get("version").and_then(Value::as_str).unwrap_or(command_id);
+    let command_type = command.get("type").and_then(Value::as_u64).unwrap_or(1);
+    let payload = json!({
+        "type": 2,
+        "application_id": application_id,
+        "guild_id": guild_id,
+        "channel_id": channel_id,
+        "session_id": session_id,
+        "nonce": nonce,
+        "analytics_location": "slash_ui",
+        "data": {
+            "version": command_version,
+            "id": command_id,
+            "name": command_name,
+            "type": command_type,
+            "options": options,
+            "application_command": command,
+            "attachments": []
+        }
+    });
+    state.router.rest(AccountIdentity::Primary, Method::POST, "interactions", Some(payload)).await.map_err(map_err)
+}
+
+/// Decline/end a private call for the selected DM channel.
+#[tauri::command]
+pub async fn decline_private_call(
+    channel_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if channel_id.parse::<u64>().is_err() {
+        return Err("A valid private-call channel ID is required".to_owned());
+    }
+    state.router.rest(AccountIdentity::Primary, Method::DELETE, &format!("channels/{channel_id}/call"), None)
+        .await.map_err(map_err)?;
+    Ok(())
 }
 
 /// Forward a readable source message using Discord's message-reference type FORWARD.
