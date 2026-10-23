@@ -11,6 +11,24 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 use voice_gateway::VoiceControlState;
 
+struct BackendLogger;
+
+impl log::Log for BackendLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::max_level()
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}: {}", record.level(), record.target(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static BACKEND_LOGGER: BackendLogger = BackendLogger;
+
 /// Shared app state — the router and the stored token.
 pub struct AppState {
     pub router: DiscordRouter,
@@ -22,6 +40,14 @@ pub struct AppState {
 }
 
 fn main() {
+    log::set_logger(&BACKEND_LOGGER).expect("failed to initialize Rust backend logger");
+    log::set_max_level(if cfg!(debug_assertions) {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    });
+    log::info!("VoidCord Rust backend starting (debug_assertions={})", cfg!(debug_assertions));
+
     let app_builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -95,4 +121,6 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VoidCord");
+
+    log::info!("VoidCord application exited");
 }

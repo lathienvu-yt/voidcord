@@ -308,6 +308,7 @@ impl DiscordRouter {
         body: Option<Value>,
         captcha: Option<(String, Option<String>, Option<String>)>,
     ) -> Result<Value, DiscordError> {
+        log::debug!("Discord REST request: {} {}", method, path);
         let token = {
             let tokens = self.tokens.read().await;
             tokens.get(identity)?.clone()
@@ -322,8 +323,15 @@ impl DiscordRouter {
         if let Some(json) = &body {
             request = request.json(json);
         }
-        let response = request.send().await?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                log::warn!("Discord REST transport error: {} {} ({})", method, path, error);
+                return Err(DiscordError::from(error));
+            }
+        };
         let status = response.status();
+        log::debug!("Discord REST response: {} {} -> {}", method, path, status);
         let captcha_headers = (
             response.headers().get("captcha-sitekey").and_then(|value| value.to_str().ok()).map(str::to_owned),
             response.headers().get("captcha-rqdata").and_then(|value| value.to_str().ok()).map(str::to_owned),
@@ -362,6 +370,7 @@ impl DiscordRouter {
                 let challenge = CaptchaChallenge { request_id, service, site_key, rq_data };
                 return Err(DiscordError::CaptchaRequired(serde_json::to_string(&challenge)?));
             }
+            log::warn!("Discord REST request rejected: {} {} -> {}", method, path, status);
             let body = serde_json::from_slice::<DiscordErrorBody>(&bytes)
                 .map(|e| format!("{} (Discord code {:?})", e.message.unwrap_or_default(), e.code))
                 .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());
@@ -392,7 +401,7 @@ impl DiscordRouter {
         let (mut socket, _) = match connect_async(url.as_str()).await {
             Ok(res) => res,
             Err(e) => {
-                eprintln!("[VoidCord gateway] Failed to connect: {e:?}");
+                log::warn!("Gateway connection failed: {e}");
                 return Err(DiscordError::WebSocket(e));
             }
         };
@@ -423,7 +432,7 @@ impl DiscordRouter {
                         pending_member_request = Some(payload);
                     } else {
                         if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
-                            eprintln!("[VoidCord gateway] Send error: {e:?}");
+                            log::warn!("Gateway send error: {e}");
                             break;
                         }
                     }
@@ -431,7 +440,7 @@ impl DiscordRouter {
                 _ = tokio::time::sleep_until(next_member_request_at), if pending_member_request.is_some() => {
                     if let Some(payload) = pending_member_request.take() {
                         if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
-                            eprintln!("[VoidCord gateway] Member request send error: {e:?}");
+                            log::warn!("Gateway member request send error: {e}");
                             break;
                         }
                         next_member_request_at = tokio::time::Instant::now() + Duration::from_secs(2);
@@ -440,7 +449,7 @@ impl DiscordRouter {
                 _ = heartbeat.tick(), if heartbeat_interval.is_some() => {
                     let payload = serde_json::json!({"op": 1, "d": sequence});
                     if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
-                        eprintln!("[VoidCord gateway] Heartbeat send error: {e:?}");
+                        log::warn!("Gateway heartbeat send error: {e}");
                         break;
                     }
                 }
@@ -453,7 +462,7 @@ impl DiscordRouter {
                     let ws_msg = match message_result {
                         Ok(m) => m,
                         Err(e) => {
-                            eprintln!("[VoidCord gateway] WS frame error (recovering): {e:?}");
+                            log::warn!("Gateway WebSocket frame error (recovering): {e}");
                             continue;
                         }
                     };
@@ -463,7 +472,7 @@ impl DiscordRouter {
                             let event: Value = match serde_json::from_str(&text) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    eprintln!("[VoidCord gateway] JSON parse error: {e:?}");
+                                    log::warn!("Gateway JSON parse error: {e}");
                                     continue;
                                 }
                             };
@@ -501,7 +510,7 @@ impl DiscordRouter {
                                         }
                                     });
                                     if let Err(e) = socket.send(WsMessage::Text(identify.to_string())).await {
-                                        eprintln!("[VoidCord gateway] Identify send error: {e:?}");
+                                        log::warn!("Gateway identify send error: {e}");
                                         break;
                                     }
                                     identified = true;
@@ -525,7 +534,7 @@ impl DiscordRouter {
                             let _ = socket.send(WsMessage::Pong(payload)).await;
                         }
                         WsMessage::Close(frame) => {
-                            eprintln!("[VoidCord gateway] WebSocket closed: {frame:?}");
+                            log::info!("Gateway WebSocket closed: {frame:?}");
                             return Err(DiscordError::WebSocketClosed);
                         }
                         _ => {}

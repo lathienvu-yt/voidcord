@@ -4631,6 +4631,9 @@ export default function App() {
 
           {/* Composer */}
           <div className={`composer-container ${selectedVoiceChannel ? "voice-channel-composer" : ""}`}>
+                {replyToMessage && replyToMessage.channel_id === selectedChannel?.id && !editingMessageId && (
+                  <div className="reply-composer-preview"><div><strong>Replying to {displayName(replyToMessage.author)}</strong><span>{replyToMessage.content || "Attachment or system message"}</span></div><button type="button" aria-label="Cancel reply" onClick={() => setReplyToMessage(null)}><X size={14} /></button></div>
+                )}
             {!online && (
               <div className="reconnect-pill">
                 <span>Disconnected — waiting to reconnect</span>
@@ -4641,9 +4644,6 @@ export default function App() {
                 {officialDiscordDm && <span className="composer-readonly-hint">Official Discord messages are read-only</span>}
                 {!officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
                 {channelAccess === "MISSING_ACCESS" && <span className="composer-readonly-hint">You don’t have access to this channel</span>}
-                {replyToMessage && replyToMessage.channel_id === selectedChannel?.id && !editingMessageId && (
-                  <div className="reply-composer-preview"><div><strong>Replying to {displayName(replyToMessage.author)}</strong><span>{replyToMessage.content || "Attachment or system message"}</span></div><button type="button" aria-label="Cancel reply" onClick={() => setReplyToMessage(null)}><X size={14} /></button></div>
-                )}
                 {editingMessageId && (
                   <div className="message-editing-indicator">
                     <span>Editing message</span>
@@ -4670,12 +4670,7 @@ export default function App() {
                   onChange={e => {
                     const nextValue = e.target.value;
                     setDraft(nextValue);
-                    setSelectedSlashCommand(
-                      (current: any | null) =>
-                        current && nextValue.startsWith("/" + current.name)
-                          ? current
-                          : null
-                    );
+                    setSelectedSlashCommand((current: any | null) => current && nextValue.startsWith("/" + current.name) ? current : null);
                     setMentionCaret(e.target.selectionStart || 0);
                     setMentionSelection(0);
                   }}
