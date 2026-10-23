@@ -2113,14 +2113,8 @@ export default function App() {
       if (Array.isArray(payload?.members)) {
         void mergeGatewayMembers(payload.id || "", payload.members);
       }
-      if (Array.isArray(payload?.voice_states)) {
-        const guildId = String(payload.id || "");
-        setGatewayVoiceStates(previous => [
-          ...previous.filter(state => state.guild_id !== guildId),
-          ...payload.voice_states
-            .filter((state: any) => state?.user_id && state?.channel_id)
-            .map((state: any) => ({ ...state, guild_id: guildId })),
-        ].slice(-2048));
+      if (Array.isArray(payload?.presences)) {
+        applyPresenceUpdates(payload.presences);
       }
     }).then(u => unsubs.push(u));
 
