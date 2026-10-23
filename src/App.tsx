@@ -1042,13 +1042,50 @@ export default function App() {
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const response = await invoke<any>("search_application_commands", { channelId: selectedChannel.id, query: match[1] });
-        const commands = Array.isArray(response) ? response : Array.isArray(response?.application_commands) ? response.application_commands : Array.isArray(response?.commands) ? response.commands : [];
-        if (!cancelled) setSlashCommands(commands.filter((command: any) => typeof command?.name === "string" && typeof command?.id === "string" && typeof command?.application_id === "string").slice(0, 15));
+        const response = await invoke<any>("search_application_commands", {
+          channelId: selectedChannel.id,
+          query: match[1],
+        });
+
+        // Discord's search response can be flat or wrapped. Normalize it before
+        // filtering so valid commands aren't silently discarded by the UI.
+        const payload = response?.data ?? response;
+        const candidates = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload?.application_commands)
+            ? payload.application_commands
+            : Array.isArray(payload?.commands)
+              ? payload.commands
+              : Array.isArray(payload?.data?.application_commands)
+                ? payload.data.application_commands
+                : Array.isArray(payload?.data?.commands)
+                  ? payload.data.commands
+                  : [];
+
+        const commands = candidates.map((entry: any) => {
+          const command = entry?.command && typeof entry.command === "object" ? entry.command : entry;
+          const applicationId = command?.application_id ?? entry?.application_id ?? entry?.application?.id;
+          return {
+            ...command,
+            application_id: typeof applicationId === "string" || typeof applicationId === "number"
+              ? String(applicationId)
+              : undefined,
+          };
+        }).filter((command: any) =>
+          typeof command?.name === "string"
+          && (typeof command?.id === "string" || typeof command?.id === "number")
+          && typeof command?.application_id === "string"
+          && command.name.toLowerCase().startsWith(match[1].toLowerCase())
+        ).map((command: any) => ({ ...command, id: String(command.id) })).slice(0, 15);
+
+        if (!cancelled) setSlashCommands(commands);
       } catch (error) {
-        if (!cancelled) { setSlashCommands([]); console.debug("Slash command search unavailable", error); }
+        if (!cancelled) {
+          setSlashCommands([]);
+          console.debug("Slash command search unavailable", error);
+        }
       }
-    }, 250);
+    }, 150);
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [draft, selectedChannel?.id, selectedSlashCommand, invoke]);
 
