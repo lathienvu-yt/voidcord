@@ -55,6 +55,7 @@ fn main() {
             commands::add_friend,
             commands::update_relationship,
             commands::set_presence,
+            commands::update_bio,
             commands::get_current_user_settings,
             commands::sync_settings_proto_v1,
             settings_menu::save_client_settings,

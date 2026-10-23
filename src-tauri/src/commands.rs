@@ -849,6 +849,27 @@ pub async fn set_presence(
 }
 
 #[tauri::command]
+pub async fn update_bio(
+    bio: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if bio.chars().count() > 190 {
+        return Err("Bio must be 190 characters or fewer".to_owned());
+    }
+
+    state
+        .router
+        .rest(
+            AccountIdentity::Primary,
+            Method::PATCH,
+            "users/@me/profile",
+            Some(json!({ "bio": bio.trim() })),
+        )
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
 pub async fn get_current_user_settings(state: State<'_, AppState>) -> Result<Value, String> {
     state
         .router
