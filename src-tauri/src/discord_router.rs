@@ -38,7 +38,7 @@ struct PendingCaptchaRequest {
 }
 
 /// Distinct credentials configured by the user. Secrets are never serialized.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TokenManager {
     primary_token: Option<SecretToken>,
     secondary_token: Option<SecretToken>,

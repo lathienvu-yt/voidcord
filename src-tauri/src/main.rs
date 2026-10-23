@@ -4,11 +4,12 @@ mod commands;
 mod discord_router;
 mod settings_proto;
 mod settings_menu;
-mod voice_gateway; // <-- Add this line
+mod voice_gateway;
 
 use discord_router::DiscordRouter;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
+use voice_gateway::VoiceControlState;
 
 /// Shared app state — the router and the stored token.
 pub struct AppState {
@@ -16,7 +17,8 @@ pub struct AppState {
     pub token: Arc<Mutex<Option<String>>>,
     pub selected_uploads: Mutex<HashMap<String, (tokio::time::Instant, Vec<PathBuf>)>>,
     pub gateway_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    pub voice_task: Mutex<Option<tokio::task::JoinHandle<()>>>, // <-- Add this line
+    pub voice_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub voice_controls: VoiceControlState,
 }
 
 fn main() {
@@ -35,7 +37,8 @@ fn main() {
             token: Arc::new(Mutex::new(None)),
             selected_uploads: Mutex::new(HashMap::new()),
             gateway_task: Mutex::new(None),
-            voice_task: Mutex::new(None), // <-- Add this line
+            voice_task: Mutex::new(None),
+            voice_controls: VoiceControlState::default(),
         })
         .invoke_handler(tauri::generate_handler![
             commands::set_token,
@@ -66,19 +69,25 @@ fn main() {
             commands::forward_message,
             commands::edit_message,
             commands::delete_message,
+            commands::react_to_message,
             commands::moderate_guild_member,
             commands::set_guild_member_nickname,
             commands::update_guild_channel,
+            commands::set_voice_channel_status,
             commands::set_guild_channel_locked,
             commands::delete_guild_channel,
             commands::start_gateway,
             commands::toggle_devtools,
             commands::request_guild_member_list,
             commands::set_voice_state,
+            commands::list_audio_devices,
             commands::get_guild_roles,
             commands::get_current_guild_member,
             commands::connect_voice,
             commands::disconnect_voice,
+            commands::get_screen_sources,
+            commands::start_screen_share,
+            commands::stop_screen_share,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VoidCord");

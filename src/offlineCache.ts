@@ -1,5 +1,7 @@
 import { DiscordChannel, DiscordMessage } from "./types";
 
+export const MAX_CACHED_MESSAGES_PER_CHANNEL = 500;
+
 const DB_NAME = "voidcord-local-cache";
 const DB_VERSION = 7;
 
@@ -74,9 +76,14 @@ export async function readCachedMessages(channelId: string): Promise<DiscordMess
         const existing = byId.get(entry.id);
         byId.set(entry.id, { ...entry.message, ...existing, deleted_at: existing?.deleted_at || entry.deletedAt });
       });
-      resolve(cached || channelDeleted.length ? [...byId.values()].sort((a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      ) : undefined);
+      const messages = [...byId.values()].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      );
+      resolve(
+        cached || channelDeleted.length
+          ? messages.slice(-MAX_CACHED_MESSAGES_PER_CHANNEL)
+          : undefined
+      );
     };
     request.onsuccess = () => {
       cached = request.result?.messages as DiscordMessage[] | undefined;
@@ -124,7 +131,11 @@ export async function writeCachedMessages(channelId: string, messages: DiscordMe
       const merged = [...byId.values()].sort(
         (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
       );
-      store.put({ channelId, messages: merged, savedAt: Date.now() });
+      store.put({
+        channelId,
+        messages: merged.slice(-MAX_CACHED_MESSAGES_PER_CHANNEL),
+        savedAt: Date.now(),
+      });
     };
     request.onsuccess = () => {
       existing = request.result;

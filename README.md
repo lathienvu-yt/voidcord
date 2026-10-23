@@ -18,8 +18,13 @@ To build the desktop app, install the prerequisites for Tauri 2 and run `npm run
 - A local archived-channel preview: “save last message offline” stores a channel's last message. Archived entries are rendered as muted, clickable, read-only channels and show their locally saved message.
 - Multiple local profile slots and profile selection. These are presentation profiles, not Discord credentials or an authentication implementation.
 - Windows transparent window setup for native material experimentation. Mica needs a Windows-specific native window effect integration; transparent mode alone does not activate Mica.
+- Guild, direct-message, and group-DM voice calls using Discord's voice gateway, DAVE media encryption, Opus encode/decode, selectable microphone and speaker devices, and streaming resampling to/from Discord's 48 kHz audio format. Voice participants and call chat are shown in the voice view; guild voice channels also support editable status.
 - Vencord loader preference placeholder only. Loading Vencord requires an explicit, compatible integration and a plugin security boundary.
 - Rust account request router in `src-tauri/src/discord_router.rs`: primary identity for message/reaction writes, read-only identity for browsing and gateway events, explicit secondary identity availability, and safe local community-to-account preferences.
+
+## Voice dependency licensing
+
+The voice implementation depends on [`cacophony`](https://crates.io/crates/cacophony) and its [`dave`](https://crates.io/crates/dave) dependency, both licensed `AGPL-3.0-only`. Review and comply with those license terms before distributing VoidCord or offering a modified version over a network.
 
 ## Privacy and access
 

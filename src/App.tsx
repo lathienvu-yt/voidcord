@@ -13,7 +13,7 @@ import {
 
 import {
   avatarDecorationUrl, avatarUrl, bannerUrl, displayName, formatTimestamp, guildIconUrl, primaryGuildBadgeUrl,
-  DiscordChannel, DiscordGuild, DiscordMessage, DiscordRelationship, DiscordUser,
+  DiscordChannel, DiscordGuild, DiscordMessage, DiscordReaction, DiscordRelationship, DiscordUser,
   CHANNEL_TYPE_CATEGORY, CHANNEL_TYPE_DM, CHANNEL_TYPE_GROUP_DM, CHANNEL_TYPE_TEXT, CHANNEL_TYPE_VOICE,
   CHANNEL_TYPE_ANNOUNCEMENT, CHANNEL_TYPE_STAGE,
 } from "./types";
@@ -47,6 +47,36 @@ const EMOJI_SEARCH_TERMS: Record<string, string> = {
 };
 
 type ComposerAttachment = { uploadId: string; filename: string; size: number };
+type VoiceHandshake = {
+  attempt: number;
+  guildId: string | null;
+  serverId: string;
+  channelId: string;
+  sessionId?: string;
+  endpoint?: string;
+  token?: string;
+  connecting: boolean;
+};
+type AudioDevice = { id: string; name: string };
+type AudioDeviceList = { inputs: AudioDevice[]; outputs: AudioDevice[] };
+type GatewayVoiceState = {
+  guild_id?: string | null;
+  channel_id?: string | null;
+  user_id: string;
+  member?: { user?: DiscordUser; nick?: string };
+  user?: DiscordUser;
+  self_mute?: boolean;
+  self_deaf?: boolean;
+};
+
+function readVoiceDevicePreference(key: string) {
+  try {
+    return localStorage.getItem(key) || "";
+  } catch {
+    return "";
+  }
+}
+
 function isMessageChannel(c: DiscordChannel) {
   return isTextChannel(c) || c.type === CHANNEL_TYPE_DM || c.type === CHANNEL_TYPE_GROUP_DM;
 }
@@ -64,6 +94,9 @@ function channelDisplayName(c: DiscordChannel) {
 }
 function isVoiceChannel(c: DiscordChannel) {
   return c.type === CHANNEL_TYPE_VOICE || c.type === CHANNEL_TYPE_STAGE;
+}
+function isPrivateCallChannel(c: DiscordChannel) {
+  return c.type === CHANNEL_TYPE_DM || c.type === CHANNEL_TYPE_GROUP_DM;
 }
 
 function snowflakeTime(id?: string | null): string | null {
@@ -720,6 +753,7 @@ export default function App() {
   const [friendUsername, setFriendUsername] = useState("");
   const [relationshipBusy, setRelationshipBusy] = useState<string | null>(null);
   const [friendSearchError, setFriendSearchError] = useState("");
+
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
   const [unreadByChannel, setUnreadByChannel] = useState<Record<string, number>>(() => {
     try {
@@ -739,6 +773,7 @@ export default function App() {
   const [canSend, setCanSend] = useState(true);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [userProfile, setUserProfile] = useState<any>(null);
+
   const [selfPresence, setSelfPresence] = useState<{ status: string; customStatus: string }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("voidcord:presence") || "{}");
@@ -752,10 +787,13 @@ export default function App() {
   });
   
   const [guildMembers, setGuildMembers] = useState<any[]>([]);
+  const [gatewayVoiceStates, setGatewayVoiceStates] = useState<GatewayVoiceState[]>([]);
+  const [privateVoiceCalls, setPrivateVoiceCalls] = useState<Set<string>>(() => new Set());
   const [guildRoles, setGuildRoles] = useState<any[]>([]);
   const [memberPresences, setMemberPresences] = useState<Record<string, string>>({});
   const [memberPlatforms, setMemberPlatforms] = useState<Record<string, UserPlatform[]>>({});
   const [memberCustomStatuses, setMemberCustomStatuses] = useState<Record<string, string>>({});
+  
   
   const [selectedMemberProfile, setSelectedMemberProfile] = useState<any | null>(null);
   const [memberProfileData, setMemberProfileData] = useState<any | null>(null);
@@ -821,6 +859,15 @@ export default function App() {
   const [mentionSelection, setMentionSelection] = useState(0);
   const [micMuted, setMicMuted] = useState(false);
   const [deafened, setDeafened] = useState(false);
+  const [audioDevices, setAudioDevices] = useState<AudioDeviceList>({ inputs: [], outputs: [] });
+  const [audioDevicesLoading, setAudioDevicesLoading] = useState(false);
+  const [selectedInputDeviceId, setSelectedInputDeviceId] = useState(() => readVoiceDevicePreference("voidcord:voice-input"));
+  const [selectedOutputDeviceId, setSelectedOutputDeviceId] = useState(() => readVoiceDevicePreference("voidcord:voice-output"));
+  const [activeVoiceChannel, setActiveVoiceChannel] = useState<DiscordChannel | null>(null);
+  const [voiceStatus, setVoiceStatus] = useState<"disconnected" | "connecting" | "connected" | "failed">("disconnected");
+  const [voiceStatusMessage, setVoiceStatusMessage] = useState("");
+  const voiceHandshakeRef = useRef<VoiceHandshake | null>(null);
+  const voiceAttemptRef = useRef(0);
   const [query, setQuery] = useState("");
   const [online, setOnline] = useState(navigator.onLine);
   const [gatewayStatus, setGatewayStatus] = useState<"connecting" | "connected" | "reconnecting" | "offline">(
@@ -829,7 +876,6 @@ export default function App() {
   const [toast, setToast] = useState<NoticeState | null>(null);
   const [systemNotice, setSystemNotice] = useState<NoticeState | null>(null);
   const notificationSequence = useRef(0);
-  const guildMemberUpdateQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [sending, setSending] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -845,11 +891,22 @@ export default function App() {
   const olderMessagesLoadingRef = useRef(false);
   const hasOlderMessagesRef = useRef(false);
   const messageHistoryRef = useRef<Record<string, DiscordMessage[]>>({});
+  const reactionRequestsRef = useRef(new Set<string>());
   const messageArchivePromisesRef = useRef<Map<string, Promise<void>>>(new Map());
   const guildRoleDataRef = useRef<any[]>([]);
+  const guildMembersRef = useRef<any[]>([]);
+  const pendingGuildDataRef = useRef<Map<string, {
+    channels: DiscordChannel[];
+    roles: any[];
+    memberRoles: string[];
+    guildMembers: any[];
+  }>>(new Map());
+  const pendingGuildDataTimerRef = useRef<number | null>(null);
   const currentGuildMemberRolesRef = useRef<string[]>([]);
   const selectedGuildRef = useRef<DiscordGuild | null>(null);
   const mediaViewerRef = useRef<HTMLDivElement>(null);
+  guildMembersRef.current = guildMembers;
+  
 
   const invoke = useCallback(async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
     const execute = async (name: string, payload?: Record<string, unknown>): Promise<T> => {
@@ -902,6 +959,190 @@ export default function App() {
   const notifySystem = useCallback((msg: string, ms = 4200) => {
     setSystemNotice({ id: ++notificationSequence.current, message: msg, duration: ms, exiting: false });
   }, []);
+
+  const refreshAudioDevices = useCallback(async () => {
+    setAudioDevicesLoading(true);
+    try {
+      setAudioDevices(await tauriInvoke<AudioDeviceList>("list_audio_devices"));
+    } catch (error) {
+      notify(`Could not list audio devices: ${error}`);
+    } finally {
+      setAudioDevicesLoading(false);
+    }
+  }, [notify]);
+
+  useEffect(() => {
+    void refreshAudioDevices();
+  }, [refreshAudioDevices]);
+
+  const connectVoiceFromGateway = useCallback(async () => {
+    const handshake = voiceHandshakeRef.current;
+    if (
+      !me?.id
+      || !handshake
+      || handshake.connecting
+      || !handshake.sessionId
+      || !handshake.endpoint
+      || !handshake.token
+    ) return;
+
+    handshake.connecting = true;
+    setVoiceStatus("connecting");
+    setVoiceStatusMessage("Negotiating encrypted voice transport…");
+    try {
+      await invoke("connect_voice", {
+        serverId: handshake.serverId,
+        channelId: handshake.channelId,
+        userId: me.id,
+        endpoint: handshake.endpoint,
+        sessionId: handshake.sessionId,
+        token: handshake.token,
+        inputDeviceId: selectedInputDeviceId || null,
+        outputDeviceId: selectedOutputDeviceId || null,
+      });
+    } catch (error) {
+      if (voiceHandshakeRef.current?.attempt !== handshake.attempt) return;
+      handshake.connecting = false;
+      setVoiceStatus("failed");
+      setVoiceStatusMessage(String(error));
+      notify(`Voice connection failed: ${error}`);
+    }
+  }, [invoke, me?.id, notify, selectedInputDeviceId, selectedOutputDeviceId]);
+
+  const updateVoiceDeviceSelection = (
+    direction: "input" | "output",
+    deviceId: string,
+  ) => {
+    const storageKey = direction === "input" ? "voidcord:voice-input" : "voidcord:voice-output";
+    try {
+      if (deviceId) localStorage.setItem(storageKey, deviceId);
+      else localStorage.removeItem(storageKey);
+    } catch (error) {
+      notify(`Could not save audio device preference: ${error}`);
+    }
+    if (direction === "input") setSelectedInputDeviceId(deviceId);
+    else setSelectedOutputDeviceId(deviceId);
+  };
+
+  const requestVoiceConnection = async (channel: DiscordChannel, guildId: string | null) => {
+    if (!me?.id) {
+      notify("An account is required to join voice");
+      return;
+    }
+    const attempt = ++voiceAttemptRef.current;
+    const serverId = guildId || channel.id;
+    voiceHandshakeRef.current = {
+      attempt,
+      guildId,
+      serverId,
+      channelId: channel.id,
+      connecting: false,
+    };
+    setActiveVoiceChannel(channel);
+    setVoiceStatus("connecting");
+    setVoiceStatusMessage(`Joining ${channelDisplayName(channel)}…`);
+    setSelectedChannel(channel);
+    selectedChannelRef.current = channel;
+
+    try {
+      await invoke("disconnect_voice");
+      if (voiceHandshakeRef.current?.attempt !== attempt) return;
+      await invoke("set_voice_state", {
+        guildId,
+        channelId: channel.id,
+        selfMute: micMuted,
+        selfDeaf: deafened,
+      });
+    } catch (error) {
+      if (voiceHandshakeRef.current?.attempt !== attempt) return;
+      voiceHandshakeRef.current = null;
+      setVoiceStatus("failed");
+      setVoiceStatusMessage(String(error));
+      notify(`Could not join voice channel: ${error}`);
+    }
+  };
+
+  const joinVoiceChannel = async (channel: DiscordChannel) => {
+    if (!channel.guild_id) {
+      notify("This voice channel is missing its guild ID");
+      return;
+    }
+    await requestVoiceConnection(channel, channel.guild_id);
+  };
+
+  const joinPrivateCall = async (channel: DiscordChannel) => {
+    if (!isPrivateCallChannel(channel)) return;
+    await requestVoiceConnection(channel, null);
+  };
+
+  const leaveVoiceChannel = async () => {
+    const handshake = voiceHandshakeRef.current;
+    voiceHandshakeRef.current = null;
+    ++voiceAttemptRef.current;
+    try {
+      if (handshake) {
+        await invoke("set_voice_state", {
+          guildId: handshake.guildId,
+          channelId: null,
+          selfMute: false,
+          selfDeaf: false,
+        });
+      } else {
+        await invoke("disconnect_voice");
+      }
+      setMicMuted(false);
+      setDeafened(false);
+      setVoiceStatus("disconnected");
+      setVoiceStatusMessage("Disconnected from voice");
+      setActiveVoiceChannel(null);
+    } catch (error) {
+      notify(`Could not leave voice cleanly: ${error}`);
+    }
+  };
+
+  const updateVoiceControls = async (nextMuted: boolean, nextDeafened: boolean) => {
+    const channel = activeVoiceChannel;
+    const handshake = voiceHandshakeRef.current;
+    if (channel && handshake && voiceStatus !== "disconnected") {
+      try {
+        await invoke("set_voice_state", {
+          guildId: handshake.guildId,
+          channelId: channel.id,
+          selfMute: nextMuted,
+          selfDeaf: nextDeafened,
+        });
+      } catch (error) {
+        notify(`Could not update voice controls: ${error}`);
+        return;
+      }
+    }
+    setMicMuted(nextMuted);
+    setDeafened(nextDeafened);
+  };
+
+  const changeVoiceChannelStatus = async (channel: DiscordChannel) => {
+    const status = window.prompt(
+      "Set a short status for this voice channel (up to 500 characters). Leave blank to clear it.",
+      channel.status || "",
+    );
+    if (status === null) return;
+    if (status.length > 500) {
+      notify("Voice channel status cannot exceed 500 characters");
+      return;
+    }
+    try {
+      await invoke("set_voice_channel_status", { channelId: channel.id, status });
+      setChannels(previous => previous.map(item =>
+        item.id === channel.id ? { ...item, status: status || null } : item
+      ));
+      setSelectedChannel(previous =>
+        previous?.id === channel.id ? { ...previous, status: status || null } : previous
+      );
+      notify(status ? "Voice channel status updated" : "Voice channel status cleared");
+    } catch (error) {
+      notify(`Could not update voice channel status: ${error}`);
+    }
+  };
 
   useEffect(() => {
     if (!toast) return;
@@ -1403,7 +1644,20 @@ export default function App() {
   }, [me?.id, online, accountSessionVersion]);
 
   useEffect(() => {
-    const unsubs: UnlistenFn[] = [];
+    let subscriptionsDisposed = false;
+    const unsubs = {
+      registered: [] as UnlistenFn[],
+      push(unsubscribe: UnlistenFn) {
+        if (subscriptionsDisposed) {
+          unsubscribe();
+          return this.registered.length;
+        }
+        return this.registered.push(unsubscribe);
+      },
+      forEach(callback: (unsubscribe: UnlistenFn) => void) {
+        this.registered.forEach(callback);
+      },
+    };
 
     listen<{ level: string; target: string; message: string }>(
       "voidcord:rust-log",
@@ -1422,6 +1676,116 @@ export default function App() {
         setGatewayStatus(navigator.onLine ? payload.status : "offline");
         if (payload.status === "connected") notifySystem("Connected to Discord");
         else if (payload.status === "reconnecting") notifySystem("Reconnecting to Discord");
+      },
+    ).then(unsub => unsubs.push(unsub));
+
+    listen<any>("discord:voice_state_update", ({ payload }) => {
+      if (typeof payload?.user_id === "string") {
+        const guildId = payload.guild_id == null ? null : String(payload.guild_id);
+        const channelId = payload.channel_id == null ? null : String(payload.channel_id);
+        setGatewayVoiceStates(previous => {
+          const remaining = previous.filter(state =>
+            !(state.user_id === payload.user_id && (state.guild_id ?? null) === guildId)
+          );
+          if (!channelId) return remaining;
+          return [...remaining, { ...payload, guild_id: guildId, channel_id: channelId }].slice(-2048);
+        });
+      }
+      const handshake = voiceHandshakeRef.current;
+      const eventGuildId = payload?.guild_id == null ? null : String(payload.guild_id);
+      if (
+        !handshake
+        || payload?.user_id !== me?.id
+        || eventGuildId !== handshake.guildId
+        || String(payload?.channel_id || "") !== handshake.channelId
+      ) return;
+      if (typeof payload.session_id === "string" && payload.session_id) {
+        handshake.sessionId = payload.session_id;
+        void connectVoiceFromGateway();
+      }
+    }).then(unsub => unsubs.push(unsub));
+
+    listen<any>("discord:voice_server_update", ({ payload }) => {
+      const handshake = voiceHandshakeRef.current;
+      const eventGuildId = payload?.guild_id == null ? null : String(payload.guild_id);
+      const eventChannelId = payload?.channel_id == null ? null : String(payload.channel_id);
+      if (
+        !handshake
+        || eventGuildId !== handshake.guildId
+        || (handshake.guildId === null && eventChannelId !== handshake.channelId)
+      ) return;
+      if (
+        typeof payload.endpoint === "string"
+        && payload.endpoint
+        && typeof payload.token === "string"
+        && payload.token
+      ) {
+        handshake.endpoint = payload.endpoint;
+        handshake.token = payload.token;
+        void connectVoiceFromGateway();
+      }
+    }).then(unsub => unsubs.push(unsub));
+
+    const onPrivateCall = ({ payload }: { payload: any }) => {
+      const channelId = typeof payload?.channel_id === "string" ? payload.channel_id : "";
+      if (!channelId) return;
+      setPrivateVoiceCalls(previous => new Set(previous).add(channelId));
+      if (Array.isArray(payload.voice_states)) {
+        setGatewayVoiceStates(previous => {
+          const states = (payload.voice_states as GatewayVoiceState[])
+            .filter(state => typeof state?.user_id === "string")
+            .map(state => ({
+              ...state,
+              guild_id: null,
+              channel_id: channelId,
+            }));
+          const participants = new Set(states.map(state => state.user_id));
+          return [
+            ...previous.filter(state =>
+              state.guild_id != null
+              || state.channel_id !== channelId
+              || !participants.has(state.user_id)
+            ),
+            ...states,
+          ].slice(-2048);
+        });
+      }
+    };
+    listen<any>("discord:call_create", onPrivateCall).then(unsub => unsubs.push(unsub));
+    listen<any>("discord:call_update", onPrivateCall).then(unsub => unsubs.push(unsub));
+    listen<any>("discord:call_delete", ({ payload }) => {
+      const channelId = typeof payload?.channel_id === "string" ? payload.channel_id : "";
+      if (channelId) {
+        setPrivateVoiceCalls(previous => {
+          const next = new Set(previous);
+          next.delete(channelId);
+          return next;
+        });
+        setGatewayVoiceStates(previous => previous.filter(state =>
+          state.guild_id != null || state.channel_id !== channelId
+        ));
+      }
+    }).then(unsub => unsubs.push(unsub));
+
+    listen<any>("discord:voice_channel_status_update", ({ payload }) => {
+      const channelId = String(payload?.channel_id || payload?.id || "");
+      if (!channelId) return;
+      const status = typeof payload?.status === "string" ? payload.status : "";
+      setChannels(previous => previous.map(channel =>
+        channel.id === channelId ? { ...channel, status: status || null } : channel
+      ));
+      setSelectedChannel(previous =>
+        previous?.id === channelId ? { ...previous, status: status || null } : previous
+      );
+    }).then(unsub => unsubs.push(unsub));
+
+    listen<{ status: "connecting" | "connected" | "failed" | "disconnected"; message?: string }>(
+      "discord:voice_status",
+      ({ payload }) => {
+        if (payload.status === "disconnected" && voiceHandshakeRef.current) return;
+        setVoiceStatus(payload.status);
+        if (payload.message) setVoiceStatusMessage(payload.message);
+        if (payload.status === "failed" && payload.message) notify(payload.message);
       },
     ).then(unsub => unsubs.push(unsub));
 
@@ -1647,50 +2011,45 @@ export default function App() {
     }).then(u => unsubs.push(u));
 
     const mergeGatewayMembers = (guildId: string, incoming: any[], removedIds: string[] = []) => {
-      const update = guildMemberUpdateQueueRef.current.then(async () => {
-        if (guildId !== selectedGuildRef.current?.id) return;
-        const cached = await readCachedAppData<{
-          channels?: DiscordChannel[];
-          roles?: any[];
-          memberRoles?: string[];
-          guildMembers?: any[];
-        }>(`guild-data:${guildId}`).catch(error => {
-          console.warn("Could not read cached guild members before applying gateway updates", error);
-          return undefined;
-        });
-        // Ignore cache reads that finish after the user switches servers.
-        if (guildId !== selectedGuildRef.current?.id) return;
-        const removed = new Set(removedIds);
-        const byId = new Map<string, any>();
-        for (const member of cached?.guildMembers || guildMembers) {
-          const id = member?.user?.id || member?.id;
-          if (id && !removed.has(id)) byId.set(id, member);
+      if (guildId !== selectedGuildRef.current?.id) return;
+      const removed = new Set(removedIds);
+      const byId = new Map<string, any>();
+      for (const member of guildMembersRef.current) {
+        const id = member?.user?.id || member?.id;
+        if (id && !removed.has(id)) byId.set(id, member);
+      }
+      for (const member of incoming) {
+        const id = member?.user?.id || member?.id;
+        if (id && !removed.has(id)) {
+          const existing = byId.get(id);
+          byId.set(id, {
+            ...existing,
+            ...member,
+            user: { ...existing?.user, ...member.user },
+            roles: member.roles ?? existing?.roles,
+          });
         }
-        for (const member of incoming) {
-          const id = member?.user?.id || member?.id;
-          if (id && !removed.has(id)) {
-            const existing = byId.get(id);
-            byId.set(id, {
-              ...existing,
-              ...member,
-              user: { ...existing?.user, ...member.user },
-              roles: member.roles ?? existing?.roles,
-            });
+      }
+      const merged = [...byId.values()];
+      guildMembersRef.current = merged;
+      setGuildMembers(merged);
+      pendingGuildDataRef.current.set(guildId, {
+        channels,
+        roles: guildRoles,
+        memberRoles: currentGuildMemberRolesRef.current,
+        guildMembers: merged,
+      });
+      if (pendingGuildDataTimerRef.current === null) {
+        pendingGuildDataTimerRef.current = window.setTimeout(() => {
+          pendingGuildDataTimerRef.current = null;
+          const pending = [...pendingGuildDataRef.current.entries()];
+          pendingGuildDataRef.current.clear();
+          for (const [pendingGuildId, data] of pending) {
+            void writeCachedAppData(`guild-data:${pendingGuildId}`, data)
+              .catch(error => console.warn("Could not cache gateway guild members", error));
           }
-        }
-        const merged = [...byId.values()];
-        setGuildMembers(merged);
-        await writeCachedAppData(`guild-data:${guildId}`, {
-          channels: cached?.channels || channels,
-          roles: cached?.roles || guildRoles,
-          memberRoles: cached?.memberRoles || currentGuildMemberRolesRef.current,
-          guildMembers: merged,
-        }).catch(error => console.warn("Could not cache gateway guild members", error));
-      });
-      guildMemberUpdateQueueRef.current = update.catch(error => {
-        console.warn("Could not apply gateway guild member update", error);
-      });
-      return update;
+        }, 250);
+      }
     };
 
     listen<any>("discord:guild_member_list_update", ({ payload }) => {
@@ -1705,6 +2064,15 @@ export default function App() {
     listen<any>("discord:guild_create", ({ payload }) => {
       if (Array.isArray(payload?.members)) {
         void mergeGatewayMembers(payload.id || "", payload.members);
+      }
+      if (Array.isArray(payload?.voice_states)) {
+        const guildId = String(payload.id || "");
+        setGatewayVoiceStates(previous => [
+          ...previous.filter(state => state.guild_id !== guildId),
+          ...payload.voice_states
+            .filter((state: any) => state?.user_id && state?.channel_id)
+            .map((state: any) => ({ ...state, guild_id: guildId })),
+        ].slice(-2048));
       }
     }).then(u => unsubs.push(u));
 
@@ -1721,8 +2089,12 @@ export default function App() {
       if (userId) void mergeGatewayMembers(payload.guild_id || "", [], [userId]);
     }).then(u => unsubs.push(u));
 
-    return () => { unsubs.forEach(u => u()); };
-  }, [selectedChannel?.id, scrollToBottom, me?.id, dmChannels, channels, guildRoles, guildMembers, selectedChannel, selectedGuild, guilds, isDmView, activeDmTab, archiveMessageMedia, messageLoggerOpen, messageLoggerMode, deletedChannelViewerOpen, notify, notifySystem]);
+    return () => {
+      subscriptionsDisposed = true;
+      unsubs.forEach(unsubscribe => unsubscribe());
+      unsubs.registered.length = 0;
+    };
+  }, [selectedChannel?.id, scrollToBottom, me?.id, dmChannels, channels, guildRoles, selectedChannel, selectedGuild, guilds, isDmView, activeDmTab, archiveMessageMedia, messageLoggerOpen, messageLoggerMode, deletedChannelViewerOpen, notify, notifySystem, connectVoiceFromGateway]);
 
   const selectGuild = async (guild: DiscordGuild, preferredChannelId?: string) => {
     if (!guild?.id || typeof guild.name !== "string") {
@@ -1742,6 +2114,7 @@ export default function App() {
     setMsgLoading(false);
     setChannels([]);
     setGuildMembers([]);
+    guildMembersRef.current = [];
     setGuildRoles([]);
     setMemberPresences({});
     setMemberPlatforms({});
@@ -1765,6 +2138,7 @@ export default function App() {
       cachedMembers = cachedMembers.filter(member => member?.user?.id || member?.id);
       setChannels(cachedChannels);
       setGuildMembers(cachedMembers);
+      guildMembersRef.current = cachedMembers;
       setGuildRoles(roles);
       guildRoleDataRef.current = roles;
       currentGuildMemberRolesRef.current = memberRoles;
@@ -1850,6 +2224,27 @@ export default function App() {
     return guildMembers;
   }, [isDmView, selectedChannel, guildMembers]);
 
+  const voiceParticipants = useMemo(() => {
+    if (!selectedChannel || (!isVoiceChannel(selectedChannel) && !isPrivateCallChannel(selectedChannel))) return [];
+    const users = new Map<string, { state: GatewayVoiceState; user: DiscordUser | undefined }>();
+    for (const state of gatewayVoiceStates) {
+      if (state.channel_id !== selectedChannel.id) continue;
+      const userId = state.user_id;
+      const guildMember = guildMembers.find(member => (member?.user?.id || member?.id) === userId);
+      const user = state.member?.user
+        || state.user
+        || guildMember?.user
+        || selectedChannel.recipients?.find(recipient => recipient.id === userId)
+        || (userId === me?.id ? me : undefined);
+      users.set(userId, { state, user });
+    }
+    return [...users.values()].sort((a, b) =>
+      Number(a.state.self_mute || a.state.self_deaf) - Number(b.state.self_mute || b.state.self_deaf)
+      || (a.state.member?.nick || a.user?.global_name || a.user?.username || "")
+        .localeCompare(b.state.member?.nick || b.user?.global_name || b.user?.username || "")
+    );
+  }, [gatewayVoiceStates, guildMembers, me, selectedChannel]);
+
   const memberRoleGroups = useMemo(() => {
     if (isDmView) {
       return activeMembers.length ? [{ id: "group-members", name: "GROUP MEMBERS", position: 0, members: activeMembers }] : [];
@@ -1917,7 +2312,11 @@ export default function App() {
   }, [channels, dmChannels, forwardTarget?.channel.id, guilds, me?.id, selectedChannel?.id]);
 
   const selectChannel = async (channel: DiscordChannel) => {
-    if (!isMessageChannel(channel)) return;
+    if (isVoiceChannel(channel) && voiceHandshakeRef.current?.channelId !== channel.id) {
+      void joinVoiceChannel(channel);
+    } else if (!isMessageChannel(channel) && !isVoiceChannel(channel)) {
+      return;
+    }
     try {
       localStorage.setItem("voidcord:last-read-channel", JSON.stringify({
         channelId: channel.id,
@@ -2484,6 +2883,69 @@ export default function App() {
     }
   };
 
+  const toggleMessageReaction = async (
+    channelId: string,
+    message: DiscordMessage,
+    emoji: string,
+  ) => {
+    const requestKey = `${channelId}:${message.id}:${emoji}`;
+    if (reactionRequestsRef.current.has(requestKey)) return;
+    reactionRequestsRef.current.add(requestKey);
+    const matchesEmoji = (reaction: DiscordReaction) => {
+      const existingEmoji = reaction.emoji;
+      if (!existingEmoji) return false;
+      const value = existingEmoji.id
+        ? `${existingEmoji.name || ""}:${existingEmoji.id}`
+        : existingEmoji.name || "";
+      return value === emoji;
+    };
+    const existing = message.reactions?.find(matchesEmoji);
+    const remove = existing?.me === true;
+
+    try {
+      await invoke("react_to_message", {
+        channelId,
+        messageId: message.id,
+        emoji,
+        remove,
+      });
+      const currentHistory = messageHistoryRef.current[channelId] || [];
+      const currentMessage = currentHistory.find(item => item.id === message.id) || message;
+      const reactions = [...(currentMessage.reactions || [])];
+      const index = reactions.findIndex(matchesEmoji);
+      if (index >= 0) {
+        const reaction = reactions[index];
+        const count = Math.max(0, reaction.count + (remove ? -1 : 1));
+        if (count === 0) reactions.splice(index, 1);
+        else reactions[index] = { ...reaction, count, me: !remove };
+      } else if (!remove) {
+        const [name, id] = emoji.split(":");
+        reactions.push({
+          count: 1,
+          me: true,
+          emoji: id ? { id, name } : { id: null, name: emoji },
+        });
+      }
+      const updatedMessage = { ...currentMessage, reactions };
+      messageHistoryRef.current[channelId] = currentHistory.some(item => item.id === message.id)
+        ? currentHistory.map(item => item.id === message.id ? updatedMessage : item)
+        : [...currentHistory, updatedMessage].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+      if (selectedChannelRef.current?.id === channelId) {
+        setMessages(previous => previous.map(item =>
+          item.id === message.id ? updatedMessage : item
+        ));
+      }
+      void writeCachedMessages(channelId, [updatedMessage])
+        .catch(error => notify(`Could not cache message reaction: ${error}`));
+    } catch (error) {
+      notify(`Could not update reaction: ${error}`);
+    } finally {
+      reactionRequestsRef.current.delete(requestKey);
+    }
+  };
+
   const uploadLimitLabel = `${Math.floor(accountUploadLimitBytes / (1024 * 1024))} MiB`;
 
   const chooseComposerFiles = async () => {
@@ -3035,6 +3497,14 @@ export default function App() {
   }, [guilds, preferences.serverOrder]);
   const officialDiscordDm = !!selectedChannel && !selectedChannel.guild_id &&
     !!selectedChannel.recipients?.some(user => user?.bot && user.username?.toLowerCase() === "discord");
+  const selectedVoiceChannel = selectedChannel && (
+    isVoiceChannel(selectedChannel)
+    || (isPrivateCallChannel(selectedChannel) && (
+      privateVoiceCalls.has(selectedChannel.id)
+      || activeVoiceChannel?.id === selectedChannel.id
+      || gatewayVoiceStates.some(state => state.guild_id == null && state.channel_id === selectedChannel.id)
+    ))
+  ) ? selectedChannel : null;
 
   const beginSidebarResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -3229,6 +3699,7 @@ export default function App() {
                   const recipient = dm.recipients?.[0];
                   const name = dm.name || (recipient ? displayName(recipient) : "Direct Message");
                   const isSelected = selectedChannel?.id === dm.id;
+                  const recipientStatus = recipient ? (memberPresences[recipient.id] || "offline") : "offline";
 
                   return (
                     <button key={dm.id} className={`dm-channel-row ${isSelected ? "selected" : ""}`} onContextMenu={event => openContextMenu(event, { kind: "channel", channel: dm })} onClick={() => {
@@ -3238,11 +3709,17 @@ export default function App() {
                       <div className="dm-avatar-wrap">
                         {recipient ? <img src={avatarUrl(recipient, 32)} alt={name} className="dm-avatar" /> : <div className="dm-avatar-fallback">@</div>}
                         {recipient && <AvatarDecorationOverlay user={recipient} />}
-                        <span className="dm-status-dot status-online" />
+                        <span className="dm-status-dot status-online" /> {/* Lưu ý: Chỗ này có thể bản này vẫn giữ hoặc bạn đang muốn check xem nó hoạt động chưa */}
                       </div>
                       <div className="dm-channel-info">
                         <strong className="dm-name">{name}</strong>
-                        <span className="dm-activity">{unreadByChannel[dm.id] ? `${unreadByChannel[dm.id]} unread` : "Active now"}</span>
+                        <span className="dm-activity">
+                          {unreadByChannel[dm.id] 
+                            ? `${unreadByChannel[dm.id]} unread` 
+                            : recipientStatus !== "offline" 
+                              ? `Active now (${recipientStatus})` 
+                              : "Offline"}
+                        </span>
                       </div>
                       {!!unreadByChannel[dm.id] && <span className="channel-unread-count">{unreadByChannel[dm.id] > 99 ? "99+" : unreadByChannel[dm.id]}</span>}
                     </button>
@@ -3259,7 +3736,19 @@ export default function App() {
 
               <div className="sidebar-scroll">
                 {channelTree.uncategorized.map(c => (
-                  <ChannelRow key={c.id} channel={c} selected={selectedChannel?.id === c.id} locked={knownLockedChannels.has(c.id)} unread={unreadByChannel[c.id] || 0} onClick={() => selectChannel(c)} onContextMenu={event => openContextMenu(event, { kind: "channel", channel: c })} />
+                  <React.Fragment key={c.id}>
+                    <ChannelRow channel={c} selected={selectedChannel?.id === c.id} locked={knownLockedChannels.has(c.id)} unread={unreadByChannel[c.id] || 0} onClick={() => selectChannel(c)} onContextMenu={event => openContextMenu(event, { kind: "channel", channel: c })} />
+                    {isVoiceChannel(c) && gatewayVoiceStates.filter(state => state.channel_id === c.id).map(state => {
+                      const member = guildMembers.find(item => (item?.user?.id || item?.id) === state.user_id);
+                      const user = state.member?.user || state.user || member?.user || (state.user_id === me.id ? me : undefined);
+                      if (!user) return null;
+                      return <button key={`${c.id}:${state.user_id}`} type="button" className="sidebar-voice-member" onClick={() => void handleOpenMemberProfile(user)}>
+                        <img src={avatarUrl(user, 24)} alt="" />
+                        <span>{state.member?.nick || displayName(user)}</span>
+                        {(state.self_mute || state.self_deaf) && <Mic size={12} className="voice-member-muted" />}
+                      </button>;
+                    })}
+                  </React.Fragment>
                 ))}
 
                 {channelTree.categories.map(({ category, children }) => {
@@ -3271,7 +3760,19 @@ export default function App() {
                         {category.name?.toUpperCase()}
                       </button>
                       {!collapsed && children.map(c => (
-                        <ChannelRow key={c.id} channel={c} selected={selectedChannel?.id === c.id} locked={knownLockedChannels.has(c.id)} unread={unreadByChannel[c.id] || 0} onClick={() => selectChannel(c)} onContextMenu={event => openContextMenu(event, { kind: "channel", channel: c })} />
+                        <React.Fragment key={c.id}>
+                          <ChannelRow channel={c} selected={selectedChannel?.id === c.id} locked={knownLockedChannels.has(c.id)} unread={unreadByChannel[c.id] || 0} onClick={() => selectChannel(c)} onContextMenu={event => openContextMenu(event, { kind: "channel", channel: c })} />
+                          {isVoiceChannel(c) && gatewayVoiceStates.filter(state => state.channel_id === c.id).map(state => {
+                            const member = guildMembers.find(item => (item?.user?.id || item?.id) === state.user_id);
+                            const user = state.member?.user || state.user || member?.user || (state.user_id === me.id ? me : undefined);
+                            if (!user) return null;
+                            return <button key={`${c.id}:${state.user_id}`} type="button" className="sidebar-voice-member" onClick={() => void handleOpenMemberProfile(user)}>
+                              <img src={avatarUrl(user, 24)} alt="" />
+                              <span>{state.member?.nick || displayName(user)}</span>
+                              {(state.self_mute || state.self_deaf) && <Mic size={12} className="voice-member-muted" />}
+                            </button>;
+                          })}
+                        </React.Fragment>
                       ))}
                     </div>
                   );
@@ -3295,8 +3796,8 @@ export default function App() {
             </button>
 
             <div className="user-bar-controls">
-              <button className={`user-bar-btn ${micMuted ? "muted" : ""}`} title={micMuted ? "Unmute" : "Mute"} onClick={() => setMicMuted(m => !m)}><Mic size={15} /></button>
-              <button className={`user-bar-btn ${deafened ? "deafened" : ""}`} title={deafened ? "Undeafen" : "Deafen"} onClick={() => setDeafened(d => !d)}><Headphones size={15} /></button>
+              <button className={`user-bar-btn ${micMuted ? "muted" : ""}`} title={micMuted ? "Unmute" : "Mute"} onClick={() => void updateVoiceControls(!micMuted, deafened)}><Mic size={15} /></button>
+              <button className={`user-bar-btn ${deafened ? "deafened" : ""}`} title={deafened ? "Undeafen" : "Deafen"} onClick={() => void updateVoiceControls(micMuted, !deafened)}><Headphones size={15} /></button>
               <button className="user-bar-btn" title="Settings" onClick={() => setProtoSettingsOpen(true)}><Settings size={15} /></button>
             </div>
           </div>
@@ -3643,6 +4144,19 @@ export default function App() {
               )}
             </div>
             <div className="header-right">
+              {selectedChannel && isPrivateCallChannel(selectedChannel) && (
+                <button
+                  className={`icon-btn ${privateVoiceCalls.has(selectedChannel.id) ? "active" : ""}`}
+                  title={privateVoiceCalls.has(selectedChannel.id) ? "Join voice call" : "Start voice call"}
+                  aria-label={privateVoiceCalls.has(selectedChannel.id) ? "Join voice call" : "Start voice call"}
+                  disabled={voiceStatus === "connecting" || (
+                    voiceStatus === "connected" && activeVoiceChannel?.id === selectedChannel.id
+                  )}
+                  onClick={() => void joinPrivateCall(selectedChannel)}
+                >
+                  <Volume2 size={18} />
+                </button>
+              )}
               <button className="icon-btn" title="Pins"><Pin size={18} /></button>
               <button className={`icon-btn ${memberOpen ? "active" : ""}`} title="Member list" onClick={() => setMemberOpen(v => !v)}><Sparkles size={18} /></button>
               <button className="icon-btn" title="Deleted message log" aria-label="Deleted message log" onClick={() => void openMessageLogger()}><History size={18} /></button>
@@ -3657,9 +4171,128 @@ export default function App() {
             </div>
           </div>
 
-          <div className="message-scroll" ref={listRef} onScroll={event => {
+          <div className={`message-scroll ${selectedVoiceChannel ? "voice-channel-scroll" : ""}`} ref={listRef} onScroll={event => {
             if (event.currentTarget.scrollTop <= 72) void loadOlderMessages();
           }}>
+            {selectedVoiceChannel && (
+              <section className="voice-stage-panel" aria-live="polite">
+                <div className="voice-stage-icon"><Volume2 size={30} /></div>
+                <h2>{channelDisplayName(selectedVoiceChannel)}</h2>
+                {selectedVoiceChannel.status && (
+                  <div className="voice-channel-status">{selectedVoiceChannel.status}</div>
+                )}
+                {selectedVoiceChannel.guild_id && (
+                  <button
+                    type="button"
+                    className="voice-channel-status-edit"
+                    onClick={() => void changeVoiceChannelStatus(selectedVoiceChannel)}
+                  >
+                    <Edit3 size={13} /> {selectedVoiceChannel.status ? "Change channel status" : "Set channel status"}
+                  </button>
+                )}
+                <p className={`voice-stage-status voice-stage-${activeVoiceChannel?.id === selectedVoiceChannel.id ? voiceStatus : "disconnected"}`}>
+                  {activeVoiceChannel?.id === selectedVoiceChannel.id
+                    ? voiceStatusMessage || "Connecting…"
+                    : voiceParticipants.length ? "Call active" : "Not connected"}
+                </p>
+                <div className="voice-participant-grid">
+                  {voiceParticipants.map(({ state, user }) => (
+                    <button
+                      type="button"
+                      className="voice-participant-card"
+                      key={`${selectedVoiceChannel.id}:${state.user_id}`}
+                      onClick={() => user && void handleOpenMemberProfile(user)}
+                    >
+                      {user
+                        ? <span className="voice-participant-avatar"><img src={avatarUrl(user, 96)} alt="" /><AvatarDecorationOverlay user={user} /></span>
+                        : <span className="voice-participant-avatar voice-participant-fallback"><Users size={26} /></span>}
+                      <strong>{state.member?.nick || (user ? displayName(user) : "Connecting…")}</strong>
+                      <small>{state.self_mute || state.self_deaf ? "Muted" : "In voice"}</small>
+                    </button>
+                  ))}
+                  {voiceParticipants.length === 0 && (
+                    <div className="voice-participant-empty">
+                      {activeVoiceChannel?.id === selectedVoiceChannel.id && voiceStatus === "connected"
+                        ? "You're connected. Waiting for others to join…"
+                        : "No one is in this voice channel yet."}
+                    </div>
+                  )}
+                </div>
+                <div className="voice-device-selectors">
+                  <label>
+                    <span>Microphone</span>
+                    <select
+                      value={selectedInputDeviceId}
+                      onChange={event => updateVoiceDeviceSelection("input", event.target.value)}
+                    >
+                      <option value="">System default</option>
+                      {selectedInputDeviceId && !audioDevices.inputs.some(device => device.id === selectedInputDeviceId) && (
+                        <option value={selectedInputDeviceId} disabled>Previously selected device unavailable</option>
+                      )}
+                      {audioDevices.inputs.map(device => (
+                        <option key={device.id} value={device.id}>{device.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Speakers</span>
+                    <select
+                      value={selectedOutputDeviceId}
+                      onChange={event => updateVoiceDeviceSelection("output", event.target.value)}
+                    >
+                      <option value="">System default</option>
+                      {selectedOutputDeviceId && !audioDevices.outputs.some(device => device.id === selectedOutputDeviceId) && (
+                        <option value={selectedOutputDeviceId} disabled>Previously selected device unavailable</option>
+                      )}
+                      {audioDevices.outputs.map(device => (
+                        <option key={device.id} value={device.id}>{device.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="voice-device-refresh"
+                    title="Refresh audio devices"
+                    aria-label="Refresh audio devices"
+                    disabled={audioDevicesLoading}
+                    onClick={() => void refreshAudioDevices()}
+                  >
+                    <RotateCcw size={14} className={audioDevicesLoading ? "spinning" : ""} />
+                  </button>
+                </div>
+                <p className="voice-device-hint">Device changes apply the next time you join voice.</p>
+                {voiceStatus === "connected" && activeVoiceChannel?.id === selectedVoiceChannel.id ? (
+                  <button type="button" className="voice-stage-leave" onClick={() => void leaveVoiceChannel()}>
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="voice-stage-join"
+                    disabled={voiceStatus === "connecting" && voiceHandshakeRef.current?.channelId === selectedVoiceChannel.id}
+                    onClick={() => void (
+                      isVoiceChannel(selectedVoiceChannel)
+                        ? joinVoiceChannel(selectedVoiceChannel)
+                        : joinPrivateCall(selectedVoiceChannel)
+                    )}
+                  >
+                    {voiceStatus === "connecting" && voiceHandshakeRef.current?.channelId === selectedVoiceChannel.id
+                      ? <><Loader2 size={15} className="spinning" /> Connecting…</>
+                      : isVoiceChannel(selectedVoiceChannel) ? "Join voice" : "Join call"}
+                  </button>
+                )}
+                {voiceStatus === "connected" && activeVoiceChannel?.id === selectedVoiceChannel.id && (
+                  <div className="voice-stage-controls">
+                    <button type="button" className={micMuted ? "active" : ""} onClick={() => void updateVoiceControls(!micMuted, deafened)}>
+                      <Mic size={16} /> {micMuted ? "Unmute" : "Mute"}
+                    </button>
+                    <button type="button" className={deafened ? "active" : ""} onClick={() => void updateVoiceControls(micMuted, !deafened)}>
+                      <Headphones size={16} /> {deafened ? "Undeafen" : "Deafen"}
+                    </button>
+                  </div>
+                )}
+              </section>
+            )}
             {olderMessagesLoading && (
               <div className="older-messages-indicator" role="status">
                 <Loader2 size={15} className="spinning" /> Loading older messages…
@@ -3768,18 +4401,18 @@ export default function App() {
                             {m.edited_timestamp && <span className="msg-time">(edited)</span>}
                             {m.deleted_at && <span className="deleted-message-label">DELETED</span>}
                           </div>
-                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} autoplayVideos={preferences.autoplayVideos} />
+                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} />
                         </div>
-                        <MsgActions />
+                        <MsgActions message={m} onReact={emoji => void toggleMessageReaction(selectedChannel!.id, m, emoji)} />
                       </div>
                     ) : (
                       <div key={m.id} className={`message compact ${isMe ? "mine" : ""} ${mentionsMe ? "mentioned-you" : ""} ${m.deleted_at ? "deleted-message" : ""}`} onContextMenu={event => openContextMenu(event, { kind: "message", message: m, channel: selectedChannel! })}>
                         <span className="compact-ts">{formatTimestamp(m.timestamp)}</span>
                         <div className="msg-body">
                           {m.deleted_at && <span className="deleted-message-label">DELETED</span>}
-                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} autoplayVideos={preferences.autoplayVideos} />
+                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} />
                         </div>
-                        <MsgActions />
+                        <MsgActions message={m} onReact={emoji => void toggleMessageReaction(selectedChannel!.id, m, emoji)} />
                       </div>
                     );
                   })}
@@ -3798,7 +4431,7 @@ export default function App() {
           </div>
 
           {/* Composer */}
-          <div className="composer-container">
+          <div className={`composer-container ${selectedVoiceChannel ? "voice-channel-composer" : ""}`}>
             {!online && (
               <div className="reconnect-pill">
                 <span>Disconnected — waiting to reconnect</span>
@@ -3901,7 +4534,46 @@ export default function App() {
         )}
 
         {/* Member Panel */}
-        {memberOpen && !showingDirectory && (
+        {selectedVoiceChannel ? (
+          <aside className="voice-chat-panel">
+            <header className="voice-chat-header">
+              <MessageSquare size={15} />
+              <strong>CHANNEL CHAT</strong>
+              <span>{messages.length}</span>
+            </header>
+            <div className="voice-chat-messages">
+              {msgLoading && <div className="voice-chat-empty"><Loader2 size={16} className="spinning" /> Loading messages…</div>}
+              {!msgLoading && messages.length === 0 && <div className="voice-chat-empty">No messages yet. Start the conversation.</div>}
+              {messages.map(message => (
+                <article className="voice-chat-message" key={message.id}>
+                  <img src={avatarUrl(message.author, 32)} alt="" />
+                  <div>
+                    <header><strong>{displayName(message.author)}</strong><time>{formatTimestamp(message.timestamp)}</time></header>
+                    <MessageContent message={message} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(target, emoji) => void toggleMessageReaction(selectedVoiceChannel.id, target, emoji)} autoplayVideos={preferences.autoplayVideos} />
+                  </div>
+                </article>
+              ))}
+            </div>
+            <form className="voice-chat-composer" onSubmit={event => { event.preventDefault(); void sendMessage(); }}>
+              <input
+                value={draft}
+                onChange={event => setDraft(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void sendMessage();
+                  }
+                }}
+                placeholder={`Message ${channelDisplayName(selectedVoiceChannel)}`}
+                aria-label={`Message ${channelDisplayName(selectedVoiceChannel)}`}
+                disabled={!canSend || channelAccess === "MISSING_ACCESS"}
+              />
+              <button type="submit" title="Send message" disabled={!draft.trim() || sending || !canSend || channelAccess === "MISSING_ACCESS"}>
+                {sending ? <Loader2 size={15} className="spinning" /> : <Send size={15} />}
+              </button>
+            </form>
+          </aside>
+        ) : memberOpen && !showingDirectory && (
           <aside className="member-panel">
             <div className="member-header">
               {isDmView && selectedChannel?.type === CHANNEL_TYPE_DM
@@ -4797,6 +5469,7 @@ function MessageContent({
   users,
   onChannelClick,
   onMediaOpen,
+  onReactionToggle,
   autoplayVideos = false,
 }: {
   message: DiscordMessage;
@@ -4804,6 +5477,7 @@ function MessageContent({
   users?: DiscordUser[];
   onChannelClick?: (channelId: string) => void;
   onMediaOpen?: (url: string, kind: "image" | "video", name?: string) => void;
+  onReactionToggle?: (message: DiscordMessage, emoji: string) => void;
   autoplayVideos?: boolean;
 }) {
   return (
@@ -4906,7 +5580,19 @@ function MessageContent({
       {m.reactions && m.reactions.length > 0 && (
         <div className="reactions">
           {m.reactions.map((r, i) => r && (
-            <span key={i} className={`reaction-pill ${r.me ? "mine-reaction" : ""}`}>
+            <button
+              type="button"
+              key={i}
+              className={`reaction-pill ${r.me ? "mine-reaction" : ""}`}
+              title={r.emoji?.name || "Reaction"}
+              aria-label={`${r.emoji?.name || "emoji"} reaction, ${r.count} ${r.count === 1 ? "reaction" : "reactions"}${r.me ? ", remove your reaction" : ", add your reaction"}`}
+              disabled={!onReactionToggle}
+              onClick={() => {
+                if (!onReactionToggle || !r.emoji?.name) return;
+                const emoji = r.emoji.id ? `${r.emoji.name}:${r.emoji.id}` : r.emoji.name;
+                onReactionToggle(m, emoji);
+              }}
+            >
               {r.emoji?.id ? (
                 <img
                   className="reaction-emoji"
@@ -4918,7 +5604,7 @@ function MessageContent({
                 r.emoji?.name || "�"
               )}
               <span style={{ fontSize: 11 }}>{r.count}</span>
-            </span>
+            </button>
           ))}
         </div>
       )}
@@ -4926,11 +5612,67 @@ function MessageContent({
   );
 }
 
-function MsgActions() {
+function MsgActions({
+  message,
+  onReact,
+}: {
+  message: DiscordMessage;
+  onReact: (emoji: string) => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const emojis = EMOJI_PICKER_ITEMS.flatMap(group => group.items)
+    .filter((emoji, index, list) => list.indexOf(emoji) === index);
+  const filteredEmojis = query.trim()
+    ? emojis.filter(emoji =>
+      emoji.includes(query.trim())
+      || (EMOJI_SEARCH_TERMS[emoji] || "").includes(query.trim().toLowerCase())
+    )
+    : emojis;
+
   return (
     <div className="msg-actions">
-      <button className="msg-action-btn" title="React"><SmilePlus size={13} /></button>
+      <button
+        type="button"
+        className="msg-action-btn"
+        title="Add reaction"
+        aria-label={`Add reaction to message by ${displayName(message.author)}`}
+        aria-expanded={pickerOpen}
+        onClick={() => setPickerOpen(open => !open)}
+      >
+        <SmilePlus size={13} />
+      </button>
       <button className="msg-action-btn" title="More"><MoreHorizontal size={13} /></button>
+      {pickerOpen && (
+        <div className="message-reaction-picker" role="dialog" aria-label="Choose a reaction">
+          <input
+            type="search"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Search emoji"
+            aria-label="Search emoji"
+            autoFocus
+          />
+          <div className="message-reaction-options">
+            {filteredEmojis.slice(0, 96).map((emoji, index) => (
+              <button
+                key={`${emoji}-${index}`}
+                type="button"
+                title={EMOJI_SEARCH_TERMS[emoji] || emoji}
+                aria-label={emoji}
+                onMouseDown={event => event.preventDefault()}
+                onClick={() => {
+                  onReact(emoji);
+                  setPickerOpen(false);
+                }}
+              >
+                {emoji}
+              </button>
+            ))}
+            {filteredEmojis.length === 0 && <span className="message-reaction-empty">No matching emoji</span>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

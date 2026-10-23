@@ -7,10 +7,14 @@ use reqwest::Method;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use std::sync::atomic::Ordering;
 
-use crate::voice_gateway::{VoiceGateway, VoiceGatewayConfig};
 use crate::discord_router::{AccountIdentity, TokenManager};
 use crate::settings_proto::SettingsProtoV1Envelope;
+use crate::voice_gateway::{
+    list_audio_devices as enumerate_audio_devices, VoiceControlState, VoiceGatewayConfig,
+    VoiceSession,
+};
 use crate::AppState;
 
 
@@ -77,6 +81,10 @@ pub async fn set_token(
 
     if let Some(gateway_task) = state.gateway_task.lock().await.take() {
         gateway_task.abort();
+    }
+    state.voice_controls.generation.fetch_add(1, Ordering::SeqCst);
+    if let Some(voice_task) = state.voice_task.lock().await.take() {
+        voice_task.abort();
     }
     rebuild_router(&state, &token).await;
     *state.token.lock().await = Some(token.clone());
@@ -236,10 +244,9 @@ pub async fn archive_message_media(url: String) -> Result<String, String> {
     }
 
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(map_err)?;
+    .timeout(std::time::Duration::from_secs(5))
+    .build()
+    .map_err(map_err)?;
     let mut response = client.get(parsed).send().await.map_err(map_err)?;
     if !response.status().is_success() {
         return Err(format!("Discord CDN returned HTTP {}", response.status()));
@@ -450,6 +457,54 @@ pub async fn delete_message(
         .map_err(map_err)
 }
 
+#[tauri::command]
+pub async fn react_to_message(
+    channel_id: String,
+    message_id: String,
+    emoji: String,
+    remove: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let is_snowflake = |value: &str| {
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    if !is_snowflake(&channel_id) || !is_snowflake(&message_id) {
+        return Err("Channel and message IDs must be numeric Discord snowflakes".to_owned());
+    }
+    if emoji.is_empty() || emoji.chars().count() > 100 || emoji.chars().any(char::is_control) {
+        return Err("Choose a valid emoji".to_owned());
+    }
+    if let Some((name, id)) = emoji.split_once(':') {
+        if name.is_empty()
+            || name.len() > 32
+            || !name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            || !is_snowflake(id)
+        {
+            return Err("Custom emoji must use the format name:id".to_owned());
+        }
+    } else if emoji.contains(':') || emoji.contains('/') || emoji.contains('\\') {
+        return Err("Choose a valid Unicode or custom emoji".to_owned());
+    }
+
+    let encoded_emoji = emoji
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b':') {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect::<String>();
+    let method = if remove { Method::DELETE } else { Method::PUT };
+    state.router.rest(
+        AccountIdentity::Primary,
+        method,
+        &format!("channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"),
+        None,
+    ).await.map(|_| ()).map_err(map_err)
+}
+
 fn iso8601_after_seconds(seconds: u64) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -573,6 +628,26 @@ pub async fn update_guild_channel(
         Method::PATCH,
         &format!("channels/{channel_id}"),
         Some(Value::Object(body)),
+    ).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn set_voice_channel_status(
+    channel_id: String,
+    status: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if channel_id.parse::<u64>().is_err() {
+        return Err("A valid voice channel ID is required".to_owned());
+    }
+    if status.chars().count() > 500 {
+        return Err("Voice channel status cannot exceed 500 characters".to_owned());
+    }
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::PUT,
+        &format!("channels/{channel_id}/voice-status"),
+        Some(json!({ "status": status })),
     ).await.map_err(map_err)
 }
 
@@ -897,17 +972,25 @@ pub async fn request_guild_member_list(
 /// VOICE_STATE_UPDATE and VOICE_SERVER_UPDATE.
 #[tauri::command]
 pub async fn set_voice_state(
-    guild_id: String,
+    guild_id: Option<String>,
     channel_id: Option<String>,
     self_mute: bool,
     self_deaf: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if guild_id.parse::<u64>().is_err() {
-        return Err("A valid guild ID is required for voice channels".to_owned());
+    if guild_id.as_deref().is_some_and(|id| id.parse::<u64>().is_err()) {
+        return Err("Guild ID must be a numeric Discord snowflake".to_owned());
     }
     if channel_id.as_deref().is_some_and(|id| id.parse::<u64>().is_err()) {
         return Err("Channel ID must be a numeric Discord snowflake".to_owned());
+    }
+    state.voice_controls.muted.store(self_mute, Ordering::Relaxed);
+    state.voice_controls.deafened.store(self_deaf, Ordering::Relaxed);
+    if channel_id.is_none() {
+        state.voice_controls.generation.fetch_add(1, Ordering::SeqCst);
+        if let Some(task) = state.voice_task.lock().await.take() {
+            task.abort();
+        }
     }
     state.router.send_gateway_payload(json!({
         "op": 4,
@@ -918,6 +1001,11 @@ pub async fn set_voice_state(
             "self_deaf": self_deaf
         }
     })).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn list_audio_devices() -> Result<crate::voice_gateway::AudioDeviceList, String> {
+    enumerate_audio_devices()
 }
 
 /// Fetch the current user's role IDs for accurate local channel permission checks.
@@ -955,6 +1043,92 @@ pub struct UserProfileResponse {
     pub connected_accounts: Option<Vec<Value>>,
     pub widgets: Option<Vec<Value>>,
 }
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct ScreenSource {
+    pub id: String,
+    pub name: String,
+    pub kind: String, // "screen" or "window"
+}
+
+/// List available desktop screens and windows for screen sharing.
+#[tauri::command]
+pub async fn get_screen_sources(app: AppHandle) -> Result<Vec<ScreenSource>, String> {
+    // Enumerate windows/screens via Tauri window / monitor APIs or desktop capturer
+    let monitors = app.primary_monitor().map_err(map_err)?;
+    let mut sources = Vec::new();
+    
+    if let Some(monitor) = monitors {
+        sources.push(ScreenSource {
+            id: format!("screen:{}", monitor.name().map_or("Primary Display", |v| v)),
+            name: format!("Primary Display ({0}x{1})", monitor.size().width, monitor.size().height),
+            kind: "screen".to_owned(),
+        });
+    }
+
+    if let Some(windows) = app.webview_windows().values().next() {
+        sources.push(ScreenSource {
+            id: format!("window:{}", windows.label()),
+            name: format!("VoidCord Window ({})", windows.label()),
+            kind: "window".to_owned(),
+        });
+    }
+
+    Ok(sources)
+}
+
+#[tauri::command]
+pub async fn start_screen_share(
+    guild_id: Option<String>,
+    channel_id: String,
+    source_id: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if channel_id.parse::<u64>().is_err() {
+        return Err("A valid voice channel ID is required for screen sharing".to_owned());
+    }
+
+    let stream_key = if let Some(ref g_id) = guild_id {
+        format!("guild:{g_id}:{channel_id}:1")
+    } else {
+        format!("call:{channel_id}:1")
+    };
+
+    // Send Discord Gateway Stream Create / Connect payload (Opcode 18)
+    state.router.send_gateway_payload(json!({
+        "op": 18,
+        "d": {
+            "type": "screen",
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "preferred_region": null
+        }
+    })).await.map_err(map_err)?;
+
+    Ok(json!({
+        "status": "sharing",
+        "stream_key": stream_key,
+        "source_id": source_id
+    }))
+}
+
+/// Stop the active screen share stream.
+#[tauri::command]
+pub async fn stop_screen_share(
+    guild_id: Option<String>,
+    channel_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.router.send_gateway_payload(json!({
+        "op": 19,
+        "d": {
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "paused": true
+        }
+    })).await.map_err(map_err)
+}
+
 
 /// Fetch và parse trọn gói profile kèm badges trực tiếp từ backend Rust
 #[tauri::command]
@@ -1109,6 +1283,18 @@ pub async fn start_gateway(
                         "VOICE_SERVER_UPDATE" => {
                             let _ = app2.emit("discord:voice_server_update", d);
                         }
+                        "VOICE_CHANNEL_STATUS_UPDATE" => {
+                            let _ = app2.emit("discord:voice_channel_status_update", d);
+                        }
+                        "CALL_CREATE" => {
+                            let _ = app2.emit("discord:call_create", d);
+                        }
+                        "CALL_UPDATE" => {
+                            let _ = app2.emit("discord:call_update", d);
+                        }
+                        "CALL_DELETE" => {
+                            let _ = app2.emit("discord:call_delete", d);
+                        }
                         "READY" => {
                             emit_rust_log(&app2, "info", "gateway", "Gateway READY received");
                             let _ = app2.emit(
@@ -1167,62 +1353,82 @@ pub async fn get_guild_roles(
 /// Kết nối tới Voice Channel bằng Voice Gateway & UDP Transport
 #[tauri::command]
 pub async fn connect_voice(
-    guild_id: String,
+    server_id: String,
     channel_id: String,
+    user_id: String,
     endpoint: String,
     session_id: String,
     token: String,
+    input_device_id: Option<String>,
+    output_device_id: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    // 1. Ngắt voice session cũ nếu đang chạy
+    let generation = state.voice_controls.generation.fetch_add(1, Ordering::SeqCst) + 1;
     if let Some(task) = state.voice_task.lock().await.take() {
         task.abort();
     }
 
-    // 2. Lấy user_id hiện tại từ token session
-    let user = state
-        .router
-        .rest(AccountIdentity::ReadOnly, Method::GET, "users/@me", None)
-        .await
-        .map_err(map_err)?;
-
-    let user_id = user
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or("Could not resolve user ID")?
-        .to_owned();
-
     let config = VoiceGatewayConfig {
         endpoint,
-        guild_id,
+        server_id,
         channel_id,
         user_id,
         session_id,
         token,
     };
 
-    // 3. Khởi tạo VoiceGateway
-    let gateway = VoiceGateway::new(config).await?;
+    let session = match VoiceSession::connect(
+        config,
+        &app,
+        state.voice_controls.deafened.clone(),
+        input_device_id,
+        output_device_id,
+    ).await {
+        Ok(session) => session,
+        Err(error) => return Err(error),
+    };
 
-    // 4. Spawn task chạy ngầm Voice Gateway session
+    let mut voice_task_slot = state.voice_task.lock().await;
+    if state.voice_controls.generation.load(Ordering::SeqCst) != generation {
+        drop(voice_task_slot);
+        session.close().await;
+        return Err("Voice connection was superseded by a newer request".to_owned());
+    }
+    if let Some(task) = voice_task_slot.take() {
+        task.abort();
+    }
+
+    let controls: VoiceControlState = state.voice_controls.clone();
+    let task_app = app.clone();
     let voice_task = tokio::spawn(async move {
-        emit_rust_log(&app, "info", "voice", "Starting Voice Gateway connection...");
-        if let Err(err) = gateway.run().await {
-            emit_rust_log(&app, "error", "voice", format!("Voice session error: {err}"));
+        if let Err(error) = session.run(task_app.clone(), controls).await {
+            emit_rust_log(&task_app, "error", "voice", format!("Voice session error: {error}"));
+            let _ = task_app.emit(
+                "discord:voice_status",
+                json!({ "status": "failed", "message": error }),
+            );
         }
     });
 
-    *state.voice_task.lock().await = Some(voice_task);
+    *voice_task_slot = Some(voice_task);
     Ok(())
 }
 
 /// Ngắt kết nối Voice Channel
 #[tauri::command]
-pub async fn disconnect_voice(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn disconnect_voice(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    state.voice_controls.generation.fetch_add(1, Ordering::SeqCst);
     if let Some(task) = state.voice_task.lock().await.take() {
         task.abort();
     }
+    let _ = app.emit(
+        "discord:voice_status",
+        json!({ "status": "disconnected", "message": "Disconnected from voice" }),
+    );
     Ok(())
 }
 

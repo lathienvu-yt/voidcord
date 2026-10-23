@@ -58,6 +58,7 @@ export interface DiscordChannel {
   type: number; // 0=text, 1=DM, 2=voice, 3=GroupDM, 4=category, 5=announcement, 13=stage
   name?: string;
   topic?: string | null;
+  status?: string | null;
   position?: number;
   parent_id?: string | null;
   guild_id?: string;
