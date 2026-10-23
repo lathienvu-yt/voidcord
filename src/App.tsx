@@ -5841,7 +5841,7 @@ function MessageContent({
 
       {m.type === 20 && (
         <div className="msg-special-card msg-system-card msg-command-card" role="note">
-          <span>Slash command: <strong>/{m.interaction_metadata?.name || m.interaction?.name || (m.content.match(/^\\/([^\\s]+)/)?.[1]) || "command"}</strong></span>
+          <span>Slash command: <strong>/{m.interaction_metadata?.name || m.interaction?.name || (m.content.match(/^\/([^\s]+)/)?.[1]) || "command"}</strong></span>
         </div>
       )}
 
