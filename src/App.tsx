@@ -270,7 +270,7 @@ function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
       if (!/^(true|false)$/i.test(token)) throw new Error(option.name + " must be true or false.");
       value = token.toLowerCase() === "true";
     } else if ([6, 7, 8, 9].includes(option.type)) {
-      const match = token.match(/\\d{15,22}/);
+      const match = token.match(/\d{15,22}/);
       if (!match) throw new Error(option.name + " needs a Discord mention or ID.");
       value = match[0];
     }
@@ -4675,7 +4675,7 @@ export default function App() {
                 />
                 {slashCommands.length > 0 && /^\/[^\s]*$/.test(draft) && (
                   <div className="slash-command-autocomplete" role="listbox" aria-label="Slash commands">
-                    {slashCommands.map((command, index) => <button type="button" role="option" key={command.application_id + ":" + command.id} onMouseDown={event => event.preventDefault()} onClick={() => {
+                    {slashCommands.map(command => <button type="button" role="option" key={command.application_id + ":" + command.id} onMouseDown={event => event.preventDefault()} onClick={() => {
                       setSelectedSlashCommand(command); setDraft("/" + command.name + " "); setSlashCommands([]);
                       requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length); });
                     }}><span className="slash-command-icon">/</span><span><strong>/{command.name}</strong><small>{command.description || "Application command"}</small></span></button>)}
