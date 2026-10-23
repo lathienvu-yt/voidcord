@@ -172,6 +172,8 @@ export interface DiscordMessage {
   message_reference?: { type?: number; message_id?: string; channel_id?: string; guild_id?: string } | null;
   message_snapshots?: DiscordMessageSnapshot[];
   type: number;
+  interaction_metadata?: { name?: string; type?: number; id?: string; user?: DiscordUser } | null;
+  interaction?: { name?: string; type?: number; id?: string; user?: DiscordUser } | null;
   poll?: unknown;
   call?: unknown;
   activity?: unknown;
