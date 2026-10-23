@@ -242,7 +242,7 @@ const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
 };
 
 function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
-  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\\S+)/g)]
+  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\S+)/g)]
     .map(match => (match[1] ?? match[2] ?? match[3] ?? "").replace(/\\(["\\])/g, "$1"));
   let options = Array.isArray(command?.options) ? command.options : [];
   if (options.some((option: any) => option.type === 1 || option.type === 2)) {
@@ -298,7 +298,7 @@ function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
       if (!/^(true|false)$/i.test(token)) throw new Error(option.name + " must be true or false.");
       value = token.toLowerCase() === "true";
     } else if ([6, 7, 8, 9].includes(option.type)) {
-      const match = token.match(/\\d{15,22}/);
+      const match = token.match(/\d{15,22}/);
       if (!match) throw new Error(option.name + " needs a Discord mention or ID.");
       value = match[0];
     } else if (option.type === 3 && Array.isArray(option.choices) && !option.choices.some((choice: any) => choice.value === token)) {
