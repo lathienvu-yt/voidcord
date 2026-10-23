@@ -69,6 +69,8 @@ pub async fn set_token(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Value, String> {
+    emit_rust_log(&app, "debug", "auth", "Validating Discord credentials");
+    log::debug!("Validating Discord credentials");
     let previous_token = state.token.lock().await.clone();
     rebuild_router(&state, &token).await;
     let me = match state.router
@@ -77,6 +79,8 @@ pub async fn set_token(
     {
         Ok(user) => user,
         Err(error) => {
+            emit_rust_log(&app, "warn", "auth", "Discord credential validation failed");
+            log::warn!("Discord credential validation failed");
             let message = map_err(error);
             // Keep the attempted token active while a CAPTCHA retry is pending,
             // because the router owns the paused request and its challenge state.
@@ -101,6 +105,8 @@ pub async fn set_token(
     rebuild_router(&state, &token).await;
     *state.token.lock().await = Some(token.clone());
 
+    emit_rust_log(&app, "info", "auth", "Discord credentials validated successfully");
+    log::info!("Discord credentials validated successfully");
     let _ = app.emit("discord:ready", &me);
     Ok(me)
 }
