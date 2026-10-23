@@ -193,6 +193,7 @@ impl DiscordRouter {
         channel_id: &str,
         content: &str,
         files: Vec<std::path::PathBuf>,
+        reply_to_message_id: Option<&str>,
     ) -> Result<Value, DiscordError> {
         if channel_id.is_empty() || channel_id.chars().any(|c| !c.is_ascii_digit()) {
             return Err(DiscordError::InvalidPath);
@@ -219,7 +220,17 @@ impl DiscordRouter {
             1 | 3 => 50 * 1024 * 1024,
             _ => 20 * 1024 * 1024,
         };
-        let payload_json = serde_json::json!({ "content": content });
+        let mut payload_json = serde_json::json!({ "content": content });
+        if let Some(message_id) = reply_to_message_id {
+            if message_id.is_empty() || message_id.chars().any(|c| !c.is_ascii_digit()) {
+                return Err(DiscordError::InvalidPath);
+            }
+            payload_json["message_reference"] = serde_json::json!({
+                "message_id": message_id,
+                "channel_id": channel_id,
+                "fail_if_not_exists": false
+            });
+        }
         let mut form = reqwest::multipart::Form::new()
             .text("payload_json", payload_json.to_string());
         let mut total_size = 0u64;
