@@ -4038,3 +4038,27 @@ input, textarea { font-family: inherit; }
   opacity: 0.55;
   cursor: wait;
 }
+
+
+/* Slash commands, message replies, and incoming private calls */
+.slash-command-autocomplete { position: absolute; z-index: 30; left: 12px; right: 12px; bottom: calc(100% + 8px); max-height: 280px; overflow: auto; padding: 6px; border: 1px solid var(--border, #393746); border-radius: 10px; background: var(--bg-secondary, #242331); box-shadow: 0 12px 30px #0006; }
+.slash-command-autocomplete > button { display: flex; width: 100%; align-items: center; gap: 10px; padding: 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary, #f0eef6); text-align: left; cursor: pointer; }
+.slash-command-autocomplete > button:hover { background: var(--bg-hover, #353343); }
+.slash-command-autocomplete > button > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.slash-command-autocomplete small { color: var(--text-secondary, #b8b5c4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slash-command-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; background: var(--bg-tertiary, #393746); font-weight: 700; }
+.reply-composer-preview { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 12px; box-sizing: border-box; border-bottom: 1px solid var(--border, #393746); background: var(--bg-secondary, #242331); }
+.reply-composer-preview > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.reply-composer-preview strong { font-size: 12px; color: var(--accent-bright, #a5a9ff); }
+.reply-composer-preview span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary, #b8b5c4); font-size: 12px; }
+.reply-composer-preview button { display: grid; place-items: center; border: 0; background: transparent; color: var(--text-secondary, #b8b5c4); cursor: pointer; }
+.reply-message-reference { margin: 0 0 5px; padding: 4px 8px; border-left: 2px solid var(--accent-bright, #a5a9ff); border-radius: 0 4px 4px 0; background: #ffffff08; font-size: 12px; }
+.reply-message-reference > span { display: block; color: var(--accent-bright, #a5a9ff); font-weight: 600; }
+.reply-message-reference > div { overflow: hidden; color: var(--text-secondary, #b8b5c4); text-overflow: ellipsis; white-space: nowrap; }
+.incoming-call-banner { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #252c35; border-bottom: 1px solid #3b8d62; }
+.incoming-call-copy { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; color: #72d49a; }
+.incoming-call-copy > span { display: flex; flex-direction: column; min-width: 0; }
+.incoming-call-copy small { color: var(--text-secondary, #b8b5c4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.incoming-call-banner button { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 6px; padding: 7px 11px; color: white; font-weight: 600; cursor: pointer; }
+.incoming-call-accept { background: #248a52; }
+.incoming-call-decline { background: #c23d4b; }
