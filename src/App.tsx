@@ -233,7 +233,6 @@ const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
   11: "boosted the server to Level 3",
   12: "followed a channel",
   18: "created a thread",
-  20: "used a slash command",
   22: "sent an invite reminder",
   24: "triggered an AutoMod action",
   27: "started a stage",
@@ -243,26 +242,49 @@ const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
 };
 
 function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
-  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\S+)/g)]
+  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\\S+)/g)]
     .map(match => (match[1] ?? match[2] ?? match[3] ?? "").replace(/\\(["\\])/g, "$1"));
   let options = Array.isArray(command?.options) ? command.options : [];
   if (options.some((option: any) => option.type === 1 || option.type === 2)) {
-    let selected = options.find((option: any) => option.name === tokens[0] && (option.type === 1 || option.type === 2));
-    if (!selected) throw new Error("Choose a subcommand from the command's available options.");
+    const selectedName = tokens[0];
+    const selected = options.find((option: any) => option.name === selectedName && (option.type === 1 || option.type === 2));
+    if (!selected) throw new Error("Choose a subcommand: " + options.filter((option: any) => option.type === 1 || option.type === 2).map((option: any) => option.name).join(", "));
     tokens.shift();
     if (selected.type === 2) {
+      const group = selected;
       const subcommandName = tokens.shift();
-      selected = (selected.options || []).find((option: any) => option.name === subcommandName && option.type === 1);
-      if (!selected) throw new Error("Choose a subcommand from the selected group.");
+      const subcommand = (group.options || []).find((option: any) => option.name === subcommandName && option.type === 1);
+      if (!subcommand) throw new Error("Choose a subcommand from " + group.name + ": " + (group.options || []).map((option: any) => option.name).join(", "));
+      options = Array.isArray(subcommand.options) ? subcommand.options : [];
+    } else {
+      options = Array.isArray(selected.options) ? selected.options : [];
     }
-    options = Array.isArray(selected.options) ? selected.options : [];
   }
+
+  // Accept both positional values and explicit --option value pairs.
+  const namedValues = new Map<string, string>();
+  const positional: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith("--")) {
+      const name = token.slice(2);
+      const option = options.find((candidate: any) => candidate.name === name);
+      if (!option) throw new Error("Unknown option --" + name + ".");
+      const value = tokens[++i];
+      if (value === undefined || value.startsWith("--")) throw new Error("Missing value for --" + name + ".");
+      namedValues.set(name, value);
+    } else {
+      positional.push(token);
+    }
+  }
+
   const result: any[] = [];
+  let positionalIndex = 0;
   for (const option of options) {
     if (option.type === 1 || option.type === 2) continue;
-    const token = tokens.shift();
+    const token = namedValues.has(option.name) ? namedValues.get(option.name) : positional[positionalIndex++];
     if (token === undefined) {
-      if (option.required) throw new Error("Missing required option: " + option.name);
+      if (option.required) throw new Error("Missing required option: " + option.name + ". Use --" + option.name + " <value>.");
       continue;
     }
     let value: any = token;
@@ -276,16 +298,19 @@ function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
       if (!/^(true|false)$/i.test(token)) throw new Error(option.name + " must be true or false.");
       value = token.toLowerCase() === "true";
     } else if ([6, 7, 8, 9].includes(option.type)) {
-      const match = token.match(/\d{15,22}/);
+      const match = token.match(/\\d{15,22}/);
       if (!match) throw new Error(option.name + " needs a Discord mention or ID.");
       value = match[0];
+    } else if (option.type === 3 && Array.isArray(option.choices) && !option.choices.some((choice: any) => choice.value === token)) {
+      throw new Error(option.name + " must be one of: " + option.choices.map((choice: any) => choice.name).join(", "));
+    } else if (option.type === 11) {
+      throw new Error("Attachment options aren't supported yet. Choose a command that doesn't require an uploaded file.");
     }
     result.push({ name: option.name, type: option.type, value });
   }
-  if (tokens.length) throw new Error("Too many arguments for /" + command.name + ".");
+  if (positionalIndex < positional.length) throw new Error("Too many positional arguments for /" + command.name + ". Use --option value for named parameters.");
   return result;
 }
-
 function canForwardMessage(message: DiscordMessage): boolean {
   return [0, 19, 20, 23].includes(message.type)
     && !message.poll
@@ -1065,7 +1090,7 @@ export default function App() {
 
         const commands = candidates.map((entry: any) => {
           const command = entry?.command && typeof entry.command === "object" ? entry.command : entry;
-          const applicationId = command?.application_id ?? entry?.application_id ?? entry?.application?.id;
+          const applicationId = command?.application_id ?? command?.application?.id ?? command?.applicationId ?? command?.app_id ?? entry?.application_id ?? entry?.application?.id ?? entry?.data?.application_id;
           return {
             ...command,
             application_id: typeof applicationId === "string" || typeof applicationId === "number"
@@ -4724,6 +4749,25 @@ export default function App() {
                     }}><span className="slash-command-icon">/</span><span><strong>/{command.name}</strong><small>{command.description || "Application command"}</small></span></button>)}
                   </div>
                 )}
+                {selectedSlashCommand && draft.startsWith("/" + selectedSlashCommand.name + " ") && Array.isArray(selectedSlashCommand.options) && selectedSlashCommand.options.length > 0 && (
+                  <div className="slash-command-parameters" role="note">
+                    <strong>/{selectedSlashCommand.name} parameters</strong>
+                    <span>Type values after the command, or insert a named parameter:</span>
+                    <div className="slash-command-parameter-list">
+                      {selectedSlashCommand.options.map((option: any) => (
+                        <button key={option.name} type="button" title={option.description || option.name} onMouseDown={event => event.preventDefault()} onClick={() => {
+                          const insertion = "--" + option.name + " ";
+                          const nextDraft = draft.endsWith(" ") ? draft + insertion : draft + " " + insertion;
+                          setDraft(nextDraft);
+                          requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(nextDraft.length, nextDraft.length); });
+                        }}>
+                          <code>--{option.name}</code>{option.required ? <em>required</em> : <em>optional</em>}
+                        </button>
+                      ))}
+                    </div>
+                    <small>Example: /{selectedSlashCommand.name} --option value</small>
+                  </div>
+                )}
                 {mentionQuery && mentionSuggestions.length > 0 && (
                   <div className="mention-autocomplete" role="listbox" aria-label="Mention suggestions">
                     {mentionSuggestions.map((user, index) => (
@@ -5792,7 +5836,13 @@ function MessageContent({
         </div>
       )}
 
-      {m.type !== 0 && m.type !== 3 && !m.content && !m.call
+      {m.type === 20 && (
+        <div className="msg-special-card msg-system-card msg-command-card" role="note">
+          <span>Slash command: <strong>/{m.interaction_metadata?.name || m.interaction?.name || (m.content.match(/^\\/([^\\s]+)/)?.[1]) || "command"}</strong></span>
+        </div>
+      )}
+
+      {m.type !== 0 && m.type !== 3 && m.type !== 20 && !m.content && !m.call
         && !(m.attachments?.length) && !(m.embeds?.length) && (
         <div className="msg-special-card msg-system-card" role="note">
           <span>{SYSTEM_MESSAGE_LABELS[m.type] || `Discord system message · type ${m.type}`}</span>
