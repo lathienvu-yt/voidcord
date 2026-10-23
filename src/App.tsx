@@ -6,7 +6,7 @@ import { load } from "@tauri-apps/plugin-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Archive, Ban, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
-  Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Pin, Play, Search, Send, Settings, ShoppingBag,
+  Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
   Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut
 } from "lucide-react";
@@ -186,6 +186,27 @@ function getUserRoleColor(authorId: string, guildMembers: unknown[], guildRoles:
     .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))[0];
   return highestColoredRole ? roleColorToHex(highestColoredRole.color) : undefined;
 }
+
+const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
+  1: "added someone to the group",
+  2: "removed someone from the group",
+  4: "changed the channel name",
+  5: "changed the channel icon",
+  6: "pinned a message",
+  7: "joined the server",
+  8: "boosted the server",
+  9: "boosted the server to Level 1",
+  10: "boosted the server to Level 2",
+  11: "boosted the server to Level 3",
+  12: "followed a channel",
+  18: "created a thread",
+  22: "sent an invite reminder",
+  24: "triggered an AutoMod action",
+  27: "started a stage",
+  28: "ended a stage",
+  29: "joined a stage as a speaker",
+  30: "updated the stage topic",
+};
 
 function canForwardMessage(message: DiscordMessage): boolean {
   return [0, 19, 20, 23].includes(message.type)
@@ -815,6 +836,9 @@ export default function App() {
   const [profileCardOpen, setProfileCardOpen] = useState(false);
   const [ownProfileLoading, setOwnProfileLoading] = useState(false);
   const [fullProfileOpen, setFullProfileOpen] = useState(false);
+  const [bioEditing, setBioEditing] = useState(false);
+  const [bioDraft, setBioDraft] = useState("");
+  const [bioSaving, setBioSaving] = useState(false);
   const [customStatusDraft, setCustomStatusDraft] = useState("");
   const [customStatusEditing, setCustomStatusEditing] = useState(false);
   const [mentionCaret, setMentionCaret] = useState(0);
@@ -1615,18 +1639,39 @@ export default function App() {
       setChannels(previous => previous.filter(channel => channel.id !== payload.id));
     }).then(u => unsubs.push(u));
 
-    listen<any>("discord:presence_update", ({ payload }) => {
-      const userId = payload?.user?.id;
-      const status = payload?.status;
-      if (userId && status) {
-        setMemberPresences(prev => ({ ...prev, [userId]: status }));
-        setMemberPlatforms(previous => ({ ...previous, [userId]: platformsFromPresence(payload) }));
-        const customStatus = payload?.activities?.find((activity: any) => activity.type === 4)?.state || "";
-        setMemberCustomStatuses(previous => ({ ...previous, [userId]: customStatus }));
-        if (userId === me?.id) {
-          setSelfPresence({ status, customStatus });
+    const applyPresenceUpdates = (presences: any[]) => {
+      const updates = presences.filter((presence: any) =>
+        presence?.user?.id && typeof presence.status === "string"
+      );
+      if (updates.length === 0) return;
+
+      setMemberPresences(previous => {
+        const next = { ...previous };
+        for (const presence of updates) next[presence.user.id] = presence.status;
+        return next;
+      });
+      setMemberPlatforms(previous => {
+        const next = { ...previous };
+        for (const presence of updates) next[presence.user.id] = platformsFromPresence(presence);
+        return next;
+      });
+      setMemberCustomStatuses(previous => {
+        const next = { ...previous };
+        for (const presence of updates) {
+          next[presence.user.id] = presence.activities?.find((activity: any) => activity.type === 4)?.state || "";
         }
+        return next;
+      });
+
+      const ownPresence = updates.find((presence: any) => presence.user.id === me?.id);
+      if (ownPresence) {
+        const customStatus = ownPresence.activities?.find((activity: any) => activity.type === 4)?.state || "";
+        setSelfPresence({ status: ownPresence.status, customStatus });
       }
+    };
+
+    listen<any>("discord:presence_update", ({ payload }) => {
+      applyPresenceUpdates([payload]);
     }).then(u => unsubs.push(u));
 
     listen("discord:gateway_ready", () => {
@@ -1694,17 +1739,23 @@ export default function App() {
     };
 
     listen<any>("discord:guild_member_list_update", ({ payload }) => {
-      const incoming = (payload?.ops || []).flatMap((operation: any) =>
-        (operation?.items || [])
-          .map((item: any) => item?.member)
-          .filter((member: any) => member?.user?.id)
-      );
+      const items = (payload?.ops || []).flatMap((operation: any) => operation?.items || []);
+      const incoming = items
+        .map((item: any) => item?.member)
+        .filter((member: any) => member?.user?.id);
+      const presences = items
+        .map((item: any) => item?.presence || item?.member?.presence)
+        .filter((presence: any) => presence?.user?.id && typeof presence.status === "string");
+      applyPresenceUpdates(presences);
       void mergeGatewayMembers(payload?.guild_id || "", incoming);
     }).then(u => unsubs.push(u));
 
     listen<any>("discord:guild_create", ({ payload }) => {
       if (Array.isArray(payload?.members)) {
         void mergeGatewayMembers(payload.id || "", payload.members);
+      }
+      if (Array.isArray(payload?.presences)) {
+        applyPresenceUpdates(payload.presences);
       }
     }).then(u => unsubs.push(u));
 
@@ -2344,6 +2395,29 @@ export default function App() {
       setSelfPresence(previous);
       notify(`Could not change status: ${e}`);
       return false;
+    }
+  };
+
+  const saveBio = async () => {
+    if (!me) return;
+    const bio = bioDraft.trim();
+    if ([...bio].length > 190) {
+      notify("Bio must be 190 characters or fewer");
+      return;
+    }
+
+    setBioSaving(true);
+    try {
+      await invoke("update_bio", { bio });
+      const profile = await invoke<any>("get_user_profile", { userId: me.id });
+      if (profile) setUserProfile(profile);
+      setBioDraft(profile?.user_profile?.bio ?? profile?.user?.bio ?? bio);
+      setBioEditing(false);
+      notify("Bio updated");
+    } catch (error) {
+      notify(`Could not update bio: ${error}`);
+    } finally {
+      setBioSaving(false);
     }
   };
 
@@ -3354,6 +3428,36 @@ export default function App() {
                           void handleOpenMemberProfile(me, true);
                         }}>View Full Bio</button>
                       </>
+                    )}
+                    <button
+                      type="button"
+                      className="profile-bio-link"
+                      onClick={() => {
+                        setBioDraft(profileBio);
+                        setBioEditing(true);
+                      }}
+                    >Edit bio</button>
+                    {bioEditing && (
+                      <div className="profile-bio-editor">
+                        <textarea
+                          aria-label="Profile bio"
+                          maxLength={190}
+                          rows={4}
+                          value={bioDraft}
+                          placeholder="Tell people a little about yourself"
+                          onChange={event => setBioDraft(event.target.value)}
+                        />
+                        <div className="profile-bio-editor-footer">
+                          <span>{[...bioDraft].length}/190</span>
+                          <button type="button" disabled={bioSaving} onClick={() => void saveBio()}>
+                            {bioSaving ? "Saving…" : "Save bio"}
+                          </button>
+                          <button type="button" disabled={bioSaving} onClick={() => {
+                            setBioDraft(profileBio);
+                            setBioEditing(false);
+                          }}>Cancel</button>
+                        </div>
+                      </div>
                     )}
                   </>
                 )}
@@ -4849,6 +4953,25 @@ function MessageContent({
           ))}
         </div>
       ))}
+
+      {(m.type === 3 || m.call) && (
+        <div className="msg-special-card msg-call-card" role="note">
+          <Phone size={17} aria-hidden="true" />
+          <div>
+            <strong>{(m.call as any)?.ended_timestamp ? "Voice call ended" : "Voice call"}</strong>
+            <span>{(m.call as any)?.ended_timestamp
+              ? `Call ended · ${formatTimestamp((m.call as any).ended_timestamp)}`
+              : "Call activity"}</span>
+          </div>
+        </div>
+      )}
+
+      {m.type !== 0 && m.type !== 3 && !m.content && !m.call
+        && !(m.attachments?.length) && !(m.embeds?.length) && (
+        <div className="msg-special-card msg-system-card" role="note">
+          <span>{SYSTEM_MESSAGE_LABELS[m.type] || `Discord system message · type ${m.type}`}</span>
+        </div>
+      )}
 
       {m.content && (
         <div className="msg-text">

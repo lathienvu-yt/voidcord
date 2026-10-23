@@ -3824,3 +3824,76 @@ input, textarea { font-family: inherit; }
 @media (prefers-reduced-motion: reduce) {
   .sidebar .user-bar-avatar-wrap,.profile-popover-card,.profile-popout-avatar-wrap,.app-context-menu { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+
+/* Presence, call-message, and profile-bio fixes */
+.msg-special-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #393746);
+  border-radius: 8px;
+  background: var(--bg-secondary, #242331);
+  color: var(--text-secondary, #b8b5c4);
+  font-size: 12px;
+}
+.msg-call-card > svg {
+  flex: 0 0 auto;
+  color: #7cdaa0;
+}
+.msg-call-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.msg-call-card strong {
+  color: var(--text-primary, #f0eef6);
+  font-size: 13px;
+}
+.msg-call-card span {
+  color: var(--text-secondary, #b8b5c4);
+}
+.profile-bio-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.profile-bio-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 76px;
+  padding: 8px;
+  border: 1px solid var(--border, #393746);
+  border-radius: 6px;
+  background: var(--bg-secondary, #242331);
+  color: var(--text-primary, #f0eef6);
+  font: inherit;
+  font-size: 12px;
+}
+.profile-bio-editor-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.profile-bio-editor-footer > span {
+  margin-right: auto;
+  color: var(--text-secondary, #b8b5c4);
+  font-size: 11px;
+}
+.profile-bio-editor-footer > button {
+  padding: 5px 8px;
+  border: 1px solid var(--border, #393746);
+  border-radius: 5px;
+  background: var(--bg-secondary, #242331);
+  color: var(--text-primary, #f0eef6);
+  cursor: pointer;
+  font-size: 11px;
+}
+.profile-bio-editor-footer > button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
