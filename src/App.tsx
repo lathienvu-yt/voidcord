@@ -242,7 +242,7 @@ const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
 };
 
 function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
-  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\\S+)/g)]
+  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\S+)/g)]
     .map(match => (match[1] ?? match[2] ?? match[3] ?? "").replace(/\\(["\\])/g, "$1"));
   let options = Array.isArray(command?.options) ? command.options : [];
   if (options.some((option: any) => option.type === 1 || option.type === 2)) {
@@ -1029,7 +1029,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const match = draft.match(/^\\/([^\\s]*)$/);
+    const match = draft.match(/^\/([^\s]*)$);
     if (!match || !selectedChannel || selectedSlashCommand) {
       setSlashCommands([]);
       return;
@@ -2984,7 +2984,7 @@ export default function App() {
       return;
     }
     if (content.startsWith("/")) {
-      const commandName = content.slice(1).split(/\\s/, 1)[0];
+      const commandName = content.slice(1).split(/\s/, 1)[0];
       const command = selectedSlashCommand?.name === commandName ? selectedSlashCommand : slashCommands.find(candidate => candidate.name === commandName);
       if (!command) { notify("Pick a command from the slash-command suggestions first."); return; }
       if (!gatewaySessionId) { notify("The Discord gateway session is not ready yet. Reconnect and try again."); return; }
@@ -4673,7 +4673,7 @@ export default function App() {
                   onKeyUp={e => setMentionCaret(e.currentTarget.selectionStart || 0)}
                   onKeyDown={handleComposerKeyDown}
                 />
-                {slashCommands.length > 0 && /^\\/[^\\s]*$/.test(draft) && (
+                {slashCommands.length > 0 && /^\/[^\s]*$/.test(draft) && (
                   <div className="slash-command-autocomplete" role="listbox" aria-label="Slash commands">
                     {slashCommands.map((command, index) => <button type="button" role="option" key={command.application_id + ":" + command.id} onMouseDown={event => event.preventDefault()} onClick={() => {
                       setSelectedSlashCommand(command); setDraft("/" + command.name + " "); setSlashCommands([]);
