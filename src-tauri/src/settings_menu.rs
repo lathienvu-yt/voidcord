@@ -84,6 +84,10 @@ pub async fn save_client_settings(
         .decode(encoded_current)
         .map_err(|_| "Discord returned invalid Base64 settings".to_owned())?;
     let mut fields = parse_fields(&decoded_current)?;
+    // Use the data version from the snapshot we are about to merge, rather
+    // than the UI's old placeholder, so Discord can reject stale writes safely.
+    let required_data_version = extract_data_version(&fields)
+        .unwrap_or(changes.required_data_version);
 
     let mut has_changes = false;
     if let Some(scope) = changes.appearance {
@@ -126,7 +130,7 @@ pub async fn save_client_settings(
     }
     let envelope = SettingsProtoEnvelope {
         settings: STANDARD.encode(wire),
-        required_data_version: changes.required_data_version,
+        required_data_version,
     };
     state.router.rest(
         AccountIdentity::Primary,
@@ -146,6 +150,19 @@ struct WireField {
     wire_type: u64,
     raw: Vec<u8>,
     payload: Option<Vec<u8>>,
+}
+
+/// Read PreloadedUserSettings.versions.data_version (top-level field 1,
+/// nested uint32 field 3) from the snapshot. Unknown version layouts are left
+/// alone and let the caller use its supplied fallback.
+fn extract_data_version(fields: &[WireField]) -> Option<u32> {
+    let versions = fields.iter().find(|field| field.number == 1 && field.wire_type == 2)?;
+    let nested = parse_fields(versions.payload.as_deref()?).ok()?;
+    let data_version = nested.iter().find(|field| field.number == 3 && field.wire_type == 0)?;
+    let mut cursor = 0;
+    let key = read_varint(&data_version.raw, &mut cursor).ok()?;
+    if key >> 3 != 3 || key & 7 != 0 { return None; }
+    u32::try_from(read_varint(&data_version.raw, &mut cursor).ok()?).ok()
 }
 
 /// Parse protobuf fields while retaining their original encoded bytes. Unknown
@@ -313,4 +330,50 @@ fn write_varint(mut value: u64, output: &mut Vec<u8>) {
         value >>= 7;
     }
     output.push(value as u8);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_merge_preserves_unmodified_fields_and_unknown_bytes() {
+        // Appearance field 1 = theme 2; field 2 = developer_mode true;
+        // field 99 is an unknown varint retained byte-for-byte.
+        let appearance = vec![8, 2, 16, 1, 152, 6, 7];
+        let mut top = parse_fields(&encode_field(13, 2, &appearance)).unwrap();
+        apply_scope(&mut top, 13, vec![
+            (2, Some(false), false),
+            (15, Some(true), false),
+        ]).unwrap();
+
+        let encoded: Vec<u8> = top.iter().flat_map(|field| field.raw.clone()).collect();
+        let top_parsed = parse_fields(&encoded).unwrap();
+        let nested = parse_fields(top_parsed[0].payload.as_deref().unwrap()).unwrap();
+        assert!(nested.iter().any(|field| field.number == 1 && field.raw == [8, 2]));
+        assert!(!nested.iter().any(|field| field.number == 2));
+        assert!(nested.iter().any(|field| field.number == 15 && field.raw == [120, 1]));
+        assert!(nested.iter().any(|field| field.number == 99 && field.raw == [152, 6, 7]));
+    }
+
+    #[test]
+    fn wrapped_false_keeps_presence_with_empty_message() {
+        let mut top = Vec::new();
+        apply_scope(&mut top, 19, vec![(1, Some(false), true)]).unwrap();
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].number, 19);
+        let nested = parse_fields(top[0].payload.as_deref().unwrap()).unwrap();
+        assert_eq!(nested.len(), 1);
+        assert_eq!(nested[0].number, 1);
+        assert_eq!(nested[0].wire_type, 2);
+        assert_eq!(nested[0].payload.as_deref(), Some([].as_slice()));
+    }
+
+    #[test]
+    fn data_version_is_read_from_versions_scope() {
+        // Top-level versions field 1, nested data_version field 3 = 42.
+        let versions = vec![24, 42];
+        let top = parse_fields(&encode_field(1, 2, &versions)).unwrap();
+        assert_eq!(extract_data_version(&top), Some(42));
+    }
 }
