@@ -226,18 +226,26 @@ fn apply_scope(
 
         // Proto3 scalar false is represented by absence; BoolValue false must
         // remain present as an empty wrapper message.
-        if wrapped || value {
-            let payload = if wrapped {
-                if value { vec![8, 1] } else { Vec::new() }
-            } else {
-                vec![8, 1]
-            };
-            let encoded = encode_field(u64::from(leaf_number), 2, &payload);
+        if wrapped {
+            let payload = if value { vec![8, 1] } else { Vec::new() };
             let replacement = WireField {
                 number: u64::from(leaf_number),
                 wire_type: 2,
-                raw: encoded,
+                raw: encode_field(u64::from(leaf_number), 2, &payload),
                 payload: Some(payload),
+            };
+            let position = first_match.unwrap_or(nested.len()).min(nested.len());
+            nested.insert(position, replacement);
+        } else if value {
+            // Plain proto3 bool: true is varint 1; false is omitted.
+            let mut raw = Vec::new();
+            write_varint(u64::from(leaf_number) << 3, &mut raw);
+            write_varint(1, &mut raw);
+            let replacement = WireField {
+                number: u64::from(leaf_number),
+                wire_type: 0,
+                raw,
+                payload: None,
             };
             let position = first_match.unwrap_or(nested.len()).min(nested.len());
             nested.insert(position, replacement);
