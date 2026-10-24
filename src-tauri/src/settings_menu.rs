@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(nested.len(), 1);
         assert_eq!(nested[0].number, 1);
         assert_eq!(nested[0].wire_type, 2);
-        assert_eq!(nested[0].payload.as_deref(), Some([].as_slice()));
+        assert!(nested[0].payload.as_deref().unwrap().is_empty());
     }
 
     #[test]
