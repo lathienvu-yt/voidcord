@@ -433,25 +433,6 @@ pub async fn send_message_with_files(
     state.router.send_message_with_files(AccountIdentity::Primary, &channel_id, &content, paths, reply_to_message_id.as_deref()).await.map_err(map_err)
 }
 
-/// Search Discord's available application slash commands for the current channel.
-#[tauri::command]
-pub async fn search_application_commands(
-    channel_id: String,
-    query: String,
-    state: State<'_, AppState>,
-) -> Result<Value, String> {
-    if channel_id.parse::<u64>().is_err() {
-        return Err("A valid channel ID is required".to_owned());
-    }
-    let query = encode_query_component(query.trim());
-    state.router.rest(
-        AccountIdentity::ReadOnly,
-        Method::GET,
-        &format!("channels/{channel_id}/application-commands/search?type=1&query={query}&limit=15&offset=0"),
-        None,
-    ).await.map_err(map_err)
-}
-
 /// List global application commands for an application.
 /// The application ID must belong to an application the authenticated user can manage.
 #[tauri::command]

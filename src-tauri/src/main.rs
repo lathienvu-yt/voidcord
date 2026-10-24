@@ -92,7 +92,6 @@ fn main() {
             commands::archive_message_media,
             commands::send_message,
             commands::send_message_with_files,
-            commands::search_application_commands,
             commands::get_global_application_commands,
             commands::get_guild_application_commands,
             commands::get_guild_application_command_permissions,

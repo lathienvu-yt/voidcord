@@ -1181,112 +1181,95 @@ export default function App() {
 
     let cancelled = false;
     setSlashCommands([]);
-    setSlashCommandSearchStatus("Searching available slash commands…");
+    setSlashCommandSearchStatus("Loading registered slash commands…");
     const timer = window.setTimeout(async () => {
       const query = match[1].toLowerCase();
-      const normalize = (entries: any[]) => entries.map((entry: any) => {
-        const command = entry?.command && typeof entry.command === "object" ? entry.command : entry;
-        const applicationId = command?.application_id
-          ?? command?.application?.id
-          ?? command?.applicationId
-          ?? command?.app_id
-          ?? entry?.application_id
-          ?? entry?.application?.id
-          ?? entry?.data?.application_id;
-        return {
-          ...command,
-          application_id: typeof applicationId === "string" || typeof applicationId === "number"
-            ? String(applicationId)
-            : undefined,
-        };
-      }).filter((command: any) =>
-        typeof command?.name === "string"
-        && (typeof command?.id === "string" || typeof command?.id === "number")
-        && typeof command?.application_id === "string"
-        && command.name.toLowerCase().startsWith(query)
-        && (command.type === undefined || command.type === 1)
-      ).map((command: any) => ({ ...command, id: String(command.id) }));
+      const normalize = (entries: any[], applicationId: string) => entries
+        .filter((entry: any) => entry && typeof entry === "object")
+        .map((entry: any) => ({
+          ...entry,
+          id: typeof entry.id === "string" || typeof entry.id === "number" ? String(entry.id) : "",
+          application_id: applicationId,
+        }))
+        .filter((command: any) =>
+          !!command.id
+          && typeof command.name === "string"
+          && command.name.toLowerCase().startsWith(query)
+          && (command.type === undefined || command.type === 1)
+        );
 
       try {
-        const response = await invoke<any>("search_application_commands", {
-          channelId: selectedChannel.id,
-          query: match[1],
-        });
-        const payload = response?.data ?? response;
-        const candidates = Array.isArray(payload)
-          ? payload
-          : Array.isArray(payload?.application_commands)
-            ? payload.application_commands
-            : Array.isArray(payload?.applicationCommands)
-              ? payload.applicationCommands
-              : Array.isArray(payload?.commands)
-                ? payload.commands
-                : Array.isArray(payload?.results)
-                  ? payload.results
-                  : Array.isArray(payload?.data?.application_commands)
-                    ? payload.data.application_commands
-                    : Array.isArray(payload?.data?.applicationCommands)
-                      ? payload.data.applicationCommands
-                      : Array.isArray(payload?.data?.commands)
-                        ? payload.data.commands
-                        : Array.isArray(payload?.data?.results)
-                          ? payload.data.results
-                          : [];
-        const availableCommands = normalize(candidates);
-        if (cancelled) return;
+        // Registered-command endpoints require an application ID. The Developer Tools
+        // command browser records IDs that the user has explicitly inspected.
+        let applicationIds: string[] = [];
+        try {
+          const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
+          if (Array.isArray(saved)) {
+            applicationIds = [...new Set(saved.filter((id: unknown): id is string =>
+              typeof id === "string" && /^\d{15,22}$/.test(id)
+            ))].slice(0, 20);
+          }
+        } catch {
+          applicationIds = [];
+        }
 
-        // The channel search endpoint is the source of commands available in this channel.
-        // Supplement it with registered global/guild command lists for applications surfaced
-        // by that search, so autocomplete can use the newly supported fetch endpoints too.
-        setSlashCommands(availableCommands.slice(0, 15));
-        setSlashCommandSearchStatus(availableCommands.length ? "" : "No matching slash commands found.");
+        if (applicationIds.length === 0) {
+          if (!cancelled) {
+            setSlashCommands([]);
+            setSlashCommandSearchStatus("No application IDs saved. Open Settings → Developer Tools → Application Commands and fetch commands for the apps you want to autocomplete.");
+          }
+          return;
+        }
 
-        const applicationIds = [...new Set(availableCommands
-          .map((command: any) => command.application_id)
-          .filter((id: unknown): id is string => typeof id === "string" && /^\d{15,22}$/.test(id)))].slice(0, 4);
-        if (applicationIds.length === 0) return;
-
-        const registeredResults = await Promise.all(applicationIds.map(async applicationId => {
+        const results = await Promise.all(applicationIds.map(async applicationId => {
           const requests: Promise<any>[] = [
             invoke<any>("get_global_application_commands", {
               applicationId,
               withLocalizations: true,
-            }).catch(() => []),
+            }).then(value => ({ value })).catch(() => null),
           ];
           if (selectedChannel.guild_id) {
-            requests.push(invoke<any>("get_guild_application_commands", {
-              applicationId,
-              guildId: selectedChannel.guild_id,
-              withLocalizations: true,
-            }).catch(() => []));
+            requests.push(
+              invoke<any>("get_guild_application_commands", {
+                applicationId,
+                guildId: selectedChannel.guild_id,
+                withLocalizations: true,
+              }).then(value => ({ value })).catch(() => null)
+            );
           }
           return Promise.all(requests);
         }));
         if (cancelled) return;
 
-        const registeredCommands = registeredResults.flatMap(result => result.flatMap((value: any) => {
-          const data = value?.data ?? value;
-          return Array.isArray(data) ? data : Array.isArray(data?.application_commands) ? data.application_commands : [];
-        }));
-        const merged = new Map<string, any>();
-        // Keep channel-search records first; registered records fill in metadata or missing entries.
-        for (const command of normalize(registeredCommands)) {
-          merged.set(command.application_id + ":" + command.id, command);
+        const commands: any[] = [];
+        for (let index = 0; index < results.length; index++) {
+          const applicationId = applicationIds[index];
+          for (const result of results[index]) {
+            if (!result) continue;
+            const payload = result.value?.data ?? result.value;
+            const entries = Array.isArray(payload)
+              ? payload
+              : Array.isArray(payload?.application_commands)
+                ? payload.application_commands
+                : Array.isArray(payload?.commands)
+                  ? payload.commands
+                  : [];
+            commands.push(...normalize(entries, applicationId));
+          }
         }
-        for (const command of availableCommands) {
-          const key = command.application_id + ":" + command.id;
-          merged.set(key, { ...merged.get(key), ...command });
+
+        const unique = new Map<string, any>();
+        for (const command of commands) {
+          unique.set(command.application_id + ":" + command.id, command);
         }
-        const matching = [...merged.values()]
-          .filter((command: any) => command.name.toLowerCase().startsWith(query))
-          .slice(0, 15);
+        const matching = [...unique.values()].slice(0, 15);
         setSlashCommands(matching);
-        setSlashCommandSearchStatus(matching.length ? "" : "No matching slash commands found.");
+        setSlashCommandSearchStatus(matching.length ? "" : "No matching registered slash commands found for the saved applications.");
       } catch (error) {
         if (!cancelled) {
           setSlashCommands([]);
-          setSlashCommandSearchStatus("Slash command search failed: " + String(error));
-          console.debug("Slash command search unavailable", error);
+          setSlashCommandSearchStatus("Could not load registered slash commands: " + String(error));
+          console.debug("Registered slash command loading failed", error);
         }
       }
     }, 150);

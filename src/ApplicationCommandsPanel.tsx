@@ -50,6 +50,15 @@ export default function ApplicationCommandsPanel() {
         });
       }
       setResult(data);
+      if (mode !== "permissions") {
+        try {
+          const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
+          const ids = Array.isArray(saved) ? saved.filter((id: unknown): id is string => typeof id === "string") : [];
+          localStorage.setItem("voidcord:application-command-app-ids", JSON.stringify([...new Set([...ids, appId])].slice(-20)));
+        } catch {
+          localStorage.setItem("voidcord:application-command-app-ids", JSON.stringify([appId]));
+        }
+      }
     } catch (cause) {
       setError(typeof cause === "string" ? cause : cause instanceof Error ? cause.message : JSON.stringify(cause));
     } finally {
