@@ -6335,15 +6335,7 @@ function GuildIcon({ guild }: { guild: DiscordGuild }) {
   }
 
   return <img src={iconUrl} alt={guild.name} onError={() => setHasError(true)} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit" }} />;
-}                {(slashCommands.length > 0 || slashCommandSearchStatus) && /^\\/[^\\s]*$/.test(draft) && (
-                  <div className="slash-command-autocomplete" role="listbox" aria-label="Slash commands">
-                    {slashCommandSearchStatus && <div className="slash-command-search-status" role="status">{slashCommandSearchStatus}</div>}
-                    {slashCommands.map(command => <button type="button" role="option" key={command.application_id + ":" + command.id} onMouseDown={event => event.preventDefault()} onClick={() => {
-                      setSelectedSlashCommand(command); setDraft("/" + command.name + " "); setSlashCommands([]); setSlashCommandSearchStatus("");
-                      requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length); });
-                    }}><span className="slash-command-icon">/</span><span><strong>/{command.name}</strong><small>{command.description || "Application command"}</small></span></button>)}
-                  </div>
-                )}
+}
                 <label className="profile-status-label" htmlFor="presence-select">Set your status</label>
                 <select
                   id="presence-select"
