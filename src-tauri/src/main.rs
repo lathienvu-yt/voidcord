@@ -69,6 +69,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::set_token,
             commands::get_current_user,
+            commands::get_content_inventory,
             commands::get_guilds,
             commands::retry_captcha_request,
             commands::join_guild_invite,
