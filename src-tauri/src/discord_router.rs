@@ -18,6 +18,22 @@ const DISCORD_API: &str = "https://discord.com/api/v10";
 const DISCORD_GATEWAY: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 static CAPTCHA_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+fn redact_sensitive_query(path: &str) -> String {
+    let Some((route, query)) = path.split_once('?') else {
+        return path.to_owned();
+    };
+    let mut safe_query = Vec::new();
+    for parameter in query.split('&') {
+        let (key, _) = parameter.split_once('=').unwrap_or((parameter, ""));
+        if key == "refresh_token" {
+            safe_query.push(format!("{key}=[REDACTED]"));
+        } else {
+            safe_query.push(parameter.to_owned());
+        }
+    }
+    format!("{route}?{}", safe_query.join("&"))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CaptchaChallenge {
     pub request_id: String,
@@ -308,12 +324,20 @@ impl DiscordRouter {
         body: Option<Value>,
         captcha: Option<(String, Option<String>, Option<String>)>,
     ) -> Result<Value, DiscordError> {
-        log::debug!("Discord REST request: {} {}", method, path);
+        let log_path = redact_sensitive_query(&path);
+        log::debug!("Discord REST request: {} {}", method, log_path);
         let token = {
             let tokens = self.tokens.read().await;
             tokens.get(identity)?.clone()
         };
-        let mut request = self.client.request(method.clone(), format!("{DISCORD_API}/{path}"))
+        // Internal endpoints observed on API v9 can opt in with the "api-v9/" route prefix.
+        // Strip the marker before sending so it never becomes part of the URL path.
+        let (api_base, request_path) = if let Some(route) = path.strip_prefix("api-v9/") {
+            ("https://discord.com/api/v9", route)
+        } else {
+            (DISCORD_API, path.as_str())
+        };
+        let mut request = self.client.request(method.clone(), format!("{api_base}/{request_path}"))
             .header(header::AUTHORIZATION, token.0.as_ref());
         if let Some((captcha_key, rq_token, session_id)) = &captcha {
             request = request.header("X-Captcha-Key", captcha_key);
@@ -326,12 +350,12 @@ impl DiscordRouter {
         let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
-                log::warn!("Discord REST transport error: {} {} ({})", method, path, error);
+                log::warn!("Discord REST transport error: {} {} ({})", method, log_path, error);
                 return Err(DiscordError::from(error));
             }
         };
         let status = response.status();
-        log::debug!("Discord REST response: {} {} -> {}", method, path, status);
+        log::debug!("Discord REST response: {} {} -> {}", method, log_path, status);
         let captcha_headers = (
             response.headers().get("captcha-sitekey").and_then(|value| value.to_str().ok()).map(str::to_owned),
             response.headers().get("captcha-rqdata").and_then(|value| value.to_str().ok()).map(str::to_owned),
@@ -370,7 +394,7 @@ impl DiscordRouter {
                 let challenge = CaptchaChallenge { request_id, service, site_key, rq_data };
                 return Err(DiscordError::CaptchaRequired(serde_json::to_string(&challenge)?));
             }
-            log::warn!("Discord REST request rejected: {} {} -> {}", method, path, status);
+            log::warn!("Discord REST request rejected: {} {} -> {}", method, log_path, status);
             let body = serde_json::from_slice::<DiscordErrorBody>(&bytes)
                 .map(|e| format!("{} (Discord code {:?})", e.message.unwrap_or_default(), e.code))
                 .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned());

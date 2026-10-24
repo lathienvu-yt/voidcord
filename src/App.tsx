@@ -59,6 +59,65 @@ type VoiceHandshake = {
 };
 type AudioDevice = { id: string; name: string };
 type AudioDeviceList = { inputs: AudioDevice[]; outputs: AudioDevice[] };
+
+type ContentInventoryEntry = {
+  rank?: number;
+  content?: {
+    id?: string;
+    author_id?: string;
+    content_type?: number;
+    started_at?: string;
+    expires_at?: string;
+    extra?: Record<string, any>;
+    traits?: Array<{ type?: number; value?: unknown }>;
+  };
+};
+type ContentInventoryResponse = {
+  entries?: ContentInventoryEntry[];
+  unranked_game_entries?: ContentInventoryEntry[];
+  refresh_token?: string;
+};
+
+function contentInventoryTitle(entry: ContentInventoryEntry): string {
+  const extra = entry.content?.extra;
+  if (!extra || typeof extra !== "object") return "Discord activity";
+  switch (extra.type) {
+    case "played_game_extra":
+      return typeof extra.game_name === "string" ? extra.game_name : "Played a game";
+    case "launched_activity_extra":
+      return typeof extra.activity_name === "string" ? extra.activity_name : "Launched an activity";
+    case "top_artist_extra":
+      return typeof extra.artist?.name === "string" ? extra.artist.name : "Music activity";
+    default:
+      return "Discord activity";
+  }
+}
+
+function contentInventorySubtitle(entry: ContentInventoryEntry): string {
+  const extra = entry.content?.extra;
+  if (!extra || typeof extra !== "object") return "Activity details unavailable";
+  switch (extra.type) {
+    case "played_game_extra":
+      return typeof extra.platform === "string" ? `Played on ${extra.platform}` : "Game activity";
+    case "launched_activity_extra":
+      return "Launched activity";
+    case "top_artist_extra": {
+      const media = extra.media;
+      if (typeof media?.title === "string" && media.title) return media.title;
+      if (typeof media?.parent_title === "string" && media.parent_title) return media.parent_title;
+      return "Music activity";
+    }
+    default:
+      return "Activity details unavailable";
+  }
+}
+
+function contentInventoryTimestamp(entry: ContentInventoryEntry): string | null {
+  const value = entry.content?.started_at;
+  if (typeof value !== "string") return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
+}
 type GatewayVoiceState = {
   guild_id?: string | null;
   channel_id?: string | null;
@@ -851,6 +910,45 @@ export default function App() {
   const [friendUsername, setFriendUsername] = useState("");
   const [relationshipBusy, setRelationshipBusy] = useState<string | null>(null);
   const [friendSearchError, setFriendSearchError] = useState("");
+  const [activityEntries, setActivityEntries] = useState<ContentInventoryEntry[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState("");
+  const activityRefreshTokenRef = useRef<string | undefined>(undefined);
+
+  const loadActivityFeed = useCallback(async () => {
+    setActivityLoading(true);
+    setActivityError("");
+    try {
+      const response = await tauriInvoke<ContentInventoryResponse>("get_content_inventory", {
+        refreshToken: activityRefreshTokenRef.current ?? null,
+      });
+      if (typeof response?.refresh_token === "string" && response.refresh_token.length > 0) {
+        activityRefreshTokenRef.current = response.refresh_token;
+      }
+      const combined = [
+        ...(Array.isArray(response?.entries) ? response.entries : []),
+        ...(Array.isArray(response?.unranked_game_entries) ? response.unranked_game_entries : []),
+      ];
+      const seen = new Set<string>();
+      setActivityEntries(combined.filter(entry => {
+        const id = entry.content?.id;
+        if (typeof id !== "string" || !id) return true;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      }));
+    } catch (error) {
+      setActivityError(String(error).replace(/^Error: /, ""));
+    } finally {
+      setActivityLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (me && isDmView && activeDmTab === "friends" && friendView !== "add") {
+      void loadActivityFeed();
+    }
+  }, [me?.id, isDmView, activeDmTab, friendView, loadActivityFeed]);
 
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
   const [unreadByChannel, setUnreadByChannel] = useState<Record<string, number>>(() => {
@@ -4252,47 +4350,99 @@ export default function App() {
                     </button>
                   </form>
                 ) : (
-                  <>
-                    <label className="directory-search">
-                      <Search size={16} />
-                      <input
-                        ref={directorySearchRef}
-                        placeholder="Search friends and DMs"
-                        value={directoryQuery}
-                        onChange={event => setDirectoryQuery(event.target.value)}
-                      />
-                      {directoryQuery && <button type="button" aria-label="Clear search" onClick={() => setDirectoryQuery("")}><X size={14} /></button>}
-                    </label>
-                    <div className="directory-list-heading">{friendView === "online" ? "ONLINE" : "ALL FRIENDS"} — {visibleFriends.length}</div>
-                    <div className="directory-people">
-                      {visibleFriends.map(relationship => {
-                        const friend = relationship.user;
-                        const status = memberPresences[friend.id] || "offline";
-                        return (
-                          <div className="directory-person" key={friend.id}>
-                            <button className="directory-person-main" onContextMenu={event => openContextMenu(event, { kind: "user", user: friend, source: "member" })} onClick={() => void handleOpenMemberProfile(friend)}>
-                              <span className="directory-avatar-wrap">
-                                <img src={avatarUrl(friend, 48)} alt="" />
-                                <AvatarDecorationOverlay user={friend} className="directory-avatar-decoration" />
-                                <span className={`status-dot status-${status}`} />
-                              </span>
-                              <span className="directory-person-name">
-                                <strong>{displayName(friend)}</strong>
-                                <small>{friend.username}{status !== "offline" ? ` · ${status}` : ""}</small>
-                              </span>
-                            </button>
-                            <div className="directory-person-actions">
-                              <button title="Message" onClick={() => void startDirectMessage(friend)}><MessageSquare size={16} /></button>
-                              <button title="Remove friend" disabled={relationshipBusy === friend.id} onClick={() => void changeRelationship(friend.id, "remove")}><X size={16} /></button>
+                  <div className="friends-content-layout">
+                    <section className="friends-directory-main">
+                      <label className="directory-search">
+                        <Search size={16} />
+                        <input
+                          ref={directorySearchRef}
+                          placeholder="Search friends and DMs"
+                          value={directoryQuery}
+                          onChange={event => setDirectoryQuery(event.target.value)}
+                        />
+                        {directoryQuery && <button type="button" aria-label="Clear search" onClick={() => setDirectoryQuery("")}><X size={14} /></button>}
+                      </label>
+                      <div className="directory-list-heading">{friendView === "online" ? "ONLINE" : "ALL FRIENDS"} — {visibleFriends.length}</div>
+                      <div className="directory-people">
+                        {visibleFriends.map(relationship => {
+                          const friend = relationship.user;
+                          const status = memberPresences[friend.id] || "offline";
+                          return (
+                            <div className="directory-person" key={friend.id}>
+                              <button className="directory-person-main" onContextMenu={event => openContextMenu(event, { kind: "user", user: friend, source: "member" })} onClick={() => void handleOpenMemberProfile(friend)}>
+                                <span className="directory-avatar-wrap">
+                                  <img src={avatarUrl(friend, 48)} alt="" />
+                                  <AvatarDecorationOverlay user={friend} className="directory-avatar-decoration" />
+                                  <span className={`status-dot status-${status}`} />
+                                </span>
+                                <span className="directory-person-name">
+                                  <strong>{displayName(friend)}</strong>
+                                  <small>{friend.username}{status !== "offline" ? ` · ${status}` : ""}</small>
+                                </span>
+                              </button>
+                              <div className="directory-person-actions">
+                                <button title="Message" onClick={() => void startDirectMessage(friend)}><MessageSquare size={16} /></button>
+                                <button title="Remove friend" disabled={relationshipBusy === friend.id} onClick={() => void changeRelationship(friend.id, "remove")}><X size={16} /></button>
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                      {visibleFriends.length === 0 && (
-                        <div className="directory-empty">{directoryQuery ? "No friends match that search." : "No friends are online right now."}</div>
+                          );
+                        })}
+                        {visibleFriends.length === 0 && (
+                          <div className="directory-empty">{directoryQuery ? "No friends match that search." : friendView === "online" ? "No friends are online right now." : "No friends to show yet."}</div>
+                        )}
+                      </div>
+                    </section>
+                    <aside className="activity-feed-panel" aria-label="Friends activity feed">
+                      <div className="activity-feed-header">
+                        <div>
+                          <h3>Activity</h3>
+                          <p>Recent games, activities and music</p>
+                        </div>
+                        <button type="button" title="Refresh activity" aria-label="Refresh activity" disabled={activityLoading} onClick={() => void loadActivityFeed()}>
+                          <RotateCcw size={14} className={activityLoading ? "spinning" : ""} />
+                        </button>
+                      </div>
+                      {activityError && (
+                        <div className="activity-feed-message activity-feed-error">
+                          <span>Couldn’t load activity.</span>
+                          <small>{activityError}</small>
+                          <button type="button" onClick={() => void loadActivityFeed()}>Try again</button>
+                        </div>
                       )}
-                    </div>
-                  </>
+                      {!activityError && activityLoading && activityEntries.length === 0 && (
+                        <div className="activity-feed-message"><Loader2 size={16} className="spinning" /> Loading activity…</div>
+                      )}
+                      {!activityError && !activityLoading && activityEntries.length === 0 && (
+                        <div className="activity-feed-message">No activity entries were returned.</div>
+                      )}
+                      <div className="activity-feed-list">
+                        {activityEntries.map((entry, index) => {
+                          const content = entry.content;
+                          const author = content?.author_id === me?.id
+                            ? "You"
+                            : friendRelationships.find(relationship => relationship.user.id === content?.author_id)?.user;
+                          const title = contentInventoryTitle(entry);
+                          const subtitle = contentInventorySubtitle(entry);
+                          const timestamp = contentInventoryTimestamp(entry);
+                          const kind = content?.extra?.type === "played_game_extra" ? "game"
+                            : content?.extra?.type === "launched_activity_extra" ? "launched"
+                            : content?.extra?.type === "top_artist_extra" ? "music" : "other";
+                          return (
+                            <article className="activity-feed-item" key={content?.id || `activity-${index}`}>
+                              <span className={`activity-feed-icon activity-feed-icon-${kind}`}>
+                                {kind === "game" ? <Gamepad2 size={17} /> : kind === "music" ? <Headphones size={17} /> : <Sparkles size={17} />}
+                              </span>
+                              <div className="activity-feed-copy">
+                                <strong title={title}>{title}</strong>
+                                <span>{subtitle}</span>
+                                <small>{typeof author === "string" ? author : author ? displayName(author) : "Friend activity"}{timestamp ? ` · ${timestamp}` : ""}</small>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </aside>
+                  </div>
                 )}
               </>
             ) : activeDmTab === "friend-requests" ? (
