@@ -343,6 +343,8 @@ type AppPreferences = {
   compactMessages: boolean;
   reduceMotion: boolean;
   autoplayVideos: boolean;
+  showSystemNotifications: boolean;
+  systemNotificationDuration: number;
   channelSidebarWidth: number;
   chatFontScale: number;
   serverOrder: string[];
@@ -426,7 +428,7 @@ function loadHCaptchaScript(): Promise<void> {
 }
 
 function readPreferences(): AppPreferences {
-  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {} };
+  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false, showSystemNotifications: true, systemNotificationDuration: 4200, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {} };
   try {
     const saved = JSON.parse(localStorage.getItem("voidcord:preferences") || "{}");
     return {
@@ -434,6 +436,8 @@ function readPreferences(): AppPreferences {
       compactMessages: typeof saved.compactMessages === "boolean" ? saved.compactMessages : defaults.compactMessages,
       reduceMotion: typeof saved.reduceMotion === "boolean" ? saved.reduceMotion : defaults.reduceMotion,
       autoplayVideos: typeof saved.autoplayVideos === "boolean" ? saved.autoplayVideos : defaults.autoplayVideos,
+      showSystemNotifications: typeof saved.showSystemNotifications === "boolean" ? saved.showSystemNotifications : defaults.showSystemNotifications,
+      systemNotificationDuration: Number.isFinite(saved.systemNotificationDuration) ? Math.max(2000, Math.min(10000, saved.systemNotificationDuration)) : defaults.systemNotificationDuration,
       channelSidebarWidth: Number.isFinite(saved.channelSidebarWidth) ? Math.max(180, Math.min(360, saved.channelSidebarWidth)) : defaults.channelSidebarWidth,
       chatFontScale: Number.isFinite(saved.chatFontScale) ? Math.max(85, Math.min(125, saved.chatFontScale)) : defaults.chatFontScale,
       serverOrder: Array.isArray(saved.serverOrder) ? saved.serverOrder.filter((id: unknown): id is string => typeof id === "string") : [],
@@ -901,7 +905,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [protoSettingsOpen, setProtoSettingsOpen] = useState(false);
   const [settingsTheme, setSettingsTheme] = useState<"dark" | "light">("dark");
-  const [settingsTab, setSettingsTab] = useState<"account" | "themes">("account");
+  const [settingsTab, setSettingsTab] = useState<"account" | "themes" | "notifications">("account");
   const [preferences, setPreferences] = useState<AppPreferences>(readPreferences);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [mediaViewer, setMediaViewer] = useState<MediaViewerState | null>(null);
@@ -1030,9 +1034,10 @@ export default function App() {
     setToast({ id: ++notificationSequence.current, message: msg, duration: ms, exiting: false });
   }, []);
 
-  const notifySystem = useCallback((msg: string, ms = 4200) => {
+  const notifySystem = useCallback((msg: string, ms = preferences.systemNotificationDuration) => {
+    if (!preferences.showSystemNotifications) return;
     setSystemNotice({ id: ++notificationSequence.current, message: msg, duration: ms, exiting: false });
-  }, []);
+  }, [preferences.showSystemNotifications, preferences.systemNotificationDuration]);
 
   useEffect(() => {
     const match = draft.match(/^\/([^\s]*)$/);
@@ -5263,7 +5268,8 @@ export default function App() {
             <div className="feature-modal-tabs">
               <button type="button" className={settingsTab === "account" ? "active" : ""} onClick={() => setSettingsTab("account")}>Preferences</button>
               <button type="button" className={settingsTab === "themes" ? "active" : ""} onClick={() => setSettingsTab("themes")}>Appearance</button>
-              <button type="button" onClick={() => setProtoSettingsOpen(true)}>Settings scopes</button>
+              <button type="button" className={settingsTab === "notifications" ? "active" : ""} onClick={() => setSettingsTab("notifications")}>Notifications</button>
+              <button type="button" onClick={() => setProtoSettingsOpen(true)}>Discord settings</button>
             </div>
             {settingsTab === "account" ? (
               <div className="settings-options">
@@ -5282,7 +5288,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-            ) : (
+            ) : settingsTab === "themes" ? (
               <div className="settings-options">
                 <label className="feature-field"><span>Accent color</span><select value={preferences.accent} onChange={event => setPreferences(current => ({ ...current, accent: event.target.value as AppPreferences["accent"] }))}>
                   <option value="blurple">Blurple</option><option value="violet">Violet</option><option value="emerald">Emerald</option>
@@ -5308,6 +5314,14 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+              </div>
+            ) : (
+              <div className="settings-options">
+                <h3 className="settings-section-title">In-app notifications</h3>
+                <p className="settings-help">Control VoidCord's connection and status banners. This is a local client preference and does not change Discord push notifications.</p>
+                <label className="settings-option"><span><strong>Show status notifications</strong><small>Show banners for connection changes and other client status events.</small></span><input type="checkbox" checked={preferences.showSystemNotifications} onChange={event => setPreferences(current => ({ ...current, showSystemNotifications: event.target.checked }))} /></label>
+                <label className="feature-field"><span>Banner duration · {(preferences.systemNotificationDuration / 1000).toFixed(1)} seconds</span><input type="range" min="2000" max="10000" step="500" value={preferences.systemNotificationDuration} onChange={event => setPreferences(current => ({ ...current, systemNotificationDuration: Number(event.target.value) }))} /></label>
+                <p className="settings-help">Changes are saved locally and apply immediately.</p>
               </div>
             )}
             <div className="feature-modal-actions"><button type="button" onClick={() => setSettingsOpen(false)}>Done</button></div>
