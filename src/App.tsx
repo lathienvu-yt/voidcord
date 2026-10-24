@@ -878,6 +878,11 @@ export default function App() {
   const [friendUsername, setFriendUsername] = useState("");
   const [relationshipBusy, setRelationshipBusy] = useState<string | null>(null);
   const [friendSearchError, setFriendSearchError] = useState("");
+  const [activityEntries, setActivityEntries] = useState<ContentInventoryEntry[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState("");
+  const activityRefreshTokenRef = useRef<string | undefined>(undefined);
+
   const loadActivityFeed = useCallback(async () => {
     setActivityLoading(true);
     setActivityError("");
@@ -893,7 +898,7 @@ export default function App() {
         ...(Array.isArray(response?.unranked_game_entries) ? response.unranked_game_entries : []),
       ];
       const seen = new Set<string>();
-      setActivityEntries(combined.filter((entry, index) => {
+      setActivityEntries(combined.filter(entry => {
         const id = entry.content?.id;
         if (typeof id !== "string" || !id) return true;
         if (seen.has(id)) return false;
@@ -912,10 +917,6 @@ export default function App() {
       void loadActivityFeed();
     }
   }, [me?.id, isDmView, activeDmTab, friendView, loadActivityFeed]);
-  const [activityEntries, setActivityEntries] = useState<ContentInventoryEntry[]>([]);
-  const [activityLoading, setActivityLoading] = useState(false);
-  const [activityError, setActivityError] = useState("");
-  const activityRefreshTokenRef = useRef<string | undefined>(undefined);
 
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
   const [unreadByChannel, setUnreadByChannel] = useState<Record<string, number>>(() => {
