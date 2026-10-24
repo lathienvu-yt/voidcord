@@ -301,21 +301,31 @@ const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
 };
 
 function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
-  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\S+)/g)]
-    .map(match => (match[1] ?? match[2] ?? match[3] ?? "").replace(/\\(["\\])/g, "$1"));
-  let options = Array.isArray(command?.options) ? command.options : [];
-  if (options.some((option: any) => option.type === 1 || option.type === 2)) {
-    const selectedName = tokens[0];
-    const selected = options.find((option: any) => option.name === selectedName && (option.type === 1 || option.type === 2));
-    if (!selected) throw new Error("Choose a subcommand: " + options.filter((option: any) => option.type === 1 || option.type === 2).map((option: any) => option.name).join(", "));
-    tokens.shift();
+  const tokens = [...rawArguments.matchAll(/"([^"\\]*(?:\\\\.[^"\\]*)*)"|'([^']*)'|(\\S+)/g)]
+    .map(match => (match[1] ?? match[2] ?? match[3] ?? "").replace(/\\\\(["\\\\])/g, "$1"));
+
+  const rootOptions: any[] = Array.isArray(command?.options) ? command.options : [];
+  let options = rootOptions;
+  let selectedSubcommand: any | null = null;
+  let selectedGroup: any | null = null;
+
+  if (rootOptions.some((option: any) => option.type === 1 || option.type === 2)) {
+    const selectedName = tokens.shift();
+    const selected = rootOptions.find((option: any) => option.name === selectedName && (option.type === 1 || option.type === 2));
+    if (!selected) {
+      throw new Error("Choose a subcommand: " + rootOptions.filter((option: any) => option.type === 1 || option.type === 2).map((option: any) => option.name).join(", "));
+    }
+
     if (selected.type === 2) {
-      const group = selected;
+      selectedGroup = selected;
       const subcommandName = tokens.shift();
-      const subcommand = (group.options || []).find((option: any) => option.name === subcommandName && option.type === 1);
-      if (!subcommand) throw new Error("Choose a subcommand from " + group.name + ": " + (group.options || []).map((option: any) => option.name).join(", "));
-      options = Array.isArray(subcommand.options) ? subcommand.options : [];
+      selectedSubcommand = (selected.options || []).find((option: any) => option.name === subcommandName && option.type === 1);
+      if (!selectedSubcommand) {
+        throw new Error("Choose a subcommand from " + selected.name + ": " + (selected.options || []).map((option: any) => option.name).join(", "));
+      }
+      options = Array.isArray(selectedSubcommand.options) ? selectedSubcommand.options : [];
     } else {
+      selectedSubcommand = selected;
       options = Array.isArray(selected.options) ? selected.options : [];
     }
   }
@@ -357,7 +367,7 @@ function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
       if (!/^(true|false)$/i.test(token)) throw new Error(option.name + " must be true or false.");
       value = token.toLowerCase() === "true";
     } else if ([6, 7, 8, 9].includes(option.type)) {
-      const match = token.match(/\d{15,22}/);
+      const match = token.match(/\\d{15,22}/);
       if (!match) throw new Error(option.name + " needs a Discord mention or ID.");
       value = match[0];
     } else if (option.type === 11) {
@@ -366,15 +376,24 @@ function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
 
     if (Array.isArray(option.choices) && option.choices.length > 0) {
       const choice = option.choices.find((candidate: any) => String(candidate.value) === String(value));
-      if (!choice) {
-        throw new Error(option.name + " must be one of: " + option.choices.map((candidate: any) => candidate.name).join(", "));
-      }
-      // Keep the original JSON type: integer/number choices must not be sent as strings.
+      if (!choice) throw new Error(option.name + " must be one of: " + option.choices.map((candidate: any) => candidate.name).join(", "));
       value = choice.value;
     }
     result.push({ name: option.name, type: option.type, value });
   }
-  if (positionalIndex < positional.length) throw new Error("Too many positional arguments for /" + command.name + ". Use --option value for named parameters.");
+  if (positionalIndex < positional.length) {
+    throw new Error("Too many positional arguments for /" + command.name + ". Use --option value for named parameters.");
+  }
+
+  // Discord expects a subcommand selection as a nested option object, even when it has no arguments.
+  // Sending its children as top-level options causes HTTP 400 Invalid Form Body (50035).
+  if (selectedSubcommand) {
+    const nestedSubcommand = { name: selectedSubcommand.name, type: 1, options: result };
+    if (selectedGroup) {
+      return [{ name: selectedGroup.name, type: 2, options: [nestedSubcommand] }];
+    }
+    return [nestedSubcommand];
+  }
   return result;
 }
 function canForwardMessage(message: DiscordMessage): boolean {
