@@ -121,6 +121,25 @@ pub async fn get_current_user(state: State<'_, AppState>) -> Result<Value, Strin
         .map_err(map_err)
 }
 
+/// Fetch Discord's client-internal content inventory for the current user's activity feed.
+/// The optional refresh token is kept in the frontend session and is never logged.
+#[tauri::command]
+pub async fn get_content_inventory(
+    refresh_token: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let mut path = String::from("content-inventory/users/@me?for_game_profile=false&feature=inbox");
+    if let Some(token) = refresh_token.filter(|value| !value.is_empty()) {
+        path.push_str("&refresh_token=");
+        path.push_str(&encode_query_component(&token));
+    }
+    state
+        .router
+        .rest(AccountIdentity::ReadOnly, Method::GET, &path, None)
+        .await
+        .map_err(map_err)
+}
+
 /// Fetch all guilds the current user is a member of.
 #[tauri::command]
 pub async fn get_guilds(state: State<'_, AppState>) -> Result<Value, String> {
