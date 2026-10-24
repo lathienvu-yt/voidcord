@@ -89,20 +89,20 @@ pub async fn save_client_settings(
     let required_data_version = extract_data_version(&fields)
         .unwrap_or(changes.required_data_version);
 
-    let mut has_changes = false;
+    let mut changed_scopes = Vec::new();
     if let Some(scope) = changes.appearance {
         apply_scope(&mut fields, 13, vec![
             (2, scope.developer_mode, false),
             (15, scope.dark_sidebar, false),
         ])?;
-        has_changes = true;
+        changed_scopes.push(13);
     }
     if let Some(scope) = changes.privacy {
         apply_scope(&mut fields, 8, vec![
             (10, scope.contact_sync_enabled, true),
             (22, scope.hide_legacy_username, true),
         ])?;
-        has_changes = true;
+        changed_scopes.push(8);
     }
     if let Some(scope) = changes.text_and_images {
         apply_scope(&mut fields, 6, vec![
@@ -112,20 +112,22 @@ pub async fn save_client_settings(
             (12, scope.render_embeds, true),
             (21, scope.convert_emoticons, true),
         ])?;
-        has_changes = true;
+        changed_scopes.push(6);
     }
     if let Some(scope) = changes.clips {
         apply_scope(&mut fields, 19, vec![
             (1, scope.allow_voice_recording, true),
         ])?;
-        has_changes = true;
+        changed_scopes.push(19);
     }
-    if !has_changes {
+    if changed_scopes.is_empty() {
         return Err("No verified settings fields were provided".to_owned());
     }
 
+    // Send only the top-level scopes actually changed. Each included scope is
+    // complete, while unrelated scopes remain omitted to avoid needless writes.
     let mut wire = Vec::new();
-    for field in fields {
+    for field in fields.into_iter().filter(|field| changed_scopes.contains(&(field.number as u32))) {
         wire.extend_from_slice(&field.raw);
     }
     let envelope = SettingsProtoEnvelope {
