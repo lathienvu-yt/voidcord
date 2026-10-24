@@ -330,7 +330,14 @@ impl DiscordRouter {
             let tokens = self.tokens.read().await;
             tokens.get(identity)?.clone()
         };
-        let mut request = self.client.request(method.clone(), format!("{DISCORD_API}/{path}"))
+        // Internal endpoints observed on API v9 can opt in with the "api-v9/" route prefix.
+        // Strip the marker before sending so it never becomes part of the URL path.
+        let (api_base, request_path) = if let Some(route) = path.strip_prefix("api-v9/") {
+            ("https://discord.com/api/v9", route)
+        } else {
+            (DISCORD_API, path.as_str())
+        };
+        let mut request = self.client.request(method.clone(), format!("{api_base}/{request_path}"))
             .header(header::AUTHORIZATION, token.0.as_ref());
         if let Some((captcha_key, rq_token, session_id)) = &captcha {
             request = request.header("X-Captcha-Key", captcha_key);
