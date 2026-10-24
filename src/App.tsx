@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 
 import {
-  avatarDecorationUrl, avatarUrl, bannerUrl, displayName, formatTimestamp, guildIconUrl, primaryGuildBadgeUrl,
+  avatarDecorationUrl, avatarUrl, bannerUrl, displayName, formatDiscriminator, isVerifiedBot, formatTimestamp, guildIconUrl, primaryGuildBadgeUrl,
   DiscordChannel, DiscordGuild, DiscordMessage, DiscordReaction, DiscordRelationship, DiscordUser,
   CHANNEL_TYPE_CATEGORY, CHANNEL_TYPE_DM, CHANNEL_TYPE_GROUP_DM, CHANNEL_TYPE_TEXT, CHANNEL_TYPE_VOICE,
   CHANNEL_TYPE_ANNOUNCEMENT, CHANNEL_TYPE_STAGE,
@@ -866,7 +866,7 @@ function AccountSwitcher({
             return (
               <div className={`account-switcher-row ${current ? "current" : ""}`} key={account.user.id}>
                 <img src={avatarUrl(account.user, 48)} alt="" />
-                <div className="account-switcher-name"><strong>{displayName(account.user)}</strong><small>@{account.user.username}{current ? " · Current" : ""}</small></div>
+                <div className="account-switcher-name"><strong>{displayName(account.user)}</strong><small>@{account.user.username}{formatDiscriminator(account.user)}{current ? " · Current" : ""}</small></div>
                 {current
                   ? <span className="account-current-badge">Current</span>
                   : <>
@@ -1113,6 +1113,7 @@ export default function App() {
   const [forwardBusy, setForwardBusy] = useState(false);
 
   const listRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const directorySearchRef = useRef<HTMLInputElement>(null);
   const channelLoadRequest = useRef(0);
@@ -1803,7 +1804,16 @@ export default function App() {
     requestAnimationFrame(() => {
       if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
     });
+    setTimeout(() => {
+      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+    }, 50);
   }, []);
+
+  useEffect(() => {
+    if (isNearBottomRef.current) {
+      scrollToBottom();
+    }
+  }, [messages.length, scrollToBottom]);
 
   useEffect(() => {
     const up = () => {
@@ -2714,8 +2724,19 @@ export default function App() {
     setCacheReadyChannel(null);
     setDraftReadyChannel(null);
     if (permissions?.canView === false) {
-      setMsgLoading(false);
       setKnownLockedChannels(previous => new Set(previous).add(channel.id));
+      const cachedMessages = await readCachedMessages(channel.id).catch(() => undefined);
+      if (requestId !== channelLoadRequest.current) return;
+      if (cachedMessages && cachedMessages.length > 0) {
+        messageHistoryRef.current[channel.id] = cachedMessages;
+        setMessages(cachedMessages);
+        setOfflineCache(true);
+        setMsgLoading(false);
+        requestAnimationFrame(() => scrollToBottom());
+        return;
+      }
+      setMessages([]);
+      setMsgLoading(false);
       return;
     }
     setKnownLockedChannels(previous => {
@@ -3415,6 +3436,27 @@ export default function App() {
     if (event.key === "Escape" && mentionQuery) {
       setMentionCaret(0);
       return;
+    }
+    if (slashCommands.length > 0 && /^\/[^\s]*$/.test(draft)) {
+      if (event.key === " " || event.key === "Tab" || (event.key === "Enter" && !selectedSlashCommand)) {
+        const query = draft.slice(1).toLowerCase();
+        const cmd = slashCommands.find(c => c.name.toLowerCase() === query)
+          || slashCommands.find(c => c.name.toLowerCase().startsWith(query))
+          || slashCommands[0];
+        if (cmd) {
+          event.preventDefault();
+          setSelectedSlashCommand(cmd);
+          const nextDraft = "/" + cmd.name + " ";
+          setDraft(nextDraft);
+          setSlashCommands([]);
+          setSlashCommandSearchStatus("");
+          requestAnimationFrame(() => {
+            inputRef.current?.focus();
+            inputRef.current?.setSelectionRange(nextDraft.length, nextDraft.length);
+          });
+          return;
+        }
+      }
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -4239,7 +4281,7 @@ export default function App() {
                 ) : (
                   <>
                     <strong>{displayName(profileUser)}</strong>
-                    <span className="profile-popover-handle">@{profileUser.username}</span>
+                    <span className="profile-popover-handle">@{profileUser.username}{formatDiscriminator(profileUser)}</span>
                     {userProfile?.badges?.length > 0 && (
                       <div className="profile-popover-badges">
                         {userProfile.badges.map((badge: any) => (
@@ -4666,7 +4708,10 @@ export default function App() {
           </div>
 
           <div className={`message-scroll ${selectedVoiceChannel ? "voice-channel-scroll" : ""}`} ref={listRef} onScroll={event => {
-            if (event.currentTarget.scrollTop <= 72) void loadOlderMessages();
+            const el = event.currentTarget;
+            if (el.scrollTop <= 72) void loadOlderMessages();
+            const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+            isNearBottomRef.current = dist <= 250;
           }}>
             {selectedVoiceChannel && (
               <section className="voice-stage-panel" aria-live="polite">
@@ -4802,7 +4847,7 @@ export default function App() {
               </div>
             )}
 
-            {!msgLoading && channelAccess === "MISSING_ACCESS" && (
+            {!msgLoading && channelAccess === "MISSING_ACCESS" && messages.length === 0 && (
               <div className="locked-channel-screen">
                 <div className="locked-channel-lock">🔒</div>
                 <h2>This is a hidden text channel</h2>
@@ -4831,6 +4876,15 @@ export default function App() {
               </div>
             )}
 
+            {!msgLoading && channelAccess === "MISSING_ACCESS" && messages.length > 0 && (
+              <div className="locked-channel-cache-banner">
+                <LockKeyhole size={18} />
+                <div>
+                  <strong>Locked Channel — Cached Archive</strong>
+                  <div>Live messages are hidden due to missing channel permissions, but <strong>{messages.length}</strong> cached message{messages.length === 1 ? "" : "s"} were loaded from offline storage.</div>
+                </div>
+              </div>
+            )}
             <div className="message-bottom-spacer" />
             {!msgLoading && groups.map((group, gi) => {
               const first = group[0];
@@ -4890,12 +4944,12 @@ export default function App() {
                             >
                               {displayName(m.author)}
                             </button>
-                            {m.author.bot && <span className="bot-tag">BOT</span>}
+                            <BotTag user={m.author} />
                             <span className="msg-time">{formatTimestamp(m.timestamp)}</span>
                             {m.edited_timestamp && <span className="msg-time">(edited)</span>}
                             {m.deleted_at && <span className="deleted-message-label">DELETED</span>}
                           </div>
-                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} />
+                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
                         </div>
                         <MsgActions message={m} onReact={emoji => void toggleMessageReaction(selectedChannel!.id, m, emoji)} />
                       </div>
@@ -4904,7 +4958,7 @@ export default function App() {
                         <span className="compact-ts">{formatTimestamp(m.timestamp)}</span>
                         <div className="msg-body">
                           {m.deleted_at && <span className="deleted-message-label">DELETED</span>}
-                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} />
+                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
                         </div>
                         <MsgActions message={m} onReact={emoji => void toggleMessageReaction(selectedChannel!.id, m, emoji)} />
                       </div>
@@ -4938,7 +4992,7 @@ export default function App() {
             <div className={`composer-box ${editingMessageId ? "editing-message" : ""} ${!canSend || officialDiscordDm || channelAccess === "MISSING_ACCESS" ? "composer-readonly" : ""}`}>
                 {officialDiscordDm && <span className="composer-readonly-hint">Official Discord messages are read-only</span>}
                 {!officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
-                {channelAccess === "MISSING_ACCESS" && <span className="composer-readonly-hint">You don’t have access to this channel</span>}
+                {channelAccess === "MISSING_ACCESS" && <span className="composer-readonly-hint">{messages.length > 0 ? "Locked channel · Viewing offline cached messages (read-only)" : "You don’t have access to this channel"}</span>}
                 {editingMessageId && (
                   <div className="message-editing-indicator">
                     <span>Editing message</span>
@@ -5134,7 +5188,7 @@ export default function App() {
                       <span className={`status-dot status-${memberPresences[dmUser.id] || "offline"}`} />
                     </span>
                     <strong>{displayName(dmProfileUser)}</strong>
-                    <small>@{dmProfileUser.username}</small>
+                    <small>@{dmProfileUser.username}{formatDiscriminator(dmProfileUser)}</small>
                   </button>
                   {memberCustomStatuses[dmUser.id] && (
                     <div className="dm-profile-custom-status">{memberCustomStatuses[dmUser.id]}</div>
@@ -5187,8 +5241,9 @@ export default function App() {
                         </div>
                         <div className="member-info">
                           <strong style={{ color: userRoleColor || undefined }}>{name}</strong>
-                          {userObj.bot && <span className="bot-tag" style={{ fontSize: 9, marginLeft: 4 }}>BOT</span>}
-                          <small className="member-subline">{userObj.username}<PlatformIndicators platforms={memberPlatforms[userObj.id] || []} /></small>
+                          {formatDiscriminator(userObj) && <span className="author-discriminator" style={{ marginLeft: 3 }}>{formatDiscriminator(userObj)}</span>}
+                          <BotTag user={userObj} style={{ fontSize: 9, marginLeft: 4 }} />
+                          <small className="member-subline">{userObj.username}{formatDiscriminator(userObj)}<PlatformIndicators platforms={memberPlatforms[userObj.id] || []} /></small>
                         </div>
                       </div>
                     );
@@ -5237,8 +5292,8 @@ export default function App() {
             {fullProfileOpen ? (
               <div className="profile-full-body">
                 <button className="profile-back-button" onClick={() => setFullProfileOpen(false)}>← Back to profile card</button>
-                <h2 style={{ color: selectedProfileRoleColor }}>{displayName(selectedMemberProfile)}</h2>
-                <span className="profile-handle">@{selectedMemberProfile.username}</span>
+                <h2 style={{ color: selectedProfileRoleColor }}>{displayName(selectedMemberProfile)}<BotTag user={selectedMemberProfile} /></h2>
+                <span className="profile-handle">@{selectedMemberProfile.username}{formatDiscriminator(selectedMemberProfile)}</span>
                 {memberProfileData?.user_profile?.pronouns && <span className="profile-pronouns">{memberProfileData.user_profile.pronouns}</span>}
                 <h3>About me</h3>
                 <p className="profile-full-bio">{selectedProfileBio || "This user hasn't added a bio yet."}</p>
@@ -5273,9 +5328,9 @@ export default function App() {
               ) : (
                 <>
                   <div className="profile-identity">
-                    <h3 className="profile-display-name" style={{ color: selectedProfileRoleColor }}>{displayName(selectedMemberProfile)}</h3>
+                    <h3 className="profile-display-name" style={{ color: selectedProfileRoleColor }}>{displayName(selectedMemberProfile)}<BotTag user={selectedMemberProfile} /></h3>
                     <div className="profile-handle-row">
-                      <span className="profile-handle">{selectedMemberProfile.username}</span>
+                      <span className="profile-handle">{selectedMemberProfile.username}{formatDiscriminator(selectedMemberProfile)}</span>
                       {memberProfileData?.user_profile?.pronouns && (
                         <>
                           <span className="profile-bullet">•</span>
@@ -6039,6 +6094,48 @@ function ChannelRow({
   );
 }
 
+function BotTag({
+  user,
+  className,
+  style,
+}: {
+  user?: { bot?: boolean; flags?: number; public_flags?: number } | null;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  if (!user?.bot) return null;
+  const verified = isVerifiedBot(user);
+
+  return (
+    <span
+      className={`bot-tag ${verified ? "verified" : ""} ${className || ""}`}
+      style={style}
+      title={verified ? "Verified Bot" : "Bot"}
+    >
+      {verified && (
+        <svg
+          className="bot-verified-check"
+          width="12"
+          height="12"
+          viewBox="0 0 16 16"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-label="Verified Bot"
+        >
+          <path
+            d="M13.5 4.5L6.5 11.5L3 8"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+      <span className="bot-tag-text">BOT</span>
+    </span>
+  );
+}
+
 function MessageContent({
   message: m,
   channels,
@@ -6047,6 +6144,10 @@ function MessageContent({
   onMediaOpen,
   onReactionToggle,
   autoplayVideos = false,
+  sessionId,
+  channelId,
+  guildId,
+  onNotify,
 }: {
   message: DiscordMessage;
   channels?: DiscordChannel[];
@@ -6055,6 +6156,10 @@ function MessageContent({
   onMediaOpen?: (url: string, kind: "image" | "video", name?: string) => void;
   onReactionToggle?: (message: DiscordMessage, emoji: string) => void;
   autoplayVideos?: boolean;
+  sessionId?: string;
+  channelId?: string;
+  guildId?: string;
+  onNotify?: (msg: string) => void;
 }) {
   return (
     <>
@@ -6171,7 +6276,15 @@ function MessageContent({
         ?.map(a => (
           <div className="msg-video-attachment" key={a.id}>
             <video src={a.url} controls preload="metadata" autoPlay={autoplayVideos} muted={autoplayVideos} />
-            <button type="button" onClick={() => onMediaOpen?.(a.url, "video", a.filename)}>Open video</button>
+            <button
+              type="button"
+              className="msg-video-open-btn"
+              onClick={() => onMediaOpen?.(a.url, "video", a.filename)}
+              title="Open video in media viewer"
+            >
+              <Maximize2 size={13} />
+              <span>Open video</span>
+            </button>
           </div>
         ))}
 
@@ -6180,6 +6293,21 @@ function MessageContent({
         ?.map(a => (
           <a key={a.id} href={a.url} target="_blank" rel="noopener noreferrer" className="msg-file-link">📎 {a.filename}</a>
         ))}
+
+      {m.components && m.components.length > 0 && (
+        <DiscordComponents
+          components={m.components}
+          message={m}
+          channelId={channelId || m.channel_id}
+          guildId={guildId}
+          sessionId={sessionId}
+          channels={channels}
+          users={users}
+          onChannelClick={onChannelClick}
+          onMediaOpen={onMediaOpen}
+          onNotify={onNotify}
+        />
+      )}
 
       {m.reactions && m.reactions.length > 0 && (
         <div className="reactions">

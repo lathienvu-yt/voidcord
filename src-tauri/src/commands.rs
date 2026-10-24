@@ -531,6 +531,49 @@ pub async fn execute_application_command(
     state.router.rest(AccountIdentity::Primary, Method::POST, "interactions", Some(payload)).await.map_err(map_err)
 }
 
+/// Invoke a Discord message component interaction (button click, select menu, etc.)
+#[tauri::command]
+pub async fn execute_component_interaction(
+    channel_id: String,
+    guild_id: Option<String>,
+    session_id: String,
+    message_id: String,
+    application_id: String,
+    message_flags: Option<u64>,
+    component_type: u64,
+    custom_id: String,
+    values: Option<Vec<String>>,
+    nonce: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if channel_id.parse::<u64>().is_err() || session_id.trim().is_empty() {
+        return Err("A connected gateway session and valid channel are required".to_owned());
+    }
+    let mut data = json!({
+        "component_type": component_type,
+        "custom_id": custom_id,
+    });
+    if let Some(v) = values {
+        data["values"] = json!(v);
+    }
+    let mut payload = json!({
+        "type": 3,
+        "application_id": application_id,
+        "channel_id": channel_id,
+        "message_id": message_id,
+        "session_id": session_id,
+        "nonce": nonce,
+        "data": data,
+    });
+    if let Some(gid) = guild_id {
+        payload["guild_id"] = json!(gid);
+    }
+    if let Some(flags) = message_flags {
+        payload["message_flags"] = json!(flags);
+    }
+    state.router.rest(AccountIdentity::Primary, Method::POST, "interactions", Some(payload)).await.map_err(map_err)
+}
+
 /// Decline/end a private call for the selected DM channel.
 #[tauri::command]
 pub async fn decline_private_call(

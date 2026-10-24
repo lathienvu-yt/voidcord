@@ -32,6 +32,8 @@ export interface DiscordUser {
   bio?: string;
   pronouns?: string;
   bot?: boolean;
+  flags?: number;
+  public_flags?: number;
   premium_type?: number;
   avatar_decoration_data?: DiscordAvatarDecoration | null;
   collectibles?: DiscordCollectibles | null;
@@ -177,7 +179,9 @@ export interface DiscordMessage {
   poll?: unknown;
   call?: unknown;
   activity?: unknown;
-  components?: DiscordActionRow[];
+  flags?: number;
+  application_id?: string;
+  components?: DiscordComponent[];
   deleted_at?: number;
   mentions?: DiscordUser[];
   mention_roles?: string[];
@@ -185,7 +189,7 @@ export interface DiscordMessage {
 
 // ── Message Components (buttons, selects) ──────────────────────────────────
 
-export type DiscordButtonStyle = 1 | 2 | 3 | 4 | 5; // primary, secondary, success, danger, link
+export type DiscordButtonStyle = 1 | 2 | 3 | 4 | 5 | 6; // primary, secondary, success, danger, link
 
 export interface DiscordPartialEmoji {
   id?: string | null;
@@ -221,12 +225,72 @@ export interface DiscordSelectMenu {
   disabled?: boolean;
 }
 
-export type DiscordComponent = DiscordButton | DiscordSelectMenu;
+export interface DiscordTextDisplay {
+  type: 10;
+  content: string;
+}
+
+export interface DiscordThumbnail {
+  type: 11;
+  media?: { url: string; proxy_url?: string };
+  thumbnail?: { url: string };
+  description?: string;
+}
+
+export interface DiscordMediaGalleryItem {
+  media: { url: string; proxy_url?: string };
+  description?: string;
+  spoiler?: boolean;
+}
+
+export interface DiscordMediaGallery {
+  type: 12;
+  items: DiscordMediaGalleryItem[];
+}
+
+export interface DiscordFileComponent {
+  type: 13;
+  file?: { url: string; filename?: string; size?: number };
+  filename?: string;
+  url?: string;
+}
+
+export interface DiscordSeparator {
+  type: 14;
+  divider?: boolean;
+  spacing?: number;
+}
+
+export interface DiscordSection {
+  type: 9;
+  components: DiscordComponent[];
+  accessory?: DiscordButton | DiscordThumbnail | any;
+}
+
+export interface DiscordContainer {
+  type: 17;
+  accent_color?: number;
+  spoiler?: boolean;
+  components: DiscordComponent[];
+}
 
 export interface DiscordActionRow {
   type: 1;
   components: DiscordComponent[];
 }
+
+export type DiscordComponent =
+  | DiscordActionRow
+  | DiscordButton
+  | DiscordSelectMenu
+  | DiscordSection
+  | DiscordTextDisplay
+  | DiscordThumbnail
+  | DiscordMediaGallery
+  | DiscordFileComponent
+  | DiscordSeparator
+  | DiscordContainer
+  | any;
 
 // Discord only accepts powers of two: 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
 const VALID_CDN_SIZES = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
@@ -268,6 +332,30 @@ export function bannerUrl(user: DiscordUser, size = 512): string | null {
 
 export function displayName(user: DiscordUser): string {
   return user.global_name || user.username;
+}
+
+export function formatDiscriminator(user?: { discriminator?: string | null; bot?: boolean } | null): string | null {
+  if (!user || user.discriminator == null) return null;
+  const tag = String(user.discriminator).trim();
+  if (!user.bot && (tag === "0" || tag === "0000" || tag === "")) {
+    return null;
+  }
+  if (tag === "0" || tag === "0000") {
+    return user.bot ? "#0000" : null;
+  }
+  return `#${tag}`;
+}
+
+
+export function isVerifiedBot(user?: { bot?: boolean; flags?: number; public_flags?: number } | null): boolean {
+  if (!user || !user.bot) return false;
+  const flags = (user.public_flags ?? user.flags ?? 0);
+  return (flags & (1 << 16)) !== 0;
+}
+
+export function formatUserTag(user: DiscordUser): string {
+  const disc = formatDiscriminator(user);
+  return disc ? `${user.username}${disc}` : `@${user.username}`;
 }
 
 export function formatTimestamp(iso: string): string {

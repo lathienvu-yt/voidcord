@@ -25,6 +25,8 @@ pub struct SettingsProtoV1Delta {
     pub text_and_images: Option<TextAndImagesDelta>,
     #[serde(default)]
     pub clips: Option<ClipsDelta>,
+    #[serde(default)]
+    pub notifications: Option<NotificationDelta>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -32,13 +34,17 @@ pub struct SettingsProtoV1Delta {
 pub struct AppearanceDelta {
     pub developer_mode: Option<bool>, // AppearanceSettings field 2
     pub dark_sidebar: Option<bool>,   // AppearanceSettings field 15
+    pub message_display_compact: Option<bool>, // AppearanceSettings field 18
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PrivacyDelta {
+    pub default_guilds_restricted: Option<bool>, // field 4: bool
+    pub allow_accessibility_detection: Option<bool>, // field 5: wrapped bool message
     pub contact_sync_enabled: Option<bool>, // field 10: wrapped bool message
     pub hide_legacy_username: Option<bool>, // field 22: wrapped bool message
+    pub drops_opted_out: Option<bool>, // field 29: wrapped bool message
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -48,13 +54,25 @@ pub struct TextAndImagesDelta {
     pub inline_embed_media: Option<bool>,      // field 10: wrapped bool message
     pub gif_auto_play: Option<bool>,           // field 11: wrapped bool message
     pub render_embeds: Option<bool>,           // field 12: wrapped bool message
+    pub render_reactions: Option<bool>,        // field 13: wrapped bool message
+    pub animate_emoji: Option<bool>,           // field 14: wrapped bool message
+    pub use_rich_chat_input: Option<bool>,     // field 20: wrapped bool message
     pub convert_emoticons: Option<bool>,       // field 21: wrapped bool message
+    pub use_thread_sidebar: Option<bool>,      // field 22: wrapped bool message
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipsDelta {
     pub allow_voice_recording: Option<bool>, // field 1: wrapped bool message
+    pub clips_enabled: Option<bool>,         // field 2: wrapped bool message
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationDelta {
+    pub show_in_app_notifications: Option<bool>, // field 1: wrapped bool message
+    pub notify_friends_on_go_live: Option<bool>, // field 2: wrapped bool message
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,13 +112,17 @@ pub async fn save_client_settings(
         apply_scope(&mut fields, 13, vec![
             (2, scope.developer_mode, false),
             (15, scope.dark_sidebar, false),
+            (18, scope.message_display_compact, false),
         ])?;
         changed_scopes.push(13);
     }
     if let Some(scope) = changes.privacy {
         apply_scope(&mut fields, 8, vec![
+            (4, scope.default_guilds_restricted, false),
+            (5, scope.allow_accessibility_detection, true),
             (10, scope.contact_sync_enabled, true),
             (22, scope.hide_legacy_username, true),
+            (29, scope.drops_opted_out, true),
         ])?;
         changed_scopes.push(8);
     }
@@ -110,15 +132,27 @@ pub async fn save_client_settings(
             (10, scope.inline_embed_media, true),
             (11, scope.gif_auto_play, true),
             (12, scope.render_embeds, true),
+            (13, scope.render_reactions, true),
+            (14, scope.animate_emoji, true),
+            (20, scope.use_rich_chat_input, true),
             (21, scope.convert_emoticons, true),
+            (22, scope.use_thread_sidebar, true),
         ])?;
         changed_scopes.push(6);
     }
     if let Some(scope) = changes.clips {
         apply_scope(&mut fields, 19, vec![
             (1, scope.allow_voice_recording, true),
+            (2, scope.clips_enabled, true),
         ])?;
         changed_scopes.push(19);
+    }
+    if let Some(scope) = changes.notifications {
+        apply_scope(&mut fields, 10, vec![
+            (1, scope.show_in_app_notifications, true),
+            (2, scope.notify_friends_on_go_live, true),
+        ])?;
+        changed_scopes.push(10);
     }
     if changed_scopes.is_empty() {
         return Err("No verified settings fields were provided".to_owned());
