@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
-import { Moon, Palette, Search, Shield, Sparkles, Video, X } from "lucide-react";
+import { Code2, Moon, Palette, Search, Shield, Sparkles, Video, X } from "lucide-react";
+import ApplicationCommandsPanel from "./ApplicationCommandsPanel";
 
-type Tab = "appearance" | "privacy" | "clips" | "text";
+type Tab = "appearance" | "privacy" | "clips" | "text" | "applicationCommands";
 type Theme = "dark" | "light";
 type SettingsState = {
   theme: Theme;
@@ -104,12 +105,13 @@ export default function SettingsMenu({ onClose, onThemeChange, ignoredUserIds, b
     { id: "privacy", label: "Privacy", icon: <Shield size={16} /> },
     { id: "clips", label: "Clips", icon: <Video size={16} /> },
     { id: "text", label: "Text & Images", icon: <Sparkles size={16} /> },
+    { id: "applicationCommands", label: "Application Commands", icon: <Code2 size={16} /> },
   ];
   const visibleTabs = tabs.filter(item => item.label.toLowerCase().includes(search.trim().toLowerCase()));
 
   return <div className="proto-settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
     <section className="proto-settings-window" role="dialog" aria-modal="true" aria-label="Settings">
-      <header className="proto-settings-topbar"><div><strong>{tab === "privacy" ? "Privacy" : tab === "appearance" ? "Appearance" : tab === "clips" ? "Clips" : "Text & Images"}</strong></div><button className="proto-settings-close" onClick={onClose} aria-label="Close settings"><X size={18} /></button></header>
+      <header className="proto-settings-topbar"><div><strong>{tab === "privacy" ? "Privacy" : tab === "appearance" ? "Appearance" : tab === "clips" ? "Clips" : tab === "applicationCommands" ? "Application Commands" : "Text & Images"}</strong></div><button className="proto-settings-close" onClick={onClose} aria-label="Close settings"><X size={18} /></button></header>
       <div className="proto-settings-layout">
         <nav className="proto-settings-nav" aria-label="Settings sections">
           <div className="proto-settings-sidebar-brand"><span className="proto-settings-brand-mark">V</span><div><strong>VoidCord</strong><small>Settings</small></div></div>
@@ -118,7 +120,10 @@ export default function SettingsMenu({ onClose, onThemeChange, ignoredUserIds, b
             {visibleTabs.filter(item => item.id === "privacy").map(item => <NavButton key={item.id} item={item} selected={tab === item.id} onClick={() => setTab(item.id)} />)}
           </div>
           <div className="proto-settings-nav-group"><small>APP EXPERIENCE</small>
-            {visibleTabs.filter(item => item.id !== "privacy").map(item => <NavButton key={item.id} item={item} selected={tab === item.id} onClick={() => setTab(item.id)} />)}
+            {visibleTabs.filter(item => item.id !== "privacy" && item.id !== "applicationCommands").map(item => <NavButton key={item.id} item={item} selected={tab === item.id} onClick={() => setTab(item.id)} />)}
+          </div>
+          <div className="proto-settings-nav-group"><small>DEVELOPER TOOLS</small>
+            {visibleTabs.filter(item => item.id === "applicationCommands").map(item => <NavButton key={item.id} item={item} selected={tab === item.id} onClick={() => setTab(item.id)} />)}
           </div>
           {visibleTabs.length === 0 && <p className="proto-settings-no-results">No settings found</p>}
           <div className="proto-settings-nav-spacer" />
@@ -146,6 +151,7 @@ export default function SettingsMenu({ onClose, onThemeChange, ignoredUserIds, b
             <h2>Clips</h2><p className="proto-settings-help">The descriptor confirms the wrapper and nested field numbers for this preference.</p>
             <Toggle title="Allow voice recording" detail="Allow clips to include voice recording." value={settings.allowVoiceRecording} onChange={v => void toggle("allowVoiceRecording", v, "clips", "allowVoiceRecording")} />
           </>}
+          {tab === "applicationCommands" && <ApplicationCommandsPanel />}
           {tab === "text" && <>
             <h2>Text & Images</h2><p className="proto-settings-help">These toggles update locally and encode the verified boolean leaf fields.</p>
             <Toggle title="Inline attachment media" detail="Display image and video attachments inside messages." value={settings.inlineAttachmentMedia} onChange={v => void toggle("inlineAttachmentMedia", v, "textAndImages", "inlineAttachmentMedia")} />
