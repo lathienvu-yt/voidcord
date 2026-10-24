@@ -128,7 +128,7 @@ pub async fn get_content_inventory(
     refresh_token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    let mut path = String::from("content-inventory/users/@me?for_game_profile=false&feature=inbox");
+    let mut path = String::from("api-v9/content-inventory/users/@me?for_game_profile=false&feature=inbox");
     if let Some(token) = refresh_token.filter(|value| !value.is_empty()) {
         path.push_str("&refresh_token=");
         path.push_str(&encode_query_component(&token));
