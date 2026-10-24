@@ -1,12 +1,14 @@
 //! Typed encoder for verified settings-proto v1 scalar deltas.
 //!
-//! The Tauri command serializes a typed delta into the observed request
-//! envelope, then sends it through the app's explicitly selected primary
-//! account. It never switches account identity on permission failures.
+//! Discord requires the complete top-level message for every modified setting
+//! scope. Before writing, this module fetches the current proto and merges the
+//! requested leaf fields into their existing scope, retaining unknown fields.
+//! It uses the explicitly selected primary account and never switches identity
+//! on permission failures.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::{discord_router::AccountIdentity, AppState};
@@ -66,33 +68,61 @@ pub async fn save_client_settings(
     changes: SettingsProtoV1Delta,
     state: State<'_, AppState>,
 ) -> Result<SettingsProtoEnvelope, String> {
-    let mut wire = Vec::new();
+    // Fetch the authoritative current proto first. Sending a partial nested
+    // scope would reset every omitted sibling field to its default on Discord.
+    let current = state.router.rest(
+        AccountIdentity::ReadOnly,
+        reqwest::Method::GET,
+        "users/@me/settings-proto/1",
+        None,
+    ).await.map_err(|error| format!("Could not read current settings proto: {error}"))?;
+    let encoded_current = current
+        .get("settings")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Discord settings-proto response did not contain Base64 settings".to_owned())?;
+    let decoded_current = STANDARD
+        .decode(encoded_current)
+        .map_err(|_| "Discord returned invalid Base64 settings".to_owned())?;
+    let mut fields = parse_fields(&decoded_current)?;
+
+    let mut has_changes = false;
     if let Some(scope) = changes.appearance {
-        append_message(&mut wire, 13, &raw_bool_fields([
-            (2, scope.developer_mode), (15, scope.dark_sidebar),
-        ]));
+        apply_scope(&mut fields, 13, vec![
+            (2, scope.developer_mode, false),
+            (15, scope.dark_sidebar, false),
+        ])?;
+        has_changes = true;
     }
     if let Some(scope) = changes.privacy {
-        append_message(&mut wire, 8, &wrapped_bool_fields([
-            (10, scope.contact_sync_enabled), (22, scope.hide_legacy_username),
-        ]));
+        apply_scope(&mut fields, 8, vec![
+            (10, scope.contact_sync_enabled, true),
+            (22, scope.hide_legacy_username, true),
+        ])?;
+        has_changes = true;
     }
     if let Some(scope) = changes.text_and_images {
-        append_message(&mut wire, 6, &wrapped_bool_fields([
-            (9, scope.inline_attachment_media), (10, scope.inline_embed_media),
-            (11, scope.gif_auto_play), (12, scope.render_embeds),
-            (21, scope.convert_emoticons),
-        ]));
+        apply_scope(&mut fields, 6, vec![
+            (9, scope.inline_attachment_media, true),
+            (10, scope.inline_embed_media, true),
+            (11, scope.gif_auto_play, true),
+            (12, scope.render_embeds, true),
+            (21, scope.convert_emoticons, true),
+        ])?;
+        has_changes = true;
     }
     if let Some(scope) = changes.clips {
-        let mut clips = Vec::new();
-        if let Some(value) = scope.allow_voice_recording {
-            append_message(&mut clips, 1, &wrapped_bool(value));
-        }
-        append_message(&mut wire, 19, &clips);
+        apply_scope(&mut fields, 19, vec![
+            (1, scope.allow_voice_recording, true),
+        ])?;
+        has_changes = true;
     }
-    if wire.is_empty() {
+    if !has_changes {
         return Err("No verified settings fields were provided".to_owned());
+    }
+
+    let mut wire = Vec::new();
+    for field in fields {
+        wire.extend_from_slice(&field.raw);
     }
     let envelope = SettingsProtoEnvelope {
         settings: STANDARD.encode(wire),
@@ -110,41 +140,163 @@ pub async fn save_client_settings(
     Ok(envelope)
 }
 
-fn raw_bool_fields<const N: usize>(fields: [(u32, Option<bool>); N]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for (number, value) in fields {
-        // Match proto3's generated writer: plain false scalars are omitted.
-        if let Some(true) = value {
-            write_varint((number as u64) << 3, &mut bytes);
-            write_varint(1, &mut bytes);
+#[derive(Debug, Clone)]
+struct WireField {
+    number: u64,
+    wire_type: u64,
+    raw: Vec<u8>,
+    payload: Option<Vec<u8>>,
+}
+
+/// Parse protobuf fields while retaining their original encoded bytes. Unknown
+/// fields are deliberately opaque and survive the read/modify/write cycle.
+fn parse_fields(bytes: &[u8]) -> Result<Vec<WireField>, String> {
+    let mut cursor = 0usize;
+    let mut fields = Vec::new();
+    while cursor < bytes.len() {
+        let start = cursor;
+        let key = read_varint(bytes, &mut cursor)?;
+        let number = key >> 3;
+        let wire_type = key & 7;
+        if number == 0 {
+            return Err("Invalid protobuf field number 0".to_owned());
+        }
+        let payload = match wire_type {
+            0 => {
+                read_varint(bytes, &mut cursor)?;
+                None
+            }
+            1 => {
+                cursor = cursor.checked_add(8).ok_or_else(|| "Protobuf cursor overflow".to_owned())?;
+                if cursor > bytes.len() { return Err("Truncated fixed64 protobuf field".to_owned()); }
+                None
+            }
+            2 => {
+                let length = usize::try_from(read_varint(bytes, &mut cursor)?)
+                    .map_err(|_| "Protobuf field length is too large".to_owned())?;
+                let end = cursor.checked_add(length).ok_or_else(|| "Protobuf field length overflow".to_owned())?;
+                if end > bytes.len() { return Err("Truncated length-delimited protobuf field".to_owned()); }
+                let value = bytes[cursor..end].to_vec();
+                cursor = end;
+                Some(value)
+            }
+            5 => {
+                cursor = cursor.checked_add(4).ok_or_else(|| "Protobuf cursor overflow".to_owned())?;
+                if cursor > bytes.len() { return Err("Truncated fixed32 protobuf field".to_owned()); }
+                None
+            }
+            _ => return Err(format!("Unsupported protobuf wire type {wire_type}; refusing to rewrite settings")),
+        };
+        fields.push(WireField {
+            number,
+            wire_type,
+            raw: bytes[start..cursor].to_vec(),
+            payload,
+        });
+    }
+    Ok(fields)
+}
+
+/// Merge leaf changes into a complete top-level settings scope, keeping every
+/// unrelated known or unknown field from the latest server snapshot.
+fn apply_scope(
+    top_fields: &mut Vec<WireField>,
+    scope_number: u32,
+    updates: Vec<(u32, Option<bool>, bool)>,
+) -> Result<(), String> {
+    let matching: Vec<usize> = top_fields.iter().enumerate()
+        .filter_map(|(index, field)| (field.number == u64::from(scope_number)).then_some(index))
+        .collect();
+
+    let insertion_index = matching.first().copied().unwrap_or(top_fields.len());
+    let mut nested = Vec::new();
+    for index in &matching {
+        let field = &top_fields[*index];
+        if field.wire_type != 2 {
+            return Err(format!("Settings scope {scope_number} was not length-delimited"));
+        }
+        let payload = field.payload.as_deref().ok_or_else(|| "Missing protobuf scope payload".to_owned())?;
+        nested.extend(parse_fields(payload)?);
+    }
+
+    for (leaf_number, value, wrapped) in updates {
+        let Some(value) = value else { continue; };
+        let first_match = nested.iter().position(|field| field.number == u64::from(leaf_number));
+        nested.retain(|field| field.number != u64::from(leaf_number));
+
+        // Proto3 scalar false is represented by absence; BoolValue false must
+        // remain present as an empty wrapper message.
+        if wrapped || value {
+            let payload = if wrapped {
+                if value { vec![8, 1] } else { Vec::new() }
+            } else {
+                vec![8, 1]
+            };
+            let encoded = encode_field(u64::from(leaf_number), 2, &payload);
+            let replacement = WireField {
+                number: u64::from(leaf_number),
+                wire_type: 2,
+                raw: encoded,
+                payload: Some(payload),
+            };
+            let position = first_match.unwrap_or(nested.len()).min(nested.len());
+            nested.insert(position, replacement);
         }
     }
-    bytes
-}
 
-fn wrapped_bool_fields<const N: usize>(fields: [(u32, Option<bool>); N]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for (number, value) in fields {
-        if let Some(value) = value {
-            append_message(&mut bytes, number, &wrapped_bool(value));
+    let mut payload = Vec::new();
+    for field in nested { payload.extend_from_slice(&field.raw); }
+    let replacement = WireField {
+        number: u64::from(scope_number),
+        wire_type: 2,
+        raw: encode_field(u64::from(scope_number), 2, &payload),
+        payload: Some(payload),
+    };
+
+    let mut rebuilt = Vec::with_capacity(top_fields.len() + 1);
+    let mut inserted = false;
+    for (index, field) in top_fields.drain(..).enumerate() {
+        if field.number == u64::from(scope_number) {
+            if !inserted {
+                rebuilt.push(replacement.clone());
+                inserted = true;
+            }
+        } else {
+            rebuilt.push(field);
+        }
+        // Keep the replacement near the original field to preserve wire order.
+        if index + 1 == insertion_index && !inserted {
+            rebuilt.push(replacement.clone());
+            inserted = true;
         }
     }
-    bytes
+    if !inserted { rebuilt.push(replacement); }
+    *top_fields = rebuilt;
+    Ok(())
 }
 
-fn wrapped_bool(value: bool) -> Vec<u8> {
-    if !value {
-        // The wrapper message's default false value serializes to zero bytes;
-        // its zero-length presence still represents an explicit false value.
-        return Vec::new();
+fn encode_field(number: u64, wire_type: u64, payload: &[u8]) -> Vec<u8> {
+    let mut output = Vec::new();
+    write_varint((number << 3) | wire_type, &mut output);
+    if wire_type == 2 {
+        write_varint(payload.len() as u64, &mut output);
+        output.extend_from_slice(payload);
     }
-    vec![8, 1] // wrapper.message.value, field 1 / varint true
+    output
 }
 
-fn append_message(output: &mut Vec<u8>, number: u32, value: &[u8]) {
-    write_varint(((number as u64) << 3) | 2, output);
-    write_varint(value.len() as u64, output);
-    output.extend_from_slice(value);
+fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, String> {
+    let mut value = 0u64;
+    for shift in (0..70).step_by(7) {
+        let byte = *bytes.get(*cursor).ok_or_else(|| "Truncated protobuf varint".to_owned())?;
+        *cursor += 1;
+        if shift == 63 && byte > 1 {
+            return Err("Protobuf varint overflow".to_owned());
+        }
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 { return Ok(value); }
+    }
+    Err("Protobuf varint is too long".to_owned())
 }
 
 fn write_varint(mut value: u64, output: &mut Vec<u8>) {
