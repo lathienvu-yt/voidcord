@@ -4175,3 +4175,97 @@ input, textarea { font-family: inherit; }
   .friends-content-layout { grid-template-columns: minmax(0, 1fr); }
   .activity-feed-panel { display: none; }
 }
+
+
+/* Raw message JSON viewer */
+.raw-message-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 7, 14, 0.78);
+  backdrop-filter: blur(5px);
+}
+.raw-message-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 960px);
+  max-height: min(88vh, 900px);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+.raw-message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.raw-message-header h2 {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+}
+.raw-message-header p {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.raw-message-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.raw-message-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  font-size: 12px;
+}
+.raw-message-actions button:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+.raw-message-actions .raw-message-close {
+  width: 32px;
+  padding: 0;
+}
+.raw-message-pre {
+  min-height: 0;
+  margin: 0;
+  padding: 18px;
+  overflow: auto;
+  color: #d7e1f2;
+  background: rgba(8, 7, 14, 0.45);
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+  white-space: pre;
+}
+.raw-message-pre code {
+  font: inherit;
+  overflow-wrap: normal;
+}
+@media (max-width: 600px) {
+  .raw-message-backdrop { padding: 8px; }
+  .raw-message-header { align-items: flex-start; padding: 12px; }
+  .raw-message-header h2 { font-size: 13px; }
+  .raw-message-actions { gap: 5px; }
+  .raw-message-actions button { padding: 0 7px; }
+  .raw-message-pre { padding: 12px; font-size: 11px; }
+}

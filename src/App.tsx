@@ -878,6 +878,7 @@ export default function App() {
   const [savedAccounts, setSavedAccounts] = useState<SavedDiscordAccount[]>([]);
   const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [accountSessionVersion, setAccountSessionVersion] = useState(0);
+  const [rawMessage, setRawMessage] = useState<DiscordMessage | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
@@ -5890,6 +5891,15 @@ export default function App() {
               )}
               <button
                 role="menuitem"
+                onClick={() => {
+                  setRawMessage(contextMenu.message);
+                  setContextMenu(null);
+                }}
+              >
+                <Terminal size={14} /> View Raw JSON
+              </button>
+              <button
+                role="menuitem"
                 disabled={!contextMenu.message.content}
                 onClick={() => void copyContextValue(contextMenu.message.content, "Message text")}
               >
@@ -5921,6 +5931,32 @@ export default function App() {
               </button>
             </>
           )}
+        </div>
+      )}
+      {rawMessage && (
+        <div
+          className="raw-message-backdrop"
+          onMouseDown={event => {
+            if (event.target === event.currentTarget) setRawMessage(null);
+          }}
+        >
+          <section className="raw-message-dialog" role="dialog" aria-modal="true" aria-labelledby="raw-message-title">
+            <header className="raw-message-header">
+              <div>
+                <h2 id="raw-message-title">Raw Message JSON</h2>
+                <p>In-memory message object · {rawMessage.id}</p>
+              </div>
+              <div className="raw-message-actions">
+                <button type="button" onClick={() => void copyContextValue(JSON.stringify(rawMessage, null, 2), "Raw message JSON")}>
+                  <Copy size={14} /> Copy JSON
+                </button>
+                <button type="button" className="raw-message-close" aria-label="Close raw message viewer" onClick={() => setRawMessage(null)}>
+                  <X size={16} />
+                </button>
+              </div>
+            </header>
+            <pre className="raw-message-pre"><code>{JSON.stringify(rawMessage, null, 2)}</code></pre>
+          </section>
         </div>
       )}
       {systemNotice && (
