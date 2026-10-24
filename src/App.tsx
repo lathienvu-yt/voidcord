@@ -5935,32 +5935,6 @@ export default function App() {
 }
 
 // Sub-components
-function ChannelRow({
-  channel, selected, locked = false, unread = 0, onClick, onContextMenu,
-}: {
-  channel: DiscordChannel;
-  selected: boolean;
-  locked?: boolean;
-  unread?: number;
-  onClick: () => void;
-  onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void;
-}) {
-  const isVoice = isVoiceChannel(channel);
-  return (
-    <button
-      className={`channel-row ${selected ? "selected" : ""} ${locked ? "permission-locked" : ""}`}
-      onClick={onClick}
-      onContextMenu={onContextMenu}
-      title={locked ? "Permission check: this channel is hidden for the current account" : channel.name}
-    >
-      {isVoice ? <Volume2 size={16} /> : locked ? <LockKeyhole size={15} /> : <Hash size={16} />}
-      <span style={{ flex: 1, textAlign: "left" }}>{channel.name}</span>
-      {locked && <span className="channel-lock-label">LOCKED</span>}
-      {!!unread && <span className="channel-unread-count">{unread > 99 ? "99+" : unread}</span>}
-    </button>
-  );
-}
-
                 <label className="profile-status-label" htmlFor="presence-select">Set your status</label>
                 <select
                   id="presence-select"
