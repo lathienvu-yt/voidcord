@@ -927,10 +927,11 @@ pub async fn get_dm_channels(state: State<'_, AppState>) -> Result<Value, String
     // Sắp xếp các DM channel theo last_message_id mới nhất lên đầu
     if let Some(arr) = channels.as_array_mut() {
         arr.retain(|channel| {
-            channel.get("is_message_request").and_then(Value::as_bool) != Some(true)
-                && channel
-                    .get("is_message_request_timestamp")
-                    .is_none_or(Value::is_null)
+            let is_request = channel.get("is_message_request").and_then(Value::as_bool) == Some(true)
+                || channel.get("is_message_request_timestamp").is_some_and(|value| !value.is_null())
+                || channel.get("is_spam").and_then(Value::as_bool) == Some(true)
+                || (channel.get("flags").and_then(Value::as_i64).unwrap_or(0) & (1 << 6)) != 0;
+            !is_request
         });
         arr.sort_by(|a, b| {
             let id_a = a.get("last_message_id").and_then(|v| v.as_str()).unwrap_or("0");
@@ -1127,6 +1128,8 @@ pub async fn get_message_requests(state: State<'_, AppState>) -> Result<Value, S
             .filter(|channel| {
                 channel.get("is_message_request").and_then(Value::as_bool) == Some(true)
                     || channel.get("is_message_request_timestamp").is_some_and(|value| !value.is_null())
+                    || channel.get("is_spam").and_then(Value::as_bool) == Some(true)
+                    || (channel.get("flags").and_then(Value::as_i64).unwrap_or(0) & (1 << 6)) != 0
             })
             .cloned()
             .collect(),
@@ -1139,18 +1142,47 @@ pub async fn update_message_request(
     action: String,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
-    let endpoint = match action.as_str() {
-        "accept" => "accept",
-        "ignore" => "dismiss",
-        _ => return Err(format!("Unsupported message request action: {action}")),
-    };
+    match action.as_str() {
+        "accept" => {
+            state
+                .router
+                .rest(
+                    AccountIdentity::Primary,
+                    Method::PUT,
+                    &format!("channels/{channel_id}/recipients/@me"),
+                    Some(json!({ "consent_status": 2 })),
+                )
+                .await
+                .map_err(map_err)
+        }
+        "ignore" | "dismiss" | "reject" => {
+            state
+                .router
+                .rest(
+                    AccountIdentity::Primary,
+                    Method::DELETE,
+                    &format!("channels/{channel_id}/recipients/@me"),
+                    None,
+                )
+                .await
+                .map_err(map_err)
+        }
+        _ => Err(format!("Unsupported message request action: {action}")),
+    }
+}
+
+#[tauri::command]
+pub async fn batch_reject_message_requests(
+    channel_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
     state
         .router
         .rest(
             AccountIdentity::Primary,
-            Method::POST,
-            &format!("users/@me/message-requests/{channel_id}/{endpoint}"),
-            Some(json!({})),
+            Method::PUT,
+            "channels/recipients/@me/batch-reject",
+            Some(json!({ "channel_ids": channel_ids })),
         )
         .await
         .map_err(map_err)
@@ -1665,4 +1697,68 @@ pub async fn toggle_devtools(app: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+
+#[tauri::command]
+pub async fn export_vcc_file(
+    app: AppHandle,
+    content: String,
+    custom_path: Option<String>,
+) -> Result<String, String> {
+    use std::fs;
+    use std::path::PathBuf;
+    use tauri_plugin_dialog::DialogExt;
+
+    let target_path = if let Some(p) = custom_path.filter(|s| !s.trim().is_empty()) {
+        Some(PathBuf::from(p))
+    } else {
+        let default_name = format!(
+            "voidcord-cache-{}.vcc",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
+        let chosen = app
+            .dialog()
+            .file()
+            .set_file_name(&default_name)
+            .add_filter("VoidCord Cache", &["vcc"])
+            .blocking_save_file();
+
+        chosen.and_then(|p| p.into_path().ok())
+    };
+
+    match target_path {
+        Some(path) => {
+            if path.as_os_str().is_empty() {
+                return Err("Export cancelled: no path chosen".to_string());
+            }
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            fs::write(&path, content).map_err(|e| format!("Failed to write .vcc file: {e}"))?;
+            Ok(path.to_string_lossy().into_owned())
+        }
+        None => Err("Export cancelled by user".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn pick_vcc_file(app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let chosen = app
+        .dialog()
+        .file()
+        .add_filter("VoidCord Cache", &["vcc", "json"])
+        .blocking_pick_file();
+
+    match chosen.and_then(|p| p.into_path().ok()) {
+        Some(path) => {
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read .vcc file at {}: {e}", path.display()))
+        }
+        None => Err("Import cancelled by user".to_string()),
+    }
 }

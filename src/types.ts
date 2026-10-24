@@ -68,6 +68,9 @@ export interface DiscordChannel {
   last_pin_timestamp?: string | null;
   is_message_request?: boolean;
   is_message_request_timestamp?: string | null;
+  is_spam?: boolean;
+  flags?: number;
+  safety_warnings?: Array<{ id: string; type: number; description?: string; dismissed?: boolean }>;
   permission_overwrites?: { id: string; type: number; allow: string; deny: string }[];
   recipients?: DiscordUser[];
   icon?: string | null;

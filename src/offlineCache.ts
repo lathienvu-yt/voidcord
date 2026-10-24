@@ -348,3 +348,174 @@ export async function writeCachedDraft(channelId: string, content: string): Prom
     tx.onerror = () => { db.close(); reject(tx.error); };
   });
 }
+
+
+export interface VoidCordCacheBundle {
+  version: number;
+  format: "voidcord-cache";
+  exportedAt: string;
+  client: "VoidCord";
+  messages: Array<{ channelId: string; messages: DiscordMessage[] }>;
+  appData: Array<{ key: string; value: any }>;
+  deletedMessages?: DeletedMessageLog[];
+  editedMessages?: EditedMessageLog[];
+  deletedChannels?: DeletedChannelLog[];
+}
+
+export async function exportCacheToVcc(): Promise<string> {
+  const db = await openCache();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["messages", "appData", "deletedMessages", "editedMessages", "deletedChannels"], "readonly");
+    const messagesReq = tx.objectStore("messages").getAll();
+    const appDataReq = tx.objectStore("appData").getAll();
+    const delMsgReq = tx.objectStore("deletedMessages").getAll();
+    const editMsgReq = tx.objectStore("editedMessages").getAll();
+    const delChanReq = tx.objectStore("deletedChannels").getAll();
+
+    tx.oncomplete = () => {
+      db.close();
+      const bundle: VoidCordCacheBundle = {
+        version: 1,
+        format: "voidcord-cache",
+        exportedAt: new Date().toISOString(),
+        client: "VoidCord",
+        messages: (messagesReq.result as any[]) || [],
+        appData: (appDataReq.result as any[]) || [],
+        deletedMessages: (delMsgReq.result as DeletedMessageLog[]) || [],
+        editedMessages: (editMsgReq.result as EditedMessageLog[]) || [],
+        deletedChannels: (delChanReq.result as DeletedChannelLog[]) || [],
+      };
+      resolve(JSON.stringify(bundle, null, 2));
+    };
+
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
+
+export function downloadVccFile(jsonContent: string, filename?: string): void {
+  const blob = new Blob([jsonContent], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || `voidcord-cache-${new Date().toISOString().slice(0, 10)}.vcc`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export async function importCacheFromVcc(vccContent: string): Promise<{ messagesCount: number; channelsCount: number }> {
+  let bundle: VoidCordCacheBundle;
+  try {
+    bundle = JSON.parse(vccContent);
+  } catch {
+    throw new Error("Invalid .vcc file: file is not valid JSON.");
+  }
+
+  if (bundle.format !== "voidcord-cache" || !Array.isArray(bundle.messages)) {
+    throw new Error("Invalid .vcc file: not a recognized VoidCord Cache format.");
+  }
+
+  const db = await openCache();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["messages", "appData", "deletedMessages", "editedMessages", "deletedChannels"], "readwrite");
+    const msgStore = tx.objectStore("messages");
+    const appStore = tx.objectStore("appData");
+    const delMsgStore = tx.objectStore("deletedMessages");
+    const editMsgStore = tx.objectStore("editedMessages");
+    const delChanStore = tx.objectStore("deletedChannels");
+
+    let totalMessages = 0;
+    for (const item of bundle.messages) {
+      if (item && item.channelId && Array.isArray(item.messages)) {
+        msgStore.put(item);
+        totalMessages += item.messages.length;
+      }
+    }
+
+    if (Array.isArray(bundle.appData)) {
+      for (const item of bundle.appData) {
+        if (item && item.key) appStore.put(item);
+      }
+    }
+
+    if (Array.isArray(bundle.deletedMessages)) {
+      for (const item of bundle.deletedMessages) {
+        if (item && item.id) delMsgStore.put(item);
+      }
+    }
+
+    if (Array.isArray(bundle.editedMessages)) {
+      for (const item of bundle.editedMessages) {
+        if (item && item.id) editMsgStore.put(item);
+      }
+    }
+
+    if (Array.isArray(bundle.deletedChannels)) {
+      for (const item of bundle.deletedChannels) {
+        if (item && item.id) delChanStore.put(item);
+      }
+    }
+
+    tx.oncomplete = () => {
+      db.close();
+      resolve({ messagesCount: totalMessages, channelsCount: bundle.messages.length });
+    };
+
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
+
+export async function getCacheStats(): Promise<{ channelsCount: number; messagesCount: number; deletedMessagesCount: number; editedMessagesCount: number }> {
+  const db = await openCache();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(["messages", "deletedMessages", "editedMessages"], "readonly");
+    const msgReq = tx.objectStore("messages").getAll();
+    const delReq = tx.objectStore("deletedMessages").count();
+    const editReq = tx.objectStore("editedMessages").count();
+
+    tx.oncomplete = () => {
+      db.close();
+      const channels = (msgReq.result as any[]) || [];
+      const totalMessages = channels.reduce((sum, ch) => sum + (Array.isArray(ch.messages) ? ch.messages.length : 0), 0);
+      resolve({
+        channelsCount: channels.length,
+        messagesCount: totalMessages,
+        deletedMessagesCount: delReq.result || 0,
+        editedMessagesCount: editReq.result || 0,
+      });
+    };
+
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
+
+
+export async function readCachedCommands(): Promise<any[] | undefined> {
+  const cached = await readCachedAppData<any[]>("cached-commands").catch(() => undefined);
+  if (cached && Array.isArray(cached)) return cached;
+  try {
+    const raw = localStorage.getItem("voidcord:cached-commands");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return undefined;
+}
+
+export async function writeCachedCommands(commands: any[]): Promise<void> {
+  await writeCachedAppData("cached-commands", commands).catch(() => {});
+  try {
+    localStorage.setItem("voidcord:cached-commands", JSON.stringify(commands.slice(0, 500)));
+  } catch {}
+}

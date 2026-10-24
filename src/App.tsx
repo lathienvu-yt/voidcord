@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { load } from "@tauri-apps/plugin-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  Archive, Ban, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
+  AlertTriangle, Archive, Ban, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
   Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
   Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut
@@ -75,6 +75,7 @@ type ContentInventoryEntry = {
 type ContentInventoryResponse = {
   entries?: ContentInventoryEntry[];
   unranked_game_entries?: ContentInventoryEntry[];
+  users?: DiscordUser[];
   refresh_token?: string;
 };
 
@@ -922,6 +923,7 @@ export default function App() {
   const [revealedIgnoredProfileIds, setRevealedIgnoredProfileIds] = useState<Set<string>>(() => new Set());
   const [friendRequestView, setFriendRequestView] = useState<"incoming" | "outgoing">("incoming");
   const [messageRequests, setMessageRequests] = useState<DiscordChannel[]>([]);
+  const [messageRequestTab, setMessageRequestTab] = useState<"all" | "spam">("all");
   const [messageRequestsLoading, setMessageRequestsLoading] = useState(false);
   const [messageRequestsError, setMessageRequestsError] = useState("");
   const [selectedMessageRequest, setSelectedMessageRequest] = useState<DiscordChannel | null>(null);
@@ -935,6 +937,7 @@ export default function App() {
   const [relationshipBusy, setRelationshipBusy] = useState<string | null>(null);
   const [friendSearchError, setFriendSearchError] = useState("");
   const [activityEntries, setActivityEntries] = useState<ContentInventoryEntry[]>([]);
+  const [activityUsers, setActivityUsers] = useState<Record<string, DiscordUser>>({});
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState("");
   const activityRefreshTokenRef = useRef<string | undefined>(undefined);
@@ -948,6 +951,15 @@ export default function App() {
       });
       if (typeof response?.refresh_token === "string" && response.refresh_token.length > 0) {
         activityRefreshTokenRef.current = response.refresh_token;
+      }
+      if (Array.isArray(response?.users)) {
+        setActivityUsers(prev => {
+          const next = { ...prev };
+          for (const u of response.users!) {
+            if (u && u.id) next[u.id] = u;
+          }
+          return next;
+        });
       }
       const combined = [
         ...(Array.isArray(response?.entries) ? response.entries : []),
@@ -1596,6 +1608,71 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("voidcord:preferences", JSON.stringify(preferences));
   }, [preferences]);
+
+  // Pre-fetch data worker: loads up to 20 channels (top DMs + guild text channels), presences, and application commands
+  const prefetchRunningRef = useRef(false);
+  useEffect(() => {
+    if (!me?.id || prefetchRunningRef.current || !navigator.onLine) return;
+    if (dmChannels.length === 0 && guilds.length === 0) return;
+
+    prefetchRunningRef.current = true;
+
+    const runPrefetch = async () => {
+      // 1. Gather up to 20 channels (top DMs + first text channel of top guilds)
+      const targetChannels: DiscordChannel[] = [];
+      targetChannels.push(...dmChannels.slice(0, 10));
+
+      for (const g of guilds.slice(0, 10)) {
+        try {
+          const cached = await readCachedAppData<{ channels: DiscordChannel[] }>(`guild-data:${g.id}`);
+          if (cached?.channels) {
+            const first = cached.channels.find(c => isTextChannel(c));
+            if (first && !targetChannels.some(tc => tc.id === first.id)) targetChannels.push(first);
+          }
+        } catch {}
+      }
+
+      // Pre-fetch messages for gathered channels in the background
+      for (const ch of targetChannels.slice(0, 20)) {
+        try {
+          const msgs = await invoke<DiscordMessage[]>("get_messages", { channelId: ch.id });
+          if (Array.isArray(msgs) && msgs.length > 0) {
+            void writeCachedMessages(ch.id, msgs);
+          }
+        } catch {}
+        await new Promise(r => setTimeout(r, 60));
+      }
+
+      // 2. Discover bot IDs across DMs and relationships for slash commands pre-fetch
+      const botIds = new Set<string>();
+      dmChannels.forEach(dm => dm.recipients?.forEach(u => { if (u.bot) botIds.add(u.id); }));
+      relationships.forEach(rel => { if (rel.user?.bot) botIds.add(rel.user.id); });
+
+      // Add common/popular bots (Pancake, Midjourney, Carl, Dyno, Tupperbox)
+      ["239631525350604801", "936929561302675456", "235148963517071360", "155149108183695360", "431544605203955712"].forEach(id => botIds.add(id));
+
+      try {
+        const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
+        if (Array.isArray(saved)) saved.forEach(id => { if (typeof id === "string") botIds.add(id); });
+      } catch {}
+
+      const allBotIds = [...botIds].slice(0, 15);
+      try {
+        localStorage.setItem("voidcord:application-command-app-ids", JSON.stringify(allBotIds));
+      } catch {}
+
+      // Pre-fetch global application commands for discovered bots
+      await Promise.allSettled(allBotIds.map(appId =>
+        invoke<any>("get_global_application_commands", { applicationId: appId, withLocalizations: true })
+      ));
+    };
+
+    const timer = setTimeout(() => {
+      void runPrefetch();
+    }, 1800);
+
+    return () => clearTimeout(timer);
+  }, [me?.id, dmChannels.length, guilds.length]);
 
   useEffect(() => {
     if (!settingsOpen && !serverDialogOpen && !mediaViewer) return;
@@ -2364,6 +2441,9 @@ export default function App() {
 
     listen<any>("discord:gateway_ready", ({ payload }) => {
       if (typeof payload?.session_id === "string") setGatewaySessionId(payload.session_id);
+      if (Array.isArray(payload?.presences)) {
+        applyPresenceUpdates(payload.presences);
+      }
       const guild = selectedGuildRef.current;
       if (!guild) return;
       const channelIds = channels
@@ -2483,7 +2563,7 @@ export default function App() {
     setGuildMembers([]);
     guildMembersRef.current = [];
     setGuildRoles([]);
-    setMemberPresences({});
+    // Do not wipe memberPresences so DM & friends status dots persist!
     setMemberPlatforms({});
     setMemberCustomStatuses({});
     guildRoleDataRef.current = [];
@@ -3014,9 +3094,15 @@ export default function App() {
         setRequestMessagesError("");
       }
       if (action === "accept") {
-        setDmChannels(previous => [channel, ...previous.filter(item => item.id !== channel.id)]);
+        const acceptedChannel: DiscordChannel = {
+          ...channel,
+          is_message_request: false,
+          is_message_request_timestamp: null,
+          is_spam: false,
+        };
+        setDmChannels(previous => [acceptedChannel, ...previous.filter(item => item.id !== channel.id)]);
         setActiveDmTab("chat");
-        await selectChannel(channel);
+        await selectChannel(acceptedChannel);
       }
       notify(action === "accept" ? "Message request accepted" : "Message request ignored");
     } catch (e) {
@@ -3028,6 +3114,46 @@ export default function App() {
       }
     } finally {
       setRequestBusy(null);
+    }
+  };
+
+  const blockAndIgnoreMessageRequest = async (channel: DiscordChannel) => {
+    const sender = channel.recipients?.[0];
+    if (!sender) return;
+    setRequestBusy(channel.id);
+    try {
+      await invoke("update_relationship", { userId: sender.id, action: "block" });
+      try {
+        await invoke("update_message_request", { channelId: channel.id, action: "ignore" });
+      } catch {}
+      setMessageRequests(previous => previous.filter(request => request.id !== channel.id));
+      if (selectedMessageRequest?.id === channel.id) {
+        setSelectedMessageRequest(null);
+        setRequestMessages([]);
+        setRequestMessagesError("");
+      }
+      notify(`Blocked @${sender.username} and ignored message request`);
+      await refreshRelationships();
+    } catch (e) {
+      notify(`Could not block user: ${e}`);
+    } finally {
+      setRequestBusy(null);
+    }
+  };
+
+  const batchRejectRequests = async (channelIds: string[]) => {
+    if (channelIds.length === 0) return;
+    try {
+      await invoke("batch_reject_message_requests", { channelIds });
+      setMessageRequests(previous => previous.filter(request => !channelIds.includes(request.id)));
+      if (selectedMessageRequest && channelIds.includes(selectedMessageRequest.id)) {
+        setSelectedMessageRequest(null);
+        setRequestMessages([]);
+        setRequestMessagesError("");
+      }
+      notify(`Cleared ${channelIds.length} message request${channelIds.length > 1 ? "s" : ""}`);
+    } catch (e) {
+      notify(`Could not clear message requests: ${e}`);
     }
   };
 
@@ -4163,7 +4289,7 @@ export default function App() {
                       <div className="dm-avatar-wrap">
                         {recipient ? <img src={avatarUrl(recipient, 32)} alt={name} className="dm-avatar" /> : <div className="dm-avatar-fallback">@</div>}
                         {recipient && <AvatarDecorationOverlay user={recipient} />}
-                        <span className="dm-status-dot status-online" /> {/* Lưu ý: Chỗ này có thể bản này vẫn giữ hoặc bạn đang muốn check xem nó hoạt động chưa */}
+                        <span className={`dm-status-dot status-${recipientStatus}`} />
                       </div>
                       <div className="dm-channel-info">
                         <strong className="dm-name">{name}</strong>
@@ -4509,25 +4635,73 @@ export default function App() {
                       <div className="activity-feed-list">
                         {activityEntries.map((entry, index) => {
                           const content = entry.content;
-                          const author = content?.author_id === me?.id
-                            ? "You"
-                            : friendRelationships.find(relationship => relationship.user.id === content?.author_id)?.user;
+                          const authorId = content?.author_id;
+                          const author: DiscordUser | undefined = authorId === me?.id
+                            ? me
+                            : friendRelationships.find(relationship => relationship.user.id === authorId)?.user
+                              || (authorId ? activityUsers[authorId] : undefined)
+                              || dmChannels.flatMap(c => c.recipients || []).find(u => u.id === authorId);
+
+                          const authorName = author ? displayName(author) : (authorId ? `User (${authorId.slice(-4)})` : "Discord friend");
+                          const authorStatus = author ? (memberPresences[author.id] || "offline") : "offline";
                           const title = contentInventoryTitle(entry);
                           const subtitle = contentInventorySubtitle(entry);
                           const timestamp = contentInventoryTimestamp(entry);
                           const kind = content?.extra?.type === "played_game_extra" ? "game"
                             : content?.extra?.type === "launched_activity_extra" ? "launched"
                             : content?.extra?.type === "top_artist_extra" ? "music" : "other";
+
                           return (
-                            <article className="activity-feed-item" key={content?.id || `activity-${index}`}>
-                              <span className={`activity-feed-icon activity-feed-icon-${kind}`}>
-                                {kind === "game" ? <Gamepad2 size={17} /> : kind === "music" ? <Headphones size={17} /> : <Sparkles size={17} />}
-                              </span>
-                              <div className="activity-feed-copy">
-                                <strong title={title}>{title}</strong>
-                                <span>{subtitle}</span>
-                                <small>{typeof author === "string" ? author : author ? displayName(author) : "Friend activity"}{timestamp ? ` · ${timestamp}` : ""}</small>
+                            <article className="activity-feed-card" key={content?.id || `activity-${index}`}>
+                              <div className="activity-user-header">
+                                <div className="activity-user-avatar">
+                                  {author ? (
+                                    <>
+                                      <img src={avatarUrl(author, 28)} alt="" />
+                                      <AvatarDecorationOverlay user={author} />
+                                      <span className={`status-dot status-${authorStatus}`} />
+                                    </>
+                                  ) : (
+                                    <div className="dm-avatar-fallback">@</div>
+                                  )}
+                                </div>
+                                <div className="activity-user-info">
+                                  <span className="activity-user-name">{authorName}</span>
+                                  {author?.username && <span className="activity-user-username">@{author.username}</span>}
+                                </div>
+                                {timestamp && <small className="activity-time">{timestamp}</small>}
                               </div>
+
+                              <div className="activity-content-row">
+                                <span className={`activity-feed-icon activity-feed-icon-${kind}`}>
+                                  {kind === "game" ? <Gamepad2 size={16} /> : kind === "music" ? <Headphones size={16} /> : <Sparkles size={16} />}
+                                </span>
+                                <div className="activity-feed-copy">
+                                  <strong title={title}>{title}</strong>
+                                  <span>{subtitle}</span>
+                                </div>
+                              </div>
+
+                              {author && author.id !== me?.id && (
+                                <div className="activity-feed-actions">
+                                  <button
+                                    type="button"
+                                    className="activity-action-btn"
+                                    onClick={() => void startDirectMessage(author)}
+                                    title={`Message ${authorName}`}
+                                  >
+                                    <MessageSquare size={12} /> Message
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="activity-action-btn"
+                                    onClick={() => void handleOpenMemberProfile(author)}
+                                    title="View profile"
+                                  >
+                                    Profile
+                                  </button>
+                                </div>
+                              )}
                             </article>
                           );
                         })}
@@ -4580,81 +4754,165 @@ export default function App() {
                   <div className="directory-empty">No {friendRequestView} friend requests.</div>
                 )}
               </div>
-            ) : (
-              <div className="message-request-layout">
-                <div className="message-request-list">
-                  <div className="directory-list-heading">PENDING MESSAGE REQUESTS — {messageRequests.length}</div>
-                  {messageRequestsLoading && <div className="directory-empty"><Loader2 size={18} className="spinning" /></div>}
-                  {messageRequestsError && <div className="directory-error request-load-error">Could not load message requests: {messageRequestsError}</div>}
-                  {!messageRequestsLoading && !messageRequestsError && messageRequests.map(request => {
-                    const sender = request.recipients?.[0];
-                    const name = sender ? displayName(sender) : request.name || "Unknown user";
-                    return (
-                      <div key={request.id} className={`message-request-row ${selectedMessageRequest?.id === request.id ? "selected" : ""}`}>
-                        <button className="message-request-summary" onClick={() => void loadRequestMessages(request)}>
-                          {sender ? (
-                            <span className="request-avatar-wrap">
-                              <img src={avatarUrl(sender, 48)} alt="" />
-                              <AvatarDecorationOverlay user={sender} />
-                            </span>
-                          ) : <div className="dm-avatar-fallback">@</div>}
-                          <span><strong>{name}</strong><small>{sender?.username ? `@${sender.username}` : "Message request"}</small></span>
+            ) : (() => {
+              const spamRequests = messageRequests.filter(r => r.is_spam || ((r.flags || 0) & (1 << 6)) !== 0);
+              const regularRequests = messageRequests.filter(r => !r.is_spam && !((r.flags || 0) & (1 << 6)));
+              const displayedRequests = messageRequestTab === "spam" ? spamRequests : regularRequests;
+              const reqSender = selectedMessageRequest?.recipients?.[0];
+
+              return (
+                <div className="message-request-layout">
+                  <div className="message-request-list">
+                    <div className="message-request-subtabs">
+                      <button
+                        className={`request-subtab-btn ${messageRequestTab === "all" ? "active" : ""}`}
+                        onClick={() => setMessageRequestTab("all")}
+                      >
+                        You May Know ({regularRequests.length})
+                      </button>
+                      <button
+                        className={`request-subtab-btn ${messageRequestTab === "spam" ? "active" : ""}`}
+                        onClick={() => setMessageRequestTab("spam")}
+                      >
+                        Spam ({spamRequests.length})
+                      </button>
+                      {displayedRequests.length > 0 && (
+                        <button
+                          className="request-clear-all"
+                          onClick={() => void batchRejectRequests(displayedRequests.map(r => r.id))}
+                          title="Reject all requests in this tab"
+                        >
+                          Clear All
                         </button>
-                        <div className="request-actions">
-                          <button className="request-ignore" disabled={requestBusy === request.id} onClick={() => void updateMessageRequest(request, "ignore")}>Ignore</button>
-                          <button className="request-accept" disabled={requestBusy === request.id} onClick={() => void updateMessageRequest(request, "accept")}>
-                            {requestBusy === request.id ? <Loader2 size={14} className="spinning" /> : <Check size={14} />} Accept
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {!messageRequestsLoading && !messageRequestsError && messageRequests.length === 0 && (
-                    <div className="directory-empty">You don't have any pending message requests.</div>
-                  )}
-                </div>
-                <div className="message-request-conversation">
-                  {!selectedMessageRequest ? (
-                    <div className="directory-empty">Select a request to preview its messages.</div>
-                  ) : (
-                    <>
-                      <header className="request-conversation-header">
-                        <strong>{selectedMessageRequest.recipients?.[0]
-                          ? displayName(selectedMessageRequest.recipients[0])
-                          : selectedMessageRequest.name || "Message Request"}</strong>
-                        <div className="request-actions">
-                          <button className="request-ignore" disabled={requestBusy === selectedMessageRequest.id} onClick={() => void updateMessageRequest(selectedMessageRequest, "ignore")}>Ignore</button>
-                          <button className="request-accept" disabled={requestBusy === selectedMessageRequest.id} onClick={() => void updateMessageRequest(selectedMessageRequest, "accept")}>Accept</button>
-                        </div>
-                      </header>
-                      <div className="request-message-history">
-                        {requestMessagesLoading && <div className="directory-empty"><Loader2 size={18} className="spinning" /></div>}
-                        {requestMessagesError && <div className="directory-error request-load-error">Could not load request messages: {requestMessagesError}</div>}
-                        {!requestMessagesLoading && !requestMessagesError && requestMessages.map(message => (
-                          <div className="request-message" key={message.id}>
-                            <span className="request-history-avatar-wrap">
-                              <img src={avatarUrl(message.author, 40)} alt="" />
-                              <AvatarDecorationOverlay user={message.author} />
+                      )}
+                    </div>
+                    {messageRequestsLoading && <div className="directory-empty"><Loader2 size={18} className="spinning" /></div>}
+                    {messageRequestsError && <div className="directory-error request-load-error">Could not load message requests: {messageRequestsError}</div>}
+                    {!messageRequestsLoading && !messageRequestsError && displayedRequests.map(request => {
+                      const sender = request.recipients?.[0];
+                      const name = sender ? displayName(sender) : request.name || "Unknown user";
+                      const isSpam = request.is_spam || ((request.flags || 0) & (1 << 6)) !== 0;
+                      return (
+                        <div key={request.id} className={`message-request-row ${selectedMessageRequest?.id === request.id ? "selected" : ""}`}>
+                          <button className="message-request-summary" onClick={() => void loadRequestMessages(request)}>
+                            {sender ? (
+                              <span className="request-avatar-wrap">
+                                <img src={avatarUrl(sender, 48)} alt="" />
+                                <AvatarDecorationOverlay user={sender} />
+                              </span>
+                            ) : <div className="dm-avatar-fallback">@</div>}
+                            <span>
+                              <span className="request-name-row">
+                                <strong>{name}</strong>
+                                {sender && <BotTag user={sender} />}
+                                {sender && <span className="author-discriminator">{formatDiscriminator(sender)}</span>}
+                                {isSpam && <span className="spam-badge">SPAM</span>}
+                              </span>
+                              <small>{sender?.username ? `@${sender.username}` : "Message request"}</small>
                             </span>
-                            <div className="request-message-body">
-                              <div><strong>{displayName(message.author)}</strong><small>{formatTimestamp(message.timestamp)}</small></div>
-                              {message.content && <div className="msg-text"><DiscordMarkdown content={message.content} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} /></div>}
-                              {message.embeds?.filter(embed => !!embed && typeof embed === "object").map((embed, index) => <DiscordEmbedView key={`${message.id}-${index}`} embed={embed} attachments={message.attachments} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} />)}
-                              {message.attachments?.map(attachment => attachment.content_type?.startsWith("image/")
-                                ? <img key={attachment.id} src={attachment.url} alt={attachment.filename} className="msg-attachment-img" style={{ maxWidth: 400, maxHeight: 300, borderRadius: 6 }} />
-                                : <a key={attachment.id} className="msg-file-link" href={attachment.url}>{attachment.filename}</a>)}
-                            </div>
+                          </button>
+                          <div className="request-actions">
+                            <button className="request-ignore" disabled={requestBusy === request.id} onClick={() => void updateMessageRequest(request, "ignore")}>Ignore</button>
+                            <button className="request-accept" disabled={requestBusy === request.id} onClick={() => void updateMessageRequest(request, "accept")}>
+                              {requestBusy === request.id ? <Loader2 size={14} className="spinning" /> : <Check size={14} />} Accept
+                            </button>
                           </div>
-                        ))}
-                        {!requestMessagesLoading && !requestMessagesError && requestMessages.length === 0 && (
-                          <div className="directory-empty">No messages were returned for this request.</div>
-                        )}
+                        </div>
+                      );
+                    })}
+                    {!messageRequestsLoading && !messageRequestsError && displayedRequests.length === 0 && (
+                      <div className="directory-empty">
+                        {messageRequestTab === "spam" ? "No spam message requests." : "You don't have any pending message requests."}
                       </div>
-                    </>
-                  )}
+                    )}
+                  </div>
+                  <div className="message-request-conversation">
+                    {!selectedMessageRequest ? (
+                      <div className="directory-empty">Select a request to preview its messages.</div>
+                    ) : (
+                      <>
+                        <header className="request-conversation-header">
+                          <div className="request-header-user">
+                            <strong>{reqSender ? displayName(reqSender) : selectedMessageRequest.name || "Message Request"}</strong>
+                            {reqSender && <BotTag user={reqSender} />}
+                            {reqSender && <span className="author-discriminator">{formatDiscriminator(reqSender)}</span>}
+                            {reqSender?.username && <small className="request-header-username">@{reqSender.username}</small>}
+                          </div>
+                          <div className="request-actions">
+                            {reqSender && (
+                              <button
+                                className="request-block"
+                                disabled={requestBusy === selectedMessageRequest.id}
+                                onClick={() => void blockAndIgnoreMessageRequest(selectedMessageRequest)}
+                                title="Block user and delete request"
+                              >
+                                Block
+                              </button>
+                            )}
+                            <button className="request-ignore" disabled={requestBusy === selectedMessageRequest.id} onClick={() => void updateMessageRequest(selectedMessageRequest, "ignore")}>Ignore</button>
+                            <button className="request-accept" disabled={requestBusy === selectedMessageRequest.id} onClick={() => void updateMessageRequest(selectedMessageRequest, "accept")}>Accept</button>
+                          </div>
+                        </header>
+                        <div className="message-request-safety-banner">
+                          <AlertTriangle size={16} className="safety-icon" />
+                          <div className="safety-content">
+                            <strong>Do you know this user?</strong>
+                            <span>We don't recognize mutual friends or servers. Be careful before sharing personal info, opening links, or accepting files.</span>
+                          </div>
+                        </div>
+                        <div className="request-message-history">
+                          {requestMessagesLoading && <div className="directory-empty"><Loader2 size={18} className="spinning" /></div>}
+                          {requestMessagesError && <div className="directory-error request-load-error">Could not load request messages: {requestMessagesError}</div>}
+                          {!requestMessagesLoading && !requestMessagesError && requestMessages.map(message => (
+                            <div className="request-message" key={message.id}>
+                              <span className="request-history-avatar-wrap">
+                                <img src={avatarUrl(message.author, 40)} alt="" />
+                                <AvatarDecorationOverlay user={message.author} />
+                              </span>
+                              <div className="request-message-body">
+                                <div className="request-message-header">
+                                  <strong>{displayName(message.author)}</strong>
+                                  <BotTag user={message.author} />
+                                  <span className="author-discriminator">{formatDiscriminator(message.author)}</span>
+                                  <small>{formatTimestamp(message.timestamp)}</small>
+                                </div>
+                                {message.content && <div className="msg-text"><DiscordMarkdown content={message.content} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} /></div>}
+                                {message.embeds?.filter(embed => !!embed && typeof embed === "object").map((embed, index) => <DiscordEmbedView key={`${message.id}-${index}`} embed={embed} attachments={message.attachments} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} />)}
+                                {message.components && message.components.length > 0 && (
+                                  <DiscordComponents components={message.components} message={message} channelId={selectedMessageRequest.id} />
+                                )}
+                                {message.attachments?.map(attachment => attachment.content_type?.startsWith("image/")
+                                  ? <img key={attachment.id} src={attachment.url} alt={attachment.filename} className="msg-attachment-img" style={{ maxWidth: 400, maxHeight: 300, borderRadius: 6 }} />
+                                  : <a key={attachment.id} className="msg-file-link" href={attachment.url}>{attachment.filename}</a>)}
+                              </div>
+                            </div>
+                          ))}
+                          {!requestMessagesLoading && !requestMessagesError && requestMessages.length === 0 && (
+                            <div className="directory-empty">No messages were returned for this request.</div>
+                          )}
+                        </div>
+                        <div className="message-request-bottom-bar">
+                          <span>You must accept this message request before you can reply.</span>
+                          <div className="request-actions">
+                            {reqSender && (
+                              <button
+                                className="request-block"
+                                disabled={requestBusy === selectedMessageRequest.id}
+                                onClick={() => void blockAndIgnoreMessageRequest(selectedMessageRequest)}
+                              >
+                                Block
+                              </button>
+                            )}
+                            <button className="request-ignore" disabled={requestBusy === selectedMessageRequest.id} onClick={() => void updateMessageRequest(selectedMessageRequest, "ignore")}>Ignore</button>
+                            <button className="request-accept" disabled={requestBusy === selectedMessageRequest.id} onClick={() => void updateMessageRequest(selectedMessageRequest, "accept")}>Accept</button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </section>
         ) : (
         /* Chat Area */
@@ -5038,24 +5296,112 @@ export default function App() {
                 )}
                 {selectedSlashCommand && draft.startsWith("/" + selectedSlashCommand.name + " ") && Array.isArray(selectedSlashCommand.options) && selectedSlashCommand.options.length > 0 && (
                   <div className="slash-command-parameters" role="note">
-                    <strong>/{selectedSlashCommand.name} parameters</strong>
-                    <span>Type values after the command, or insert a named parameter:</span>
+                    <div className="slash-command-parameters-header">
+                      <div className="slash-command-parameters-title">
+                        <span className="slash-command-icon">/</span>
+                        <div>
+                          <strong>/{selectedSlashCommand.name}</strong>
+                          <small>{selectedSlashCommand.description || "Application command"}</small>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="slash-command-parameters-close"
+                        onClick={() => setSelectedSlashCommand(null)}
+                        title="Dismiss suggestions"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+
+                    <div className="slash-command-parameters-guide">
+                      <div className="guide-title">
+                        <Sparkles size={13} />
+                        <span>How to use parameters in VoidCord</span>
+                      </div>
+                      <p>
+                        Type <code>--&lt;parameter&gt; &lt;value&gt;</code> (wrap text with spaces in quotes: <code>--query &quot;hello world&quot;</code>).
+                        Or <strong>click any parameter chip below</strong> to insert it into your message.
+                      </p>
+                    </div>
+
+                    <div className="slash-command-parameters-section-title">AVAILABLE PARAMETERS</div>
                     <div className="slash-command-parameter-list">
                       {selectedSlashCommand.options.flatMap((option: any) => option.type === 2
                         ? (option.options || []).filter((child: any) => child.type === 1).map((child: any) => ({ ...child, _insert: option.name + " " + child.name + " " }))
                         : [{ ...option, _insert: [1, 2].includes(option.type) ? option.name + " " : "--" + option.name + " " }]
-                      ).map((option: any) => (
-                        <button key={option.name + ":" + option._insert} type="button" title={option.description || option.name} onMouseDown={event => event.preventDefault()} onClick={() => {
-                          const insertion = option._insert;
-                          const nextDraft = draft.endsWith(" ") ? draft + insertion : draft + " " + insertion;
-                          setDraft(nextDraft);
-                          requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(nextDraft.length, nextDraft.length); });
-                        }}>
-                          <code>{option._insert.trim()}</code>{option.required ? <em>required</em> : <em>{[1, 2].includes(option.type) ? "subcommand" : "optional"}</em>}
-                        </button>
-                      ))}
+                      ).map((option: any) => {
+                        const typeName = option.type === 3 ? "String"
+                          : option.type === 4 ? "Integer"
+                          : option.type === 5 ? "Boolean"
+                          : option.type === 6 ? "User"
+                          : option.type === 7 ? "Channel"
+                          : option.type === 8 ? "Role"
+                          : option.type === 10 ? "Number"
+                          : [1, 2].includes(option.type) ? "Subcommand" : "Value";
+
+                        return (
+                          <div key={option.name + ":" + option._insert} className="slash-command-parameter-card">
+                            <button
+                              type="button"
+                              className="parameter-insert-btn"
+                              title={option.description || option.name}
+                              onMouseDown={event => event.preventDefault()}
+                              onClick={() => {
+                                const insertion = option._insert;
+                                const nextDraft = draft.endsWith(" ") ? draft + insertion : draft + " " + insertion;
+                                setDraft(nextDraft);
+                                requestAnimationFrame(() => {
+                                  inputRef.current?.focus();
+                                  inputRef.current?.setSelectionRange(nextDraft.length, nextDraft.length);
+                                });
+                              }}
+                            >
+                              <code>{option._insert.trim()}</code>
+                              <span className="param-type-badge">{typeName}</span>
+                              {option.required ? (
+                                <span className="param-badge-required">REQUIRED</span>
+                              ) : (
+                                <span className="param-badge-optional">{[1, 2].includes(option.type) ? "SUBCOMMAND" : "OPTIONAL"}</span>
+                              )}
+                            </button>
+                            {option.description && <span className="parameter-desc">{option.description}</span>}
+                            {Array.isArray(option.choices) && option.choices.length > 0 && (
+                              <div className="parameter-choices">
+                                <span className="choices-label">Choices:</span>
+                                {option.choices.map((choice: any) => (
+                                  <button
+                                    type="button"
+                                    key={String(choice.value)}
+                                    className="choice-chip"
+                                    onClick={() => {
+                                      const choiceInsert = `--${option.name} "${choice.value}" `;
+                                      const nextDraft = draft.endsWith(" ") ? draft + choiceInsert : draft + " " + choiceInsert;
+                                      setDraft(nextDraft);
+                                      requestAnimationFrame(() => {
+                                        inputRef.current?.focus();
+                                        inputRef.current?.setSelectionRange(nextDraft.length, nextDraft.length);
+                                      });
+                                    }}
+                                  >
+                                    {choice.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                    <small>Example: /{selectedSlashCommand.name} --option value</small>
+
+                    <div className="slash-command-parameters-example">
+                      <span>Syntax preview:</span>
+                      <code>
+                        /{selectedSlashCommand.name} {selectedSlashCommand.options.map((opt: any) =>
+                          opt.required ? `--${opt.name} <${opt.name}>` : `[--${opt.name}]`
+                        ).join(" ")}
+                      </code>
+                    </div>
                   </div>
                 )}
                 {mentionQuery && mentionSuggestions.length > 0 && (

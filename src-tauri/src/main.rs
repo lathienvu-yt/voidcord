@@ -78,6 +78,7 @@ fn main() {
             commands::get_relationships,
             commands::get_message_requests,
             commands::update_message_request,
+            commands::batch_reject_message_requests,
             commands::create_dm,
             commands::add_friend,
             commands::update_relationship,
@@ -122,6 +123,8 @@ fn main() {
             commands::get_screen_sources,
             commands::start_screen_share,
             commands::stop_screen_share,
+            commands::export_vcc_file,
+            commands::pick_vcc_file,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run VoidCord");

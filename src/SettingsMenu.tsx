@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
-import { Bell, Code2, Moon, Palette, Search, Shield, Sparkles, Video, Volume2, X } from "lucide-react";
+import { Bell, Code2, Download, FolderUp, HardDrive, Loader2, Moon, Palette, Search, Shield, Sparkles, Upload, Video, Volume2, X } from "lucide-react";
 import ApplicationCommandsPanel from "./ApplicationCommandsPanel";
+import { exportCacheToVcc, downloadVccFile, importCacheFromVcc, getCacheStats } from "./offlineCache";
 
-type Tab = "appearance" | "privacy" | "text" | "notifications" | "clips" | "voice" | "applicationCommands";
+type Tab = "appearance" | "privacy" | "text" | "notifications" | "clips" | "voice" | "applicationCommands" | "cache";
 type Theme = "dark" | "light";
 
 type SettingsState = {
@@ -184,6 +185,7 @@ export default function SettingsMenu({
     { id: "clips", label: "Clips", icon: <Video size={16} /> },
     { id: "voice", label: "Voice & Video", icon: <Volume2 size={16} /> },
     { id: "applicationCommands", label: "Application Commands", icon: <Code2 size={16} /> },
+    { id: "cache", label: "Cache & Storage (.vcc)", icon: <HardDrive size={16} /> },
   ];
   const visibleTabs = tabs.filter(item => item.label.toLowerCase().includes(search.trim().toLowerCase()));
 
@@ -195,6 +197,7 @@ export default function SettingsMenu({
     clips: "Clips",
     voice: "Voice & Video",
     applicationCommands: "Application Commands",
+    cache: "Cache & Storage (.vcc)",
   };
 
   return (
@@ -484,6 +487,7 @@ export default function SettingsMenu({
             )}
 
             {tab === "applicationCommands" && <ApplicationCommandsPanel />}
+            {tab === "cache" && <CachePanel />}
           </div>
         </div>
         <footer className="proto-settings-footer">
@@ -567,5 +571,174 @@ function RelationshipList({
         <small>Empty</small>
       )}
     </div>
+  );
+}
+
+
+function CachePanel() {
+  const [stats, setStats] = useState<{ channelsCount: number; messagesCount: number; deletedMessagesCount: number; editedMessagesCount: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshStats = () => {
+    void getCacheStats().then(setStats).catch(() => {});
+  };
+
+  useEffect(() => {
+    refreshStats();
+  }, []);
+
+  const handleExportTo = async () => {
+    setLoading(true);
+    setStatusMsg("");
+    try {
+      const vccJson = await exportCacheToVcc();
+      try {
+        const savedPath = await invoke<string>("export_vcc_file", { content: vccJson });
+        setStatusMsg(`✓ Exported to ${savedPath}`);
+      } catch (err) {
+        const errStr = String(err);
+        if (errStr.includes("cancelled")) {
+          setStatusMsg("Export cancelled.");
+        } else {
+          downloadVccFile(vccJson);
+          setStatusMsg("✓ Exported to Downloads folder");
+        }
+      }
+    } catch (e) {
+      setStatusMsg(`Export failed: ${e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleQuickExport = async () => {
+    setLoading(true);
+    setStatusMsg("");
+    try {
+      const vccJson = await exportCacheToVcc();
+      downloadVccFile(vccJson);
+      setStatusMsg("✓ Exported to Downloads folder");
+    } catch (e) {
+      setStatusMsg(`Export failed: ${e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePickImport = async () => {
+    setLoading(true);
+    setStatusMsg("Opening file picker…");
+    try {
+      let content = "";
+      try {
+        content = await invoke<string>("pick_vcc_file");
+      } catch (err) {
+        const errStr = String(err);
+        if (errStr.includes("cancelled")) {
+          setStatusMsg("Import cancelled.");
+          setLoading(false);
+          return;
+        }
+        // Fallback to web input if native picker unsupported
+        fileInputRef.current?.click();
+        setLoading(false);
+        return;
+      }
+      const res = await importCacheFromVcc(content);
+      setStatusMsg(`✓ Imported ${res.messagesCount} messages across ${res.channelsCount} channels!`);
+      refreshStats();
+    } catch (e) {
+      setStatusMsg(`Import failed: ${e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleWebFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+    setStatusMsg("Importing .vcc file…");
+    try {
+      const text = await file.text();
+      const res = await importCacheFromVcc(text);
+      setStatusMsg(`✓ Imported ${res.messagesCount} messages across ${res.channelsCount} channels from ${file.name}!`);
+      refreshStats();
+    } catch (e) {
+      setStatusMsg(`Import failed: ${e}`);
+    } finally {
+      setLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  return (
+    <>
+      <h2>Cache & Storage (.vcc)</h2>
+      <div className="proto-cache-description">
+        <p>VoidCord saves channels, messages, commands, and deleted/edited logs locally in IndexedDB so you can read them offline. You can export this cache as a <code>.vcc</code> (VoidCord Cache) file to share with others or backup your history.</p>
+      </div>
+
+      <div className="proto-cache-stats-grid">
+        <div className="proto-cache-stat-card">
+          <strong>{stats ? stats.channelsCount : "—"}</strong>
+          <span>Cached Channels</span>
+        </div>
+        <div className="proto-cache-stat-card">
+          <strong>{stats ? stats.messagesCount : "—"}</strong>
+          <span>Cached Messages</span>
+        </div>
+        <div className="proto-cache-stat-card">
+          <strong>{stats ? stats.deletedMessagesCount : "—"}</strong>
+          <span>Deleted Logs</span>
+        </div>
+        <div className="proto-cache-stat-card">
+          <strong>{stats ? stats.editedMessagesCount : "—"}</strong>
+          <span>Edited Logs</span>
+        </div>
+      </div>
+
+      <div className="proto-cache-actions">
+        <div className="proto-cache-action-row">
+          <div>
+            <strong>Export .vcc Cache</strong>
+            <small>Export your offline messages, channels, and logs to a .vcc file.</small>
+          </div>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            <button type="button" className="proto-cache-btn" onClick={handleExportTo} disabled={loading} title="Choose destination folder and export">
+              {loading ? <Loader2 size={14} className="spinning" /> : <FolderUp size={14} />} Export to…
+            </button>
+            <button type="button" className="proto-cache-btn" style={{ background: "rgba(255,255,255,0.08)" }} onClick={handleQuickExport} disabled={loading} title="Quick save to Downloads">
+              <Download size={14} /> Quick Save
+            </button>
+          </div>
+        </div>
+
+        <div className="proto-cache-action-row">
+          <div>
+            <strong>Import .vcc Cache</strong>
+            <small>Merge messages and channels from a .vcc cache file into your local offline database.</small>
+          </div>
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept=".vcc,application/json"
+            style={{ display: "none" }}
+            onChange={handleWebFileChange}
+          />
+          <button type="button" className="proto-cache-btn" onClick={handlePickImport} disabled={loading}>
+            {loading ? <Loader2 size={14} className="spinning" /> : <Upload size={14} />} Import .vcc…
+          </button>
+        </div>
+
+        {statusMsg && (
+          <div className={`proto-cache-status ${statusMsg.startsWith("✓") ? "success" : "error"}`}>
+            {statusMsg}
+          </div>
+        )}
+      </div>
+    </>
   );
 }
