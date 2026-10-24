@@ -25,7 +25,7 @@ import {
   deleteDeletedMessage, deleteEditedMessage, markCachedMessageDeleted, readArchivedMedia, readCachedAppData, readCachedDraft,
   readCachedMessages, readDeletedChannels, readDeletedMessages, readEditedMessages, writeArchivedMedia, writeCachedAppData,
   writeCachedDraft, writeCachedMessages, writeDeletedChannel, writeDeletedMessage, DeletedChannelLog,
-  DeletedMessageLog, EditedMessageLog, writeEditedMessage,
+  DeletedMessageLog, EditedMessageLog, writeEditedMessage, readCachedCommands, writeCachedCommands,
 } from "./offlineCache";
 import "./style.css";
 
@@ -1148,6 +1148,7 @@ export default function App() {
   const selectedGuildRef = useRef<DiscordGuild | null>(null);
   const mediaViewerRef = useRef<HTMLDivElement>(null);
   guildMembersRef.current = guildMembers;
+  const cachedCommandsRef = useRef<any[]>([]);
   
 
   const invoke = useCallback(async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
@@ -1203,6 +1204,50 @@ export default function App() {
     setSystemNotice({ id: ++notificationSequence.current, message: msg, duration: ms, exiting: false });
   }, [preferences.showSystemNotifications, preferences.systemNotificationDuration]);
 
+  // Load cached commands immediately so autocomplete remains useful during startup/offline.
+  useEffect(() => {
+    let cancelled = false;
+    readCachedCommands().then(commands => {
+      if (!cancelled && Array.isArray(commands)) cachedCommandsRef.current = commands;
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // When opening a bot DM, its bot user ID is also its application ID.
+  useEffect(() => {
+    if (!selectedChannel || selectedChannel.type !== CHANNEL_TYPE_DM) return;
+    const botRecipient = selectedChannel.recipients?.find(user => user.bot && user.id !== me?.id);
+    if (!botRecipient) return;
+    const botId = botRecipient.id;
+    let cancelled = false;
+    invoke<any>("get_global_application_commands", { applicationId: botId, withLocalizations: true })
+      .then(response => {
+        if (cancelled) return;
+        const payload = response?.data ?? response;
+        const entries: any[] = Array.isArray(payload) ? payload
+          : Array.isArray(payload?.application_commands) ? payload.application_commands
+          : Array.isArray(payload?.commands) ? payload.commands : [];
+        const normalized = entries
+          .filter((entry: any) => entry && typeof entry === "object" && entry.id && typeof entry.name === "string")
+          .filter((entry: any) => entry.type === undefined || entry.type === 1)
+          .map((entry: any) => ({ ...entry, id: String(entry.id), application_id: botId }));
+        if (!normalized.length) return;
+        const merged = new Map<string, any>();
+        for (const command of cachedCommandsRef.current) {
+          if (command?.id && command?.application_id) merged.set(command.application_id + ":" + command.id, command);
+        }
+        for (const command of normalized) merged.set(command.application_id + ":" + command.id, command);
+        cachedCommandsRef.current = [...merged.values()].slice(-500);
+        void writeCachedCommands(cachedCommandsRef.current);
+        try {
+          const saved: string[] = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
+          if (!saved.includes(botId)) localStorage.setItem("voidcord:application-command-app-ids", JSON.stringify([botId, ...saved].slice(0, 50)));
+        } catch {}
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedChannel?.id, selectedChannel?.type, me?.id, invoke]);
+
   useEffect(() => {
     const match = draft.match(/^\/([^\s]*)$/);
     if (!match || !selectedChannel || selectedSlashCommand) {
@@ -1212,101 +1257,100 @@ export default function App() {
     }
 
     let cancelled = false;
-    setSlashCommands([]);
-    setSlashCommandSearchStatus("Loading registered slash commands…");
+    const query = match[1].toLowerCase();
+    const cachedHits = cachedCommandsRef.current.filter(command =>
+      command && typeof command.name === "string"
+      && command.name.toLowerCase().startsWith(query)
+      && (command.type === undefined || command.type === 1)
+      && command.id && command.application_id
+    );
+    if (cachedHits.length) {
+      setSlashCommands(cachedHits.slice(0, 15));
+      setSlashCommandSearchStatus("⚡ Cached commands — refreshing…");
+    } else {
+      setSlashCommands([]);
+      setSlashCommandSearchStatus("Loading registered slash commands…");
+    }
+
+    const applicationIds = new Set<string>();
+    // The bot's user ID is its application ID. Discover likely candidates from known bot users.
+    if (selectedChannel.type === CHANNEL_TYPE_DM) {
+      const bot = selectedChannel.recipients?.find(user => user.bot && user.id !== me?.id);
+      if (bot) applicationIds.add(bot.id);
+    }
+    for (const dm of dmChannels) {
+      if (dm.type === CHANNEL_TYPE_DM) {
+        const bot = dm.recipients?.find(user => user.bot);
+        if (bot?.id) applicationIds.add(bot.id);
+      }
+    }
+    for (const member of guildMembers) {
+      const user = (member as any).user || member;
+      if (user?.bot && user?.id) applicationIds.add(String(user.id));
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
+      if (Array.isArray(saved)) saved.forEach((id: unknown) => {
+        if (typeof id === "string" && /^\d{15,22}$/.test(id)) applicationIds.add(id);
+      });
+    } catch {}
+    const ids = [...applicationIds].slice(0, 30);
+
     const timer = window.setTimeout(async () => {
-      const query = match[1].toLowerCase();
-      const normalize = (entries: any[], applicationId: string) => entries
-        .filter((entry: any) => entry && typeof entry === "object")
-        .map((entry: any) => ({
-          ...entry,
-          id: typeof entry.id === "string" || typeof entry.id === "number" ? String(entry.id) : "",
-          application_id: applicationId,
-        }))
-        .filter((command: any) =>
-          !!command.id
-          && typeof command.name === "string"
-          && command.name.toLowerCase().startsWith(query)
-          && (command.type === undefined || command.type === 1)
-        );
-
       try {
-        // Registered-command endpoints require an application ID. The Developer Tools
-        // command browser records IDs that the user has explicitly inspected.
-        let applicationIds: string[] = [];
-        try {
-          const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
-          if (Array.isArray(saved)) {
-            applicationIds = [...new Set(saved.filter((id: unknown): id is string =>
-              typeof id === "string" && /^\d{15,22}$/.test(id)
-            ))].slice(0, 20);
-          }
-        } catch {
-          applicationIds = [];
-        }
-
-        if (applicationIds.length === 0) {
-          if (!cancelled) {
-            setSlashCommands([]);
-            setSlashCommandSearchStatus("No application IDs saved. Open Settings → Developer Tools → Application Commands and fetch commands for the apps you want to autocomplete.");
-          }
-          return;
-        }
-
-        const results = await Promise.all(applicationIds.map(async applicationId => {
+        const results = await Promise.all(ids.map(async applicationId => {
           const requests: Promise<any>[] = [
-            invoke<any>("get_global_application_commands", {
-              applicationId,
-              withLocalizations: true,
-            }).then(value => ({ value })).catch(() => null),
+            invoke<any>("get_global_application_commands", { applicationId, withLocalizations: true })
+              .then(value => ({ value })).catch(() => null),
           ];
           if (selectedChannel.guild_id) {
-            requests.push(
-              invoke<any>("get_guild_application_commands", {
-                applicationId,
-                guildId: selectedChannel.guild_id,
-                withLocalizations: true,
-              }).then(value => ({ value })).catch(() => null)
-            );
+            requests.push(invoke<any>("get_guild_application_commands", {
+              applicationId, guildId: selectedChannel.guild_id, withLocalizations: true,
+            }).then(value => ({ value })).catch(() => null));
           }
           return Promise.all(requests);
         }));
         if (cancelled) return;
-
-        const commands: any[] = [];
+        const fetched: any[] = [];
         for (let index = 0; index < results.length; index++) {
-          const applicationId = applicationIds[index];
           for (const result of results[index]) {
             if (!result) continue;
             const payload = result.value?.data ?? result.value;
-            const entries = Array.isArray(payload)
-              ? payload
-              : Array.isArray(payload?.application_commands)
-                ? payload.application_commands
-                : Array.isArray(payload?.commands)
-                  ? payload.commands
-                  : [];
-            commands.push(...normalize(entries, applicationId));
+            const entries = Array.isArray(payload) ? payload
+              : Array.isArray(payload?.application_commands) ? payload.application_commands
+              : Array.isArray(payload?.commands) ? payload.commands : [];
+            fetched.push(...entries
+              .filter((entry: any) => entry && typeof entry === "object" && entry.id && typeof entry.name === "string")
+              .filter((entry: any) => entry.type === undefined || entry.type === 1)
+              .map((entry: any) => ({ ...entry, id: String(entry.id), application_id: String(entry.application_id || ids[index]) })));
           }
         }
-
-        const unique = new Map<string, any>();
-        for (const command of commands) {
-          unique.set(command.application_id + ":" + command.id, command);
+        const merged = new Map<string, any>();
+        for (const command of cachedCommandsRef.current) {
+          if (command?.id && command?.application_id) merged.set(command.application_id + ":" + command.id, command);
         }
-        const matching = [...unique.values()].slice(0, 15);
-        setSlashCommands(matching);
-        setSlashCommandSearchStatus(matching.length ? "" : "No matching registered slash commands found for the saved applications.");
+        for (const command of fetched) merged.set(command.application_id + ":" + command.id, command);
+        cachedCommandsRef.current = [...merged.values()].slice(-500);
+        if (fetched.length) void writeCachedCommands(cachedCommandsRef.current);
+        const matching = fetched.filter(command => command.name.toLowerCase().startsWith(query)).slice(0, 15);
+        if (matching.length) {
+          setSlashCommands(matching);
+          setSlashCommandSearchStatus("");
+        } else {
+          setSlashCommands(cachedHits.slice(0, 15));
+          setSlashCommandSearchStatus(cachedHits.length
+            ? "⚡ Showing cached commands"
+            : ids.length ? "No matching registered slash commands found." : "No bot application IDs discovered yet. Open a bot DM or use Developer Tools → Application Commands.");
+        }
       } catch (error) {
         if (!cancelled) {
-          setSlashCommands([]);
-          setSlashCommandSearchStatus("Could not load registered slash commands: " + String(error));
-          console.debug("Registered slash command loading failed", error);
+          setSlashCommands(cachedHits.slice(0, 15));
+          setSlashCommandSearchStatus(cachedHits.length ? "⚡ Offline — showing cached commands" : "Could not load commands: " + String(error));
         }
       }
-    }, 150);
+    }, cachedHits.length ? 250 : 120);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [draft, selectedChannel?.id, selectedChannel?.guild_id, selectedSlashCommand, invoke]);
+  }, [draft, selectedChannel?.id, selectedChannel?.guild_id, selectedChannel?.type, selectedSlashCommand, invoke, dmChannels, guildMembers, me?.id]);
 
   const refreshAudioDevices = useCallback(async () => {
     setAudioDevicesLoading(true);
