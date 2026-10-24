@@ -452,6 +452,64 @@ pub async fn search_application_commands(
     ).await.map_err(map_err)
 }
 
+/// List global application commands for an application.
+/// The application ID must belong to an application the authenticated user can manage.
+#[tauri::command]
+pub async fn get_global_application_commands(
+    application_id: String,
+    with_localizations: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if application_id.parse::<u64>().is_err() {
+        return Err("A valid application ID is required".to_owned());
+    }
+    let with_localizations = with_localizations.unwrap_or(true);
+    state.router.rest(
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("applications/{application_id}/commands?with_localizations={with_localizations}"),
+        None,
+    ).await.map_err(map_err)
+}
+
+/// List application commands registered to a specific guild.
+#[tauri::command]
+pub async fn get_guild_application_commands(
+    application_id: String,
+    guild_id: String,
+    with_localizations: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if application_id.parse::<u64>().is_err() || guild_id.parse::<u64>().is_err() {
+        return Err("Valid application and guild IDs are required".to_owned());
+    }
+    let with_localizations = with_localizations.unwrap_or(true);
+    state.router.rest(
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("applications/{application_id}/guilds/{guild_id}/commands?with_localizations={with_localizations}"),
+        None,
+    ).await.map_err(map_err)
+}
+
+/// List configured command permissions for an application in a guild.
+#[tauri::command]
+pub async fn get_guild_application_command_permissions(
+    application_id: String,
+    guild_id: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if application_id.parse::<u64>().is_err() || guild_id.parse::<u64>().is_err() {
+        return Err("Valid application and guild IDs are required".to_owned());
+    }
+    state.router.rest(
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("applications/{application_id}/guilds/{guild_id}/commands/permissions"),
+        None,
+    ).await.map_err(map_err)
+}
+
 /// Invoke a discovered application command through Discord's interactions endpoint.
 #[tauri::command]
 pub async fn execute_application_command(
