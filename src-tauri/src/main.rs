@@ -7,11 +7,34 @@ mod settings_menu;
 mod voice_gateway;
 
 use discord_router::DiscordRouter;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, io::{BufWriter, Write}, path::PathBuf, process::ChildStdin, sync::{Arc, Mutex as StdMutex, OnceLock}};
 use tokio::sync::Mutex;
 use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use voice_gateway::VoiceControlState;
+
+static CONSOLE_STDIN: OnceLock<StdMutex<Option<BufWriter<ChildStdin>>>> = OnceLock::new();
+
+pub fn open_rust_console_window() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let slot = CONSOLE_STDIN.get_or_init(|| StdMutex::new(None));
+        let mut current = slot.lock().map_err(|_| "Rust console lock poisoned".to_owned())?;
+        if current.is_some() { return Ok(()); }
+        let script = "$Host.UI.RawUI.WindowTitle = 'VoidCord Rust Console'; while ($true) { $line = [Console]::In.ReadLine(); if ($null -eq $line) { break }; [Console]::WriteLine($line) }";
+        let mut child = std::process::Command::new("powershell.exe")
+            .args(["-NoLogo", "-NoProfile", "-Command", script])
+            .creation_flags(0x00000010)
+            .stdin(std::process::Stdio::piped())
+            .spawn().map_err(|e| format!("Could not open Rust console: {e}"))?;
+        let stdin = child.stdin.take().ok_or_else(|| "Rust console stdin unavailable".to_owned())?;
+        *current = Some(BufWriter::new(stdin));
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    { Err("Separate Rust console is supported on Windows only.".to_owned()) }
+}
 
 struct BackendLogger;
 
@@ -22,7 +45,13 @@ impl log::Log for BackendLogger {
 
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
-            eprintln!("[{}] {}: {}", record.level(), record.target(), record.args());
+            let line = format!("[{}] {}: {}", record.level(), record.target(), record.args());
+            eprintln!("{line}");
+            if let Some(slot) = CONSOLE_STDIN.get() {
+                if let Ok(mut guard) = slot.lock() {
+                    if let Some(writer) = guard.as_mut() { let _ = writeln!(writer, "{line}"); let _ = writer.flush(); }
+                }
+            }
         }
     }
 
@@ -137,6 +166,7 @@ fn main() {
             commands::delete_guild_channel,
             commands::start_gateway,
             commands::toggle_devtools,
+            commands::open_rust_console,
             commands::request_guild_member_list,
             commands::set_voice_state,
             commands::list_audio_devices,

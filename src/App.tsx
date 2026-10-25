@@ -4458,6 +4458,7 @@ export default function App() {
             <div className="user-bar-controls">
               <button className={`user-bar-btn ${micMuted ? "muted" : ""}`} title={micMuted ? "Unmute" : "Mute"} onClick={() => void updateVoiceControls(!micMuted, deafened)}><Mic size={15} /></button>
               <button className={`user-bar-btn ${deafened ? "deafened" : ""}`} title={deafened ? "Undeafen" : "Deafen"} onClick={() => void updateVoiceControls(micMuted, !deafened)}><Headphones size={15} /></button>
+              <button className="user-bar-btn" title="Open Rust Console" aria-label="Open Rust Console" onClick={() => void tauriInvoke("open_rust_console").catch(error => console.error("Could not open Rust console", error))}><Terminal size={15} /></button>
               <button className="user-bar-btn" title="Settings" onClick={() => setProtoSettingsOpen(true)}><Settings size={15} /></button>
             </div>
           </div>
