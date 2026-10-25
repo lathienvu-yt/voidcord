@@ -461,6 +461,8 @@ type AppPreferences = {
   chatFontScale: number;
   serverOrder: string[];
   serverFolders: Record<string, string>;
+  cachedServerOrder: string[];
+  cachedDiscordFolders: DiscordGuildFolder[];
 };
 
 const CAPTCHA_ERROR_PREFIX = "VOIDCORD_CAPTCHA:";
@@ -540,7 +542,7 @@ function loadHCaptchaScript(): Promise<void> {
 }
 
 function readPreferences(): AppPreferences {
-  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false, showSystemNotifications: true, systemNotificationDuration: 4200, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {} };
+  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false, showSystemNotifications: true, systemNotificationDuration: 4200, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {}, cachedServerOrder: [], cachedDiscordFolders: [] };
   try {
     const saved = JSON.parse(localStorage.getItem("voidcord:preferences") || "{}");
     return {
@@ -554,6 +556,8 @@ function readPreferences(): AppPreferences {
       chatFontScale: Number.isFinite(saved.chatFontScale) ? Math.max(85, Math.min(125, saved.chatFontScale)) : defaults.chatFontScale,
       serverOrder: Array.isArray(saved.serverOrder) ? saved.serverOrder.filter((id: unknown): id is string => typeof id === "string") : [],
       serverFolders: saved.serverFolders && typeof saved.serverFolders === "object" && !Array.isArray(saved.serverFolders) ? saved.serverFolders : {},
+      cachedServerOrder: Array.isArray(saved.cachedServerOrder) ? saved.cachedServerOrder.filter((id: unknown): id is string => typeof id === "string") : [],
+      cachedDiscordFolders: Array.isArray(saved.cachedDiscordFolders) ? saved.cachedDiscordFolders.filter((folder: unknown) => !!folder && typeof folder === "object") as DiscordGuildFolder[] : [],
     };
   } catch {
     return defaults;
@@ -902,6 +906,7 @@ export default function App() {
 
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [discordGuildFolders, setDiscordGuildFolders] = useState<DiscordGuildFolderSettings | null>(null);
+  const [collapsedServerFolders, setCollapsedServerFolders] = useState<Set<string>>(() => new Set());
   const [selectedGuild, setSelectedGuild] = useState<DiscordGuild | null>(null);
   const [dmChannels, setDmChannels] = useState<DiscordChannel[]>([]);
   const [recentlyMessaged, setRecentlyMessaged] = useState<string[]>(() => {
@@ -2064,7 +2069,12 @@ export default function App() {
         setGuilds(availableGuilds);
         try {
           const proto = await invoke<{ settings?: string }>("get_guild_folder_settings");
-          if (proto.settings) setDiscordGuildFolders(decodeGuildFolderSettings(proto.settings));
+          if (proto.settings) {
+            const decoded = decodeGuildFolderSettings(proto.settings);
+            setDiscordGuildFolders(decoded);
+            const remoteOrder = [...new Set([...decoded.folders.flatMap(folder => folder.guildIds), ...decoded.positions])];
+            setPreferences(current => ({ ...current, cachedServerOrder: remoteOrder, cachedDiscordFolders: decoded.folders }));
+          }
         } catch (settingsError) {
           console.warn("Could not load Discord guild folder settings; keeping local sidebar layout", settingsError);
         }
@@ -4120,12 +4130,12 @@ export default function App() {
   const orderedGuilds = useMemo(() => {
     const localOrder = new Map(preferences.serverOrder.map((id, index) => [id, index]));
     const remoteOrder = new Map<string, number>(); let next = 0;
-    for (const folder of discordGuildFolders?.folders || []) for (const id of folder.guildIds) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
-    for (const id of discordGuildFolders?.positions || []) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
+    for (const folder of (discordGuildFolders?.folders || preferences.cachedDiscordFolders)) for (const id of folder.guildIds) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
+    for (const id of (discordGuildFolders?.positions || preferences.cachedServerOrder)) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
     const original = new Map(guilds.map((guild, index) => [guild.id, index]));
     return [...guilds].sort((a,b) => { const la=localOrder.get(a.id),lb=localOrder.get(b.id); if(la!==undefined||lb!==undefined){if(la===undefined)return 1;if(lb===undefined)return -1;if(la!==lb)return la-lb;}return (remoteOrder.get(a.id)??(next+(original.get(a.id)||0)))-(remoteOrder.get(b.id)??(next+(original.get(b.id)||0))); });
-  }, [guilds, preferences.serverOrder, discordGuildFolders]);
-  const remoteFolderByGuild = useMemo(() => { const map=new Map<string,DiscordGuildFolder>(); for(const folder of discordGuildFolders?.folders||[])for(const id of folder.guildIds)map.set(id,folder);return map; },[discordGuildFolders]);
+  }, [guilds, preferences.serverOrder, preferences.cachedServerOrder, preferences.cachedDiscordFolders, discordGuildFolders]);
+  const remoteFolderByGuild = useMemo(() => { const map=new Map<string,DiscordGuildFolder>(); for(const folder of (discordGuildFolders?.folders || preferences.cachedDiscordFolders))for(const id of folder.guildIds)map.set(id,folder);return map; },[discordGuildFolders, preferences.cachedDiscordFolders]);
   const officialDiscordDm = !!selectedChannel && !selectedChannel.guild_id &&
     !!selectedChannel.recipients?.some(user => user?.bot && user.username?.toLowerCase() === "discord");
   const selectedVoiceChannel = selectedChannel && (
@@ -4250,8 +4260,8 @@ export default function App() {
               const folderColor = remoteFolder?.color ? `#${remoteFolder.color.toString(16).padStart(6, "0").slice(-6)}` : undefined;
               return (
                 <React.Fragment key={g.id}>
-                  {folder && folder !== previous && <div className="server-folder-label" title={folder} style={folderColor ? { borderLeft: `3px solid ${folderColor}` } : undefined}>{folder}</div>}
-                  <button
+                  {folder && folder !== previous && <button type="button" className="server-folder-label" title={`${folder} · click to ${collapsedServerFolders.has(folder) ? "expand" : "collapse"}`} style={folderColor ? { borderLeft: `3px solid ${folderColor}` } : undefined} onClick={() => setCollapsedServerFolders(current => { const next = new Set(current); if (next.has(folder)) next.delete(folder); else next.add(folder); return next; })}><span>{collapsedServerFolders.has(folder) ? "▸" : "▾"} {folder}</span></button>}
+                  {folder && collapsedServerFolders.has(folder) ? null : <button
                     className={`server-icon ${isActive ? "active" : ""}`}
                     title={`${folder ? `${folder} · ` : ""}${g.name} (right-click to organize)`}
                     style={{ animationDelay: `${i * 30}ms` } as React.CSSProperties}
@@ -4266,7 +4276,7 @@ export default function App() {
                     }}
                   >
                     <GuildIcon guild={g} />
-                  </button>
+                  </button>}
                 </React.Fragment>
               );
             })}
@@ -6021,6 +6031,29 @@ export default function App() {
                 <label className="feature-field"><span>Channel sidebar width · {preferences.channelSidebarWidth}px</span><input type="range" min="180" max="360" step="4" value={preferences.channelSidebarWidth} onChange={event => setPreferences(current => ({ ...current, channelSidebarWidth: Number(event.target.value) }))} /></label>
                 <h3 className="settings-section-title">Server folders and order</h3>
                 <p className="settings-help">Group servers by folder name. Use arrows to change their order in the server rail.</p>
+                <div className="server-folder-order-list">
+                  {[...new Set(orderedGuilds.map(guild => remoteFolderByGuild.get(guild.id)?.name || preferences.serverFolders[guild.id]?.trim()).filter((name): name is string => !!name))].map((folderName, folderIndex, folderNames) => (
+                    <div className="server-organize-row server-folder-order-row" key={folderName}>
+                      <strong>📁 {folderName}</strong>
+                      <button type="button" aria-label={"Move folder " + folderName + " up"} disabled={folderIndex === 0} onClick={() => setPreferences(current => {
+                        const groups = new Map<string, string[]>();
+                        for (const guild of orderedGuilds) { const key = remoteFolderByGuild.get(guild.id)?.name || current.serverFolders[guild.id]?.trim() || ""; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(guild.id); }
+                        const order = [...folderNames]; [order[folderIndex - 1], order[folderIndex]] = [order[folderIndex], order[folderIndex - 1]];
+                        const ids = [...(groups.get("") || [])]; for (const key of order) ids.push(...(groups.get(key) || []));
+                        for (const [key, value] of groups) if (key && !order.includes(key)) ids.push(...value);
+                        return { ...current, serverOrder: ids };
+                      })}>↑</button>
+                      <button type="button" aria-label={"Move folder " + folderName + " down"} disabled={folderIndex === folderNames.length - 1} onClick={() => setPreferences(current => {
+                        const groups = new Map<string, string[]>();
+                        for (const guild of orderedGuilds) { const key = remoteFolderByGuild.get(guild.id)?.name || current.serverFolders[guild.id]?.trim() || ""; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(guild.id); }
+                        const order = [...folderNames]; [order[folderIndex + 1], order[folderIndex]] = [order[folderIndex], order[folderIndex + 1]];
+                        const ids = [...(groups.get("") || [])]; for (const key of order) ids.push(...(groups.get(key) || []));
+                        for (const [key, value] of groups) if (key && !order.includes(key)) ids.push(...value);
+                        return { ...current, serverOrder: ids };
+                      })}>↓</button>
+                    </div>
+                  ))}
+                </div>
                 <div className="server-organize-list">
                   {orderedGuilds.map((guild, index) => (
                     <div className="server-organize-row" key={guild.id}>
