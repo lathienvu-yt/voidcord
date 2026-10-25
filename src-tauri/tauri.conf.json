@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "app.voidcord.desktop",
   "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://127.0.0.1:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
-  "app": { "windows": [{ "title": "VoidCord", "width": 1440, "height": 900, "minWidth": 980, "minHeight": 640, "decorations": false, "transparent": true, "backgroundColor": "#00000000" }], "security": { "csp": null } },
+  "app": { "windows": [{ "title": "VoidCord", "width": 1440, "height": 900, "minWidth": 980, "minHeight": 640, "decorations": true, "transparent": false, "backgroundColor": "#1a1626" }], "security": { "csp": null } },
   "bundle": { "active": true, "targets": "all", "icon": ["icons/icon.ico"] }
 }
 
