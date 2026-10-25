@@ -71,8 +71,15 @@ pub async fn set_token(
 ) -> Result<Value, String> {
     emit_rust_log(&app, "debug", "auth", "Validating Discord credentials");
     log::debug!("Validating Discord credentials");
-    let previous_token = state.token.lock().await.clone();
+
+    // Safely scope the token lock acquisition so it drops immediately after cloning
+    let previous_token = {
+        let token_guard = state.token.lock().await;
+        token_guard.clone()
+    };
+
     rebuild_router(&state, &token).await;
+    
     let me = match state.router
         .rest(AccountIdentity::ReadOnly, Method::GET, "users/@me", None)
         .await
@@ -82,8 +89,7 @@ pub async fn set_token(
             emit_rust_log(&app, "warn", "auth", "Discord credential validation failed");
             log::warn!("Discord credential validation failed");
             let message = map_err(error);
-            // Keep the attempted token active while a CAPTCHA retry is pending,
-            // because the router owns the paused request and its challenge state.
+            
             if !message.starts_with("VOIDCORD_CAPTCHA:") {
                 if let Some(previous) = previous_token {
                     rebuild_router(&state, &previous).await;
@@ -95,6 +101,7 @@ pub async fn set_token(
         }
     };
 
+    // Clean up existing background tasks cleanly without deadlocking locks
     if let Some(gateway_task) = state.gateway_task.lock().await.take() {
         gateway_task.abort();
     }
@@ -102,8 +109,13 @@ pub async fn set_token(
     if let Some(voice_task) = state.voice_task.lock().await.take() {
         voice_task.abort();
     }
+
     rebuild_router(&state, &token).await;
-    *state.token.lock().await = Some(token.clone());
+    
+    {
+        let mut token_guard = state.token.lock().await;
+        *token_guard = Some(token.clone());
+    }
 
     emit_rust_log(&app, "info", "auth", "Discord credentials validated successfully");
     log::info!("Discord credentials validated successfully");
@@ -1733,14 +1745,21 @@ pub async fn export_vcc_file(
                 .unwrap_or_default()
                 .as_secs()
         );
-        let chosen = app
-            .dialog()
+        
+        // Use async save_file instead of blocking_save_file to prevent thread stalling
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        app.dialog()
             .file()
             .set_file_name(&default_name)
             .add_filter("VoidCord Cache", &["vcc"])
-            .blocking_save_file();
+            .save_file(move |chosen| {
+                let _ = sender.send(chosen);
+            });
 
-        chosen.and_then(|p| p.into_path().ok())
+        receiver
+            .await
+            .map_err(|_| "Dialog channel closed unexpectedly".to_string())?
+            .and_then(|p| p.into_path().ok())
     };
 
     match target_path {
@@ -1755,6 +1774,32 @@ pub async fn export_vcc_file(
             Ok(path.to_string_lossy().into_owned())
         }
         None => Err("Export cancelled by user".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn pick_vcc_file(app: AppHandle) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+    
+    // Use async pick_file instead of blocking_pick_file
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .add_filter("VoidCord Cache", &["vcc", "json"])
+        .pick_file(move |chosen| {
+            let _ = sender.send(chosen);
+        });
+
+    let chosen = receiver
+        .await
+        .map_err(|_| "Dialog channel closed unexpectedly".to_string())?;
+
+    match chosen.and_then(|p| p.into_path().ok()) {
+        Some(path) => {
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read .vcc file at {}: {e}", path.display()))
+        }
+        None => Err("Import cancelled by user".to_string()),
     }
 }
 
