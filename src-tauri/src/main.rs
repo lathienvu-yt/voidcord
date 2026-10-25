@@ -13,6 +13,8 @@ use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use voice_gateway::VoiceControlState;
 
+pub fn open_rust_console_window() -> Result<(), String> { #[cfg(windows)] { use std::os::windows::process::CommandExt; std::process::Command::new("powershell.exe").args(["-NoExit", "-NoLogo", "-NoProfile", "-Command", "$Host.UI.RawUI.WindowTitle = 'VoidCord Rust Console'; Write-Host 'VoidCord Rust Console ready.'"]).creation_flags(0x00000010).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::inherit()).stderr(std::process::Stdio::inherit()).spawn().map(|_| ()).map_err(|e| format!("Could not open Rust console: {e}")) } #[cfg(not(windows))] { Err("Separate Rust console is supported on Windows only.".to_owned()) } }
+
 struct BackendLogger;
 
 impl log::Log for BackendLogger {
