@@ -639,19 +639,45 @@ impl DiscordRouter {
 
                             if event.get("t").and_then(Value::as_str) == Some("READY") {
                                 let d = event.get("d").cloned().unwrap_or(Value::Null);
-                                let mut session = self.gateway_session.lock().await;
-                                session.session_id = d.get("session_id").and_then(Value::as_str).map(str::to_owned);
-                                session.resume_gateway_url = d.get("resume_gateway_url").and_then(Value::as_str).map(str::to_owned);
-                                session.sequence = sequence;
-                                session.disconnected_at = None;
-                                session.resumable = session.session_id.is_some() && session.resume_gateway_url.is_some();
-                                *self.gateway_sender.write().await = Some(gateway_tx.clone());
+                                {
+                                    let wait_started = std::time::Instant::now();
+                                    let mut session = self.gateway_session.lock().await;
+                                    let waited = wait_started.elapsed();
+                                    if waited >= Duration::from_millis(100) {
+                                        log::warn!("Suspected gateway_session lock stall: waited {:?} handling READY", waited);
+                                    }
+                                    session.session_id = d.get("session_id").and_then(Value::as_str).map(str::to_owned);
+                                    session.resume_gateway_url = d.get("resume_gateway_url").and_then(Value::as_str).map(str::to_owned);
+                                    session.sequence = sequence;
+                                    session.disconnected_at = None;
+                                    session.resumable = session.session_id.is_some() && session.resume_gateway_url.is_some();
+                                } // Release gateway_session before awaiting gateway_sender.
+                                let wait_started = std::time::Instant::now();
+                                let mut sender = self.gateway_sender.write().await;
+                                let waited = wait_started.elapsed();
+                                if waited >= Duration::from_millis(100) {
+                                    log::warn!("Suspected gateway_sender lock stall: waited {:?} publishing READY", waited);
+                                }
+                                *sender = Some(gateway_tx.clone());
                             } else if event.get("t").and_then(Value::as_str) == Some("RESUMED") {
-                                let mut session = self.gateway_session.lock().await;
-                                session.sequence = sequence;
-                                session.disconnected_at = None;
-                                session.resumable = true;
-                                *self.gateway_sender.write().await = Some(gateway_tx.clone());
+                                {
+                                    let wait_started = std::time::Instant::now();
+                                    let mut session = self.gateway_session.lock().await;
+                                    let waited = wait_started.elapsed();
+                                    if waited >= Duration::from_millis(100) {
+                                        log::warn!("Suspected gateway_session lock stall: waited {:?} handling RESUMED", waited);
+                                    }
+                                    session.sequence = sequence;
+                                    session.disconnected_at = None;
+                                    session.resumable = true;
+                                } // Release gateway_session before awaiting gateway_sender.
+                                let wait_started = std::time::Instant::now();
+                                let mut sender = self.gateway_sender.write().await;
+                                let waited = wait_started.elapsed();
+                                if waited >= Duration::from_millis(100) {
+                                    log::warn!("Suspected gateway_sender lock stall: waited {:?} publishing RESUMED", waited);
+                                }
+                                *sender = Some(gateway_tx.clone());
                             }
 
                             if let Some(seq) = sequence {
