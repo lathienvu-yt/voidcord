@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+
 import { load } from "@tauri-apps/plugin-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -37,8 +37,9 @@ type VoidCordMenuBarProps = { onOpenLogs: () => void };
 function VoidCordMenuBar({ onOpenLogs }: VoidCordMenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const openDevTools = () => {
-    try { getCurrentWebview().openDevtools(); }
-    catch (error) { console.error("Could not open WebView DevTools", error); }
+    void tauriInvoke("toggle_devtools").catch(error => {
+      console.error("Could not toggle WebView DevTools", error);
+    });
   };
   const menus = [
     { label: "File", items: [
