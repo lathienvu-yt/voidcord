@@ -32,70 +32,6 @@ import "./style.css";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-type VoidCordMenuBarProps = { onOpenLogs: () => void };
-
-function VoidCordMenuBar({ onOpenLogs }: VoidCordMenuBarProps) {
-  const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const openDevTools = () => {
-    void tauriInvoke("toggle_devtools").catch(error => {
-      console.error("Could not toggle WebView DevTools", error);
-    });
-  };
-  const menus = [
-    { label: "File", items: [
-      { label: "Reload VoidCord", action: () => window.location.reload() },
-      { label: "Close window", action: () => { void getCurrentWindow().close(); } },
-    ] },
-    { label: "DevTool", items: [
-      { label: "Open WebView DevTools", action: openDevTools },
-      { label: "Reload WebView", action: () => window.location.reload() },
-    ] },
-    { label: "Rust", items: [
-      { label: "Open DevTools console", action: openDevTools },
-    ] },
-    { label: "View", items: [
-      { label: "Reload interface", action: () => window.location.reload() },
-    ] },
-    { label: "Logs", items: [
-      { label: "Deleted messages log", action: onOpenLogs },
-      { label: "Open DevTools console", action: openDevTools },
-    ] },
-  ];
-  useEffect(() => {
-    if (!openMenu) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setOpenMenu(null); };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [openMenu]);
-  return (
-    <nav className="voidcord-menubar" aria-label="Application menu">
-      {menus.map(menu => (
-        <div className="voidcord-menu" key={menu.label}>
-          <button type="button" className={`voidcord-menu-trigger ${openMenu === menu.label ? "active" : ""}`}
-            aria-haspopup="menu" aria-expanded={openMenu === menu.label}
-            onClick={() => setOpenMenu(current => current === menu.label ? null : menu.label)}
-            onMouseEnter={() => { if (openMenu !== null) setOpenMenu(menu.label); }}>
-            {menu.label}
-          </button>
-          {openMenu === menu.label && (
-            <>
-              <button type="button" className="voidcord-menu-dismiss" aria-label="Close application menu" onClick={() => setOpenMenu(null)} />
-              <div className="voidcord-menu-dropdown" role="menu">
-                {menu.items.map(item => (
-                  <button type="button" role="menuitem" className="voidcord-menu-item" key={item.label}
-                    onClick={() => { setOpenMenu(null); item.action(); }}>
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      ))}
-    </nav>
-  );
-}
-
 function isTextChannel(c: DiscordChannel) {
   return c.type === CHANNEL_TYPE_TEXT || c.type === CHANNEL_TYPE_ANNOUNCEMENT;
 }
@@ -726,13 +662,6 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
 
   return (
     <div className="login-screen">
-      <header className="voidcord-toolbar">
-        <div className="titlebar-brand">
-          <div className="titlebar-logo">V</div>
-          <span className="titlebar-name">VoidCord</span>
-          <span className="build-tag">PREVIEW</span>
-        </div>
-      </header>
       <div className="login-body">
         <div className="login-card">
           <div className="login-logo">V</div>
@@ -1821,6 +1750,19 @@ export default function App() {
     });
     messageArchivePromisesRef.current.set(message.id, promise);
     return promise;
+  }, []);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    void listen<string>("native-menu-action", event => {
+      switch (event.payload) {
+        case "reload": window.location.reload(); break;
+        case "close": void getCurrentWindow().close(); break;
+        case "devtools": void tauriInvoke("toggle_devtools").catch(error => console.error("Could not toggle WebView DevTools", error)); break;
+        case "deleted-log": void openMessageLogger(); break;
+      }
+    }).then(fn => { unlisten = fn; });
+    return () => { unlisten?.(); };
   }, []);
 
   const openMessageLogger = async () => {
@@ -4230,21 +4172,6 @@ export default function App() {
           <span>{gatewayStatus === "reconnecting" ? "Reconnecting to Discord gateway…" : "Connecting to Discord gateway…"}</span>
         </div>
       )}
-
-      {/* Titlebar */}
-      <header className="voidcord-toolbar">
-        <div className="titlebar-brand" data-tauri-drag-region>
-          <div className="titlebar-logo">V</div>
-          <span className="titlebar-name">VoidCord</span>
-          <span className="build-tag">PREVIEW</span>
-          <span className={`gateway-status-indicator ${gatewayStatus}`} title={`Discord gateway ${gatewayStatus}`} role="status">
-            <span className="gateway-status-dot" />
-            {gatewayStatus === "connected" ? "Connected" : gatewayStatus === "reconnecting" ? "Reconnecting" : gatewayStatus === "offline" ? "Offline" : "Connecting"}
-          </span>
-        </div>
-      </header>
-
-      <VoidCordMenuBar onOpenLogs={() => { void openMessageLogger(); }} />
       {Object.keys(incomingCallChannels).length > 0 && (() => {
         const incomingId = Object.keys(incomingCallChannels)[0];
         const incomingChannel = dmChannels.find(channel => channel.id === incomingId);
