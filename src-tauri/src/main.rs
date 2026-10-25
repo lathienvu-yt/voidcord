@@ -7,7 +7,7 @@ mod settings_menu;
 mod voice_gateway;
 
 use discord_router::DiscordRouter;
-use std::{collections::HashMap, io::{BufWriter, Write}, path::PathBuf, process::ChildStdin, sync::{mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError}, Arc, Mutex as StdMutex, OnceLock}, time::Duration};
+use std::{collections::HashMap, io::{BufWriter, Write}, path::PathBuf, process::ChildStdin, sync::{mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError}, Arc, Mutex as StdMutex, OnceLock}, time::Duration};
 use tokio::sync::Mutex;
 use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -75,12 +75,13 @@ impl log::Log for BackendLogger {
 
 fn run_console_log_writer(receiver: Receiver<String>) {
     loop {
-        let first = match receiver.recv() {
+        let first = match receiver.recv_timeout(Duration::from_millis(50)) {
             Ok(line) => line,
-            Err(_) => break,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
         };
         let mut batch = vec![first];
-        // Gather a short batch so console writes and flushes are amortized.
+        // Gather queued lines so console writes and flushes are amortized.
         while batch.len() < 64 {
             match receiver.try_recv() {
                 Ok(line) => batch.push(line),
