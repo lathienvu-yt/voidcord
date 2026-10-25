@@ -1,31 +1,64 @@
 # VoidCord
 
-An offline-friendly Discord client shell made with Tauri 2, React and TypeScript. The preview UI runs on local sample data. The Rust backend now includes an account-aware Discord REST/gateway routing module; OAuth credential provisioning and frontend commands still need to be connected.
+An offline-friendly, zero-bloat Discord client shell built with **Tauri 2**, **Rust**, and **React/TypeScript**. Engineered for bare-metal performance, offline-first message archiving, multi-account routing, and real-time media transport.
 
-## Start
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Node.js (v18+)
+- Rust & Cargo (Latest Stable)
+- Operating system build tools required by [Tauri 2](https://v2.tauri.app/start/prerequisites/)
+
+### Development
 
 ```sh
 npm install
 npm run tauri dev
 ```
 
-To build the desktop app, install the prerequisites for Tauri 2 and run `npm run tauri build`.
+### Production Build
 
-## Included in the preview
+To build the optimized desktop application binary:
 
-- Custom desktop title bar, Discord-inspired server/channel layout, message list, member list, profile menu, composer, and dark/light themes.
-- Offline/online status and a local Tauri Store cache for messages, profile selection, and preferences. Messages you type offline stay in the composer as drafts.
-- A local archived-channel preview: “save last message offline” stores a channel's last message. Archived entries are rendered as muted, clickable, read-only channels and show their locally saved message.
-- Multiple local profile slots and profile selection. These are presentation profiles, not Discord credentials or an authentication implementation.
-- Windows transparent window setup for native material experimentation. Mica needs a Windows-specific native window effect integration; transparent mode alone does not activate Mica.
-- Guild, direct-message, and group-DM voice calls using Discord's voice gateway, DAVE media encryption, Opus encode/decode, selectable microphone and speaker devices, and streaming resampling to/from Discord's 48 kHz audio format. Voice participants and call chat are shown in the voice view; guild voice channels also support editable status.
-- Vencord loader preference placeholder only. Loading Vencord requires an explicit, compatible integration and a plugin security boundary.
-- Rust account request router in `src-tauri/src/discord_router.rs`: primary identity for message/reaction writes, read-only identity for browsing and gateway events, explicit secondary identity availability, and safe local community-to-account preferences.
+```sh
+npm run tauri build
+```
 
-## Voice dependency licensing
+---
 
-The voice implementation depends on [`cacophony`](https://crates.io/crates/cacophony) and its [`dave`](https://crates.io/crates/dave) dependency, both licensed `AGPL-3.0-only`. Review and comply with those license terms before distributing VoidCord or offering a modified version over a network.
+## 🔥 Key Features & Technical Highlights
 
-## Privacy and access
+* **Rust Account Request Router (`src-tauri/src/discord_router.rs`)**
+  * Account-aware REST and Gateway routing layer with isolation between primary identities (write/reactions) and read-only identity scopes.
+  * In-memory credential protection with automated debug log redaction and safe local account-preference mapping.
 
-Use Discord's supported OAuth flow to authenticate accounts. Never store Discord passwords or user tokens in the frontend or local cache. The router holds credentials only in Rust memory and redacts their debug output. HTTP 401/403 and channel-access errors are surfaced to the selected identity's caller; they are not silently retried under another account. Age gates and channel access restrictions must be respected for the signed-in account. Archived messages are only messages captured locally while the user could already see them.
+* **Protobuf & Settings Synchronization**
+  * Built-in `user-settings-proto/1` parsing for exact guild folder layouts, themes, position indexes, and account preferences.
+
+* **Low-Latency Voice Engine**
+  * Native voice gateway integration supporting Guild, DM, and Group-DM voice calls.
+  * Features **DAVE media encryption**, **Opus encoding/decoding**, custom sample resampling to/from Discord’s native 48 kHz standard, and configurable audio input/output device routing.
+
+* **Offline First & `.vcc` Local Archives**
+  * Offline composer message drafting and local channel state retention.
+  * Export and import local message archives via `.vcc` file format with zero-alloc async IPC dialog locks.
+
+* **Sovereign Desktop Interface**
+  * Custom Windows native titlebar, paint-style menu toolbar, light/dark themes, and native transparent background modes.
+  * Interactive Application Command Browser UI with slash-command payload parsing and autocomplete support.
+
+---
+
+## 📜 Voice Subsystem Licensing
+
+The voice implementation depends on [`cacophony`](https://crates.io/crates/cacophony) and its [`dave`](https://crates.io/crates/dave) dependency, both licensed under `AGPL-3.0-only`. Please review and comply with these license terms before distributing modified versions of VoidCord or hosting network services utilizing these components.
+
+---
+
+## 🔒 Security & Privacy
+
+* Credentials and auth tokens are held strictly inside Rust process memory and are never exposed to local frontend persistent storage or client log outputs.
+* Rate limits, channel permissions, and age gates strictly adhere to the authenticated user identity without silent failover between sessions.
+* Local channel archives only capture messages visible during an active session.
