@@ -11,11 +11,12 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::{header, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 const DISCORD_API: &str = "https://discord.com/api/v10";
 const DISCORD_GATEWAY: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
+const GATEWAY_RESUME_WINDOW: Duration = Duration::from_secs(10 * 60);
 static CAPTCHA_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 fn redact_sensitive_query(path: &str) -> String {
@@ -131,6 +132,15 @@ struct DiscordErrorBody {
     code: Option<i64>,
 }
 
+#[derive(Debug, Default, Clone)]
+struct GatewaySession {
+    session_id: Option<String>,
+    resume_gateway_url: Option<String>,
+    sequence: Option<u64>,
+    disconnected_at: Option<tokio::time::Instant>,
+    resumable: bool,
+}
+
 /// A small, clonable router to share between Tauri commands and gateway tasks.
 #[derive(Clone)]
 pub struct DiscordRouter {
@@ -138,6 +148,7 @@ pub struct DiscordRouter {
     tokens: Arc<RwLock<TokenManager>>,
     pending_captchas: Arc<RwLock<HashMap<String, PendingCaptchaRequest>>>,
     gateway_sender: Arc<RwLock<Option<watch::Sender<Value>>>>,
+    gateway_session: Arc<Mutex<GatewaySession>>,
 }
 
 impl Default for DiscordRouter {
@@ -167,6 +178,7 @@ impl DiscordRouter {
             tokens: Arc::new(RwLock::new(tokens)),
             pending_captchas: Arc::new(RwLock::new(HashMap::new())),
             gateway_sender: Arc::new(RwLock::new(None)),
+            gateway_session: Arc::new(Mutex::new(GatewaySession::default())),
         }
     }
 
@@ -407,7 +419,24 @@ impl DiscordRouter {
     }
 
     /// Open a gateway connection as a specifically selected authorized account.
+    /// Retain session state between calls so the caller's retry loop can Resume.
     pub async fn listen_gateway<F>(
+        &self,
+        identity: AccountIdentity,
+        on_event: F,
+    ) -> Result<(), DiscordError>
+    where
+        F: FnMut(Value) + Send,
+    {
+        let result = self.listen_gateway_once(identity, on_event).await;
+        let mut session = self.gateway_session.lock().await;
+        if session.session_id.is_some() {
+            session.disconnected_at = Some(tokio::time::Instant::now());
+        }
+        result
+    }
+
+    async fn listen_gateway_once<F>(
         &self,
         identity: AccountIdentity,
         mut on_event: F,
@@ -420,9 +449,47 @@ impl DiscordRouter {
             tokens.get(identity)?.clone()
         };
         *self.gateway_sender.write().await = None;
-        let url = url::Url::parse(DISCORD_GATEWAY).map_err(|_| DiscordError::InvalidWebSocketUrl)?;
 
-        let (mut socket, _) = match connect_async(url.as_str()).await {
+        // Do not repeatedly attempt WebSocket connects while offline. Any HTTP
+        // response from Discord (including an error status) proves reachability.
+        loop {
+            match self.client
+                .get(format!("{DISCORD_API}/gateway"))
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await
+            {
+                Ok(_) => break,
+                Err(error) => {
+                    log::debug!("Discord is not reachable yet; waiting before gateway connect: {error}");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
+
+        let (connect_url, should_resume) = {
+            let mut session = self.gateway_session.lock().await;
+            let within_window = session.disconnected_at
+                .is_some_and(|at| at.elapsed() < GATEWAY_RESUME_WINDOW);
+            let can_resume = session.resumable
+                && within_window
+                && session.session_id.is_some()
+                && session.resume_gateway_url.is_some()
+                && session.sequence.is_some();
+            if !within_window && session.disconnected_at.is_some() {
+                *session = GatewaySession::default();
+            }
+            let raw_url = if can_resume {
+                session.resume_gateway_url.as_deref().unwrap_or(DISCORD_GATEWAY)
+            } else {
+                DISCORD_GATEWAY
+            };
+            let mut parsed = url::Url::parse(raw_url).map_err(|_| DiscordError::InvalidWebSocketUrl)?;
+            parsed.query_pairs_mut().clear().append_pair("v", "10").append_pair("encoding", "json");
+            (parsed.to_string(), can_resume)
+        };
+
+        let (mut socket, _) = match connect_async(connect_url.as_str()).await {
             Ok(res) => res,
             Err(e) => {
                 log::warn!("Gateway connection failed: {e}");
@@ -440,7 +507,7 @@ impl DiscordRouter {
         );
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut identified = false;
-        let mut sequence: Option<u64> = None;
+        let mut sequence = self.gateway_session.lock().await.sequence;
 
         loop {
             tokio::select! {
@@ -518,23 +585,35 @@ impl DiscordRouter {
                                 }
 
                                 if !identified {
-                                    let identify = serde_json::json!({
-                                        "op": 2,
-                                        "d": {
-                                            "token": token.0.as_ref(),
-                                            "capabilities": 176421,
-                                            "properties": {
-                                                "os": "Windows",
-                                                "browser": "Chrome",
-                                                "device": "",
-                                                "system_locale": "en-US",
-                                                "client_version": "1.0.9000",
-                                                "release_channel": "stable"
+                                    let handshake = if should_resume {
+                                        let session = self.gateway_session.lock().await;
+                                        serde_json::json!({
+                                            "op": 6,
+                                            "d": {
+                                                "token": token.0.as_ref(),
+                                                "session_id": session.session_id,
+                                                "seq": sequence
                                             }
-                                        }
-                                    });
-                                    if let Err(e) = socket.send(WsMessage::Text(identify.to_string())).await {
-                                        log::warn!("Gateway identify send error: {e}");
+                                        })
+                                    } else {
+                                        serde_json::json!({
+                                            "op": 2,
+                                            "d": {
+                                                "token": token.0.as_ref(),
+                                                "capabilities": 176421,
+                                                "properties": {
+                                                    "os": "Windows",
+                                                    "browser": "Chrome",
+                                                    "device": "",
+                                                    "system_locale": "en-US",
+                                                    "client_version": "1.0.9000",
+                                                    "release_channel": "stable"
+                                                }
+                                            }
+                                        })
+                                    };
+                                    if let Err(e) = socket.send(WsMessage::Text(handshake.to_string())).await {
+                                        log::warn!("Gateway handshake send error: {e}");
                                         break;
                                     }
                                     identified = true;
@@ -544,12 +623,38 @@ impl DiscordRouter {
                             if op == Some(1) {
                                 let payload = serde_json::json!({"op": 1, "d": sequence});
                                 let _ = socket.send(WsMessage::Text(payload.to_string())).await;
-                            } else if op == Some(7) || op == Some(9) {
+                            } else if op == Some(7) {
+                                // Discord explicitly asks us to reconnect and resume.
+                                return Err(DiscordError::WebSocketClosed);
+                            } else if op == Some(9) {
+                                let resumable = event.get("d").and_then(Value::as_bool).unwrap_or(false);
+                                let mut session = self.gateway_session.lock().await;
+                                session.resumable = resumable;
+                                if !resumable {
+                                    *session = GatewaySession::default();
+                                }
                                 return Err(DiscordError::WebSocketClosed);
                             }
 
                             if event.get("t").and_then(Value::as_str) == Some("READY") {
+                                let d = event.get("d").cloned().unwrap_or(Value::Null);
+                                let mut session = self.gateway_session.lock().await;
+                                session.session_id = d.get("session_id").and_then(Value::as_str).map(str::to_owned);
+                                session.resume_gateway_url = d.get("resume_gateway_url").and_then(Value::as_str).map(str::to_owned);
+                                session.sequence = sequence;
+                                session.disconnected_at = None;
+                                session.resumable = session.session_id.is_some() && session.resume_gateway_url.is_some();
                                 *self.gateway_sender.write().await = Some(gateway_tx.clone());
+                            } else if event.get("t").and_then(Value::as_str) == Some("RESUMED") {
+                                let mut session = self.gateway_session.lock().await;
+                                session.sequence = sequence;
+                                session.disconnected_at = None;
+                                session.resumable = true;
+                                *self.gateway_sender.write().await = Some(gateway_tx.clone());
+                            }
+
+                            if let Some(seq) = sequence {
+                                self.gateway_session.lock().await.sequence = Some(seq);
                             }
 
                             on_event(event);

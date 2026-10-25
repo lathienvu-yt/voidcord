@@ -1557,6 +1557,13 @@ pub async fn start_gateway(
                             );
                             let _ = app2.emit("discord:gateway_ready", d);
                         }
+                        "RESUMED" => {
+                            emit_rust_log(&app2, "info", "gateway", "Gateway session resumed");
+                            let _ = app2.emit(
+                                "discord:gateway_status",
+                                json!({ "status": "connected", "resumed": true }),
+                            );
+                        }
                         _ => {}
                     }
                 })
