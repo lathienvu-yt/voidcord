@@ -461,6 +461,8 @@ type AppPreferences = {
   chatFontScale: number;
   serverOrder: string[];
   serverFolders: Record<string, string>;
+  cachedServerOrder: string[];
+  cachedDiscordFolders: DiscordGuildFolder[];
 };
 
 const CAPTCHA_ERROR_PREFIX = "VOIDCORD_CAPTCHA:";
@@ -540,7 +542,7 @@ function loadHCaptchaScript(): Promise<void> {
 }
 
 function readPreferences(): AppPreferences {
-  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false, showSystemNotifications: true, systemNotificationDuration: 4200, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {} };
+  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false, showSystemNotifications: true, systemNotificationDuration: 4200, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {}, cachedServerOrder: [], cachedDiscordFolders: [] };
   try {
     const saved = JSON.parse(localStorage.getItem("voidcord:preferences") || "{}");
     return {
@@ -554,6 +556,8 @@ function readPreferences(): AppPreferences {
       chatFontScale: Number.isFinite(saved.chatFontScale) ? Math.max(85, Math.min(125, saved.chatFontScale)) : defaults.chatFontScale,
       serverOrder: Array.isArray(saved.serverOrder) ? saved.serverOrder.filter((id: unknown): id is string => typeof id === "string") : [],
       serverFolders: saved.serverFolders && typeof saved.serverFolders === "object" && !Array.isArray(saved.serverFolders) ? saved.serverFolders : {},
+      cachedServerOrder: Array.isArray(saved.cachedServerOrder) ? saved.cachedServerOrder.filter((id: unknown): id is string => typeof id === "string") : [],
+      cachedDiscordFolders: Array.isArray(saved.cachedDiscordFolders) ? saved.cachedDiscordFolders.filter((folder: unknown) => !!folder && typeof folder === "object") as DiscordGuildFolder[] : [],
     };
   } catch {
     return defaults;
@@ -587,6 +591,27 @@ function decodeGuildFolderSettings(encoded: string): DiscordGuildFolderSettings 
   const folders=body.filter(f=>f.n===1&&f.w===2).map(f=>{const fs=fields(b(f));const guildIds=fs.filter(x=>x.n===1).flatMap(x=>x.w===1?[id(x)]:x.w===2?(()=>{const packed=b(x),ids:string[]=[];for(let o=0;o+8<=packed.length;o+=8)ids.push(id({w:1,v:packed.slice(o,o+8)}));return ids;})():[]);const wrapper=(n:number)=>{const f=fs.find(x=>x.n===n&&x.w===2);return f?fields(b(f)).find(x=>x.n===1):undefined;};const fi=wrapper(2),fn=wrapper(3),fc=wrapper(4);return {id:fi?String(fi.v):null,name:fn&&fn.v instanceof Uint8Array?new TextDecoder().decode(fn.v):"",color:fc?Number(fc.v):null,guildIds};}).filter(f=>f.guildIds.length>0);
   const p=body.find(f=>f.n===2);let positions:string[]=[];if(p?.w===1)positions=[id(p)];else if(p?.w===2){const packed=b(p);if(packed.length%8===0)for(let o=0;o<packed.length;o+=8)positions.push(id({w:1,v:packed.slice(o,o+8)}));}return {folders,positions};
 }
+
+function encodeGuildFolderSettings(settings: DiscordGuildFolderSettings): string {
+  const join = (...chunks: Uint8Array[]) => { const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0)); let offset = 0; for (const c of chunks) { out.set(c, offset); offset += c.length; } return out; };
+  const vi = (input: bigint) => { const out: number[] = []; let n = input; while (n > 127n) { out.push(Number(n & 127n) | 128); n >>= 7n; } out.push(Number(n)); return Uint8Array.from(out); };
+  const key = (field: number, wire: number) => vi(BigInt(field * 8 + wire));
+  const blob = (field: number, value: Uint8Array) => join(key(field, 2), vi(BigInt(value.length)), value);
+  const fixed = (field: number, value: string) => { let n = BigInt(value); const b = new Uint8Array(8); for (let i = 0; i < 8; i++) { b[i] = Number(n & 255n); n >>= 8n; } return join(key(field, 1), b); };
+  const wrapper = (field: number, value: Uint8Array) => blob(field, blob(1, value));
+  const folders = settings.folders.map(folder => {
+    const parts = folder.guildIds.map(id => fixed(1, id));
+    if (folder.id) parts.push(wrapper(2, vi(BigInt(folder.id))));
+    if (folder.name) parts.push(wrapper(3, new TextEncoder().encode(folder.name)));
+    if (folder.color !== null) parts.push(wrapper(4, vi(BigInt(folder.color))));
+    return blob(1, join(...parts));
+  });
+  const positions = settings.positions.map(id => fixed(2, id));
+  const encoded = blob(14, join(...folders, ...positions));
+  let binary = ""; for (const byte of encoded) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 function normalizeGuildList(value: unknown): DiscordGuild[] {
   if (!Array.isArray(value)) return [];
   return value.filter((guild): guild is DiscordGuild =>
@@ -902,6 +927,7 @@ export default function App() {
 
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [discordGuildFolders, setDiscordGuildFolders] = useState<DiscordGuildFolderSettings | null>(null);
+  const [collapsedServerFolders, setCollapsedServerFolders] = useState<Set<string>>(() => new Set());
   const [selectedGuild, setSelectedGuild] = useState<DiscordGuild | null>(null);
   const [dmChannels, setDmChannels] = useState<DiscordChannel[]>([]);
   const [recentlyMessaged, setRecentlyMessaged] = useState<string[]>(() => {
@@ -2064,7 +2090,12 @@ export default function App() {
         setGuilds(availableGuilds);
         try {
           const proto = await invoke<{ settings?: string }>("get_guild_folder_settings");
-          if (proto.settings) setDiscordGuildFolders(decodeGuildFolderSettings(proto.settings));
+          if (proto.settings) {
+            const decoded = decodeGuildFolderSettings(proto.settings);
+            setDiscordGuildFolders(decoded);
+            const remoteOrder = [...new Set([...decoded.folders.flatMap(folder => folder.guildIds), ...decoded.positions])];
+            setPreferences(current => ({ ...current, cachedServerOrder: remoteOrder, cachedDiscordFolders: decoded.folders }));
+          }
         } catch (settingsError) {
           console.warn("Could not load Discord guild folder settings; keeping local sidebar layout", settingsError);
         }
@@ -4120,12 +4151,12 @@ export default function App() {
   const orderedGuilds = useMemo(() => {
     const localOrder = new Map(preferences.serverOrder.map((id, index) => [id, index]));
     const remoteOrder = new Map<string, number>(); let next = 0;
-    for (const folder of discordGuildFolders?.folders || []) for (const id of folder.guildIds) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
-    for (const id of discordGuildFolders?.positions || []) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
+    for (const folder of (discordGuildFolders?.folders || preferences.cachedDiscordFolders)) for (const id of folder.guildIds) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
+    for (const id of (discordGuildFolders?.positions || preferences.cachedServerOrder)) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
     const original = new Map(guilds.map((guild, index) => [guild.id, index]));
     return [...guilds].sort((a,b) => { const la=localOrder.get(a.id),lb=localOrder.get(b.id); if(la!==undefined||lb!==undefined){if(la===undefined)return 1;if(lb===undefined)return -1;if(la!==lb)return la-lb;}return (remoteOrder.get(a.id)??(next+(original.get(a.id)||0)))-(remoteOrder.get(b.id)??(next+(original.get(b.id)||0))); });
-  }, [guilds, preferences.serverOrder, discordGuildFolders]);
-  const remoteFolderByGuild = useMemo(() => { const map=new Map<string,DiscordGuildFolder>(); for(const folder of discordGuildFolders?.folders||[])for(const id of folder.guildIds)map.set(id,folder);return map; },[discordGuildFolders]);
+  }, [guilds, preferences.serverOrder, preferences.cachedServerOrder, preferences.cachedDiscordFolders, discordGuildFolders]);
+  const remoteFolderByGuild = useMemo(() => { const map=new Map<string,DiscordGuildFolder>(); for(const folder of (discordGuildFolders?.folders || preferences.cachedDiscordFolders))for(const id of folder.guildIds)map.set(id,folder);return map; },[discordGuildFolders, preferences.cachedDiscordFolders]);
   const officialDiscordDm = !!selectedChannel && !selectedChannel.guild_id &&
     !!selectedChannel.recipients?.some(user => user?.bot && user.username?.toLowerCase() === "discord");
   const selectedVoiceChannel = selectedChannel && (
@@ -4250,8 +4281,8 @@ export default function App() {
               const folderColor = remoteFolder?.color ? `#${remoteFolder.color.toString(16).padStart(6, "0").slice(-6)}` : undefined;
               return (
                 <React.Fragment key={g.id}>
-                  {folder && folder !== previous && <div className="server-folder-label" title={folder} style={folderColor ? { borderLeft: `3px solid ${folderColor}` } : undefined}>{folder}</div>}
-                  <button
+                  {folder && folder !== previous && <button type="button" className="server-folder-label" title={`${folder} · click to ${collapsedServerFolders.has(folder) ? "expand" : "collapse"}`} style={folderColor ? { borderLeft: `3px solid ${folderColor}` } : undefined} onClick={() => setCollapsedServerFolders(current => { const next = new Set(current); if (next.has(folder)) next.delete(folder); else next.add(folder); return next; })}><span>{collapsedServerFolders.has(folder) ? "▸" : "▾"} {folder}</span></button>}
+                  {folder && collapsedServerFolders.has(folder) ? null : <button
                     className={`server-icon ${isActive ? "active" : ""}`}
                     title={`${folder ? `${folder} · ` : ""}${g.name} (right-click to organize)`}
                     style={{ animationDelay: `${i * 30}ms` } as React.CSSProperties}
@@ -4266,7 +4297,7 @@ export default function App() {
                     }}
                   >
                     <GuildIcon guild={g} />
-                  </button>
+                  </button>}
                 </React.Fragment>
               );
             })}
@@ -4455,7 +4486,7 @@ export default function App() {
                   <div className="profile-card-loading"><Loader2 size={14} className="spinning" /> Loading profile…</div>
                 ) : (
                   <>
-                    <strong>{displayName(profileUser)}</strong>
+                    <strong>{displayName(profileUser)} <PlatformIndicators platforms={memberPlatforms[profileUser.id] || []} /></strong>
                     <span className="profile-popover-handle">@{profileUser.username}{formatDiscriminator(profileUser)}</span>
                     {userProfile?.badges?.length > 0 && (
                       <div className="profile-popover-badges">
@@ -4642,7 +4673,7 @@ export default function App() {
                                   <span className={`status-dot status-${status}`} />
                                 </span>
                                 <span className="directory-person-name">
-                                  <strong>{displayName(friend)}</strong>
+                                  <strong>{displayName(friend)} <PlatformIndicators platforms={memberPlatforms[friend.id] || []} /></strong>
                                   <small>{friend.username}{status !== "offline" ? ` · ${status}` : ""}</small>
                                 </span>
                               </button>
@@ -4773,7 +4804,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={relationship.user} />
                     </span>
                     <div className="request-person-info">
-                      <strong>{displayName(relationship.user)}</strong>
+                      <strong>{displayName(relationship.user)} <PlatformIndicators platforms={memberPlatforms[relationship.user.id] || []} /></strong>
                       <small>@{relationship.user.username} · Incoming request</small>
                     </div>
                     <div className="request-actions">
@@ -4791,7 +4822,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={relationship.user} />
                     </span>
                     <div className="request-person-info">
-                      <strong>{displayName(relationship.user)}</strong>
+                      <strong>{displayName(relationship.user)} <PlatformIndicators platforms={memberPlatforms[relationship.user.id] || []} /></strong>
                       <small>@{relationship.user.username} · Request sent</small>
                     </div>
                     <div className="request-actions">
@@ -4920,7 +4951,7 @@ export default function App() {
                               </span>
                               <div className="request-message-body">
                                 <div className="request-message-header">
-                                  <strong>{displayName(message.author)}</strong>
+                                  <strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong>
                                   <BotTag user={message.author} />
                                   <span className="author-discriminator">{formatDiscriminator(message.author)}</span>
                                   <small>{formatTimestamp(message.timestamp)}</small>
@@ -5527,7 +5558,7 @@ export default function App() {
                 <article className="voice-chat-message" key={message.id}>
                   <img src={avatarUrl(message.author, 32)} alt="" />
                   <div>
-                    <header><strong>{displayName(message.author)}</strong><time>{formatTimestamp(message.timestamp)}</time></header>
+                    <header><strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong><time>{formatTimestamp(message.timestamp)}</time></header>
                     <MessageContent message={message} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(target, emoji) => void toggleMessageReaction(selectedVoiceChannel.id, target, emoji)} autoplayVideos={preferences.autoplayVideos} />
                   </div>
                 </article>
@@ -5582,7 +5613,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={dmProfileUser} />
                       <span className={`status-dot status-${memberPresences[dmUser.id] || "offline"}`} />
                     </span>
-                    <strong>{displayName(dmProfileUser)}</strong>
+                    <strong>{displayName(dmProfileUser)} <PlatformIndicators platforms={memberPlatforms[dmProfileUser.id] || []} /></strong>
                     <small>@{dmProfileUser.username}{formatDiscriminator(dmProfileUser)}</small>
                   </button>
                   {memberCustomStatuses[dmUser.id] && (
@@ -5931,7 +5962,7 @@ export default function App() {
                       ? deletedChannelMessages.map(message => (
                         <article className={`deleted-channel-message ${message.deleted_at ? "deleted-message" : ""}`} key={message.id}>
                           <header>
-                            <strong>{displayName(message.author)}</strong>
+                            <strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong>
                             <span>{formatTimestamp(message.timestamp)}</span>
                             {message.deleted_at && <span className="deleted-message-label">DELETED</span>}
                           </header>
@@ -6021,6 +6052,50 @@ export default function App() {
                 <label className="feature-field"><span>Channel sidebar width · {preferences.channelSidebarWidth}px</span><input type="range" min="180" max="360" step="4" value={preferences.channelSidebarWidth} onChange={event => setPreferences(current => ({ ...current, channelSidebarWidth: Number(event.target.value) }))} /></label>
                 <h3 className="settings-section-title">Server folders and order</h3>
                 <p className="settings-help">Group servers by folder name. Use arrows to change their order in the server rail.</p>
+                <div className="server-folder-order-list">
+                  {[...new Set(orderedGuilds.map(guild => remoteFolderByGuild.get(guild.id)?.name || preferences.serverFolders[guild.id]?.trim()).filter((name): name is string => !!name))].map((folderName, folderIndex, folderNames) => (
+                    <div className="server-organize-row server-folder-order-row" key={folderName}>
+                      <strong>📁 {folderName}</strong>
+                      <button type="button" aria-label={"Move folder " + folderName + " up"} disabled={folderIndex === 0} onClick={() => setPreferences(current => {
+                        const groups = new Map<string, string[]>();
+                        for (const guild of orderedGuilds) { const key = remoteFolderByGuild.get(guild.id)?.name || current.serverFolders[guild.id]?.trim() || ""; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(guild.id); }
+                        const order = [...folderNames]; [order[folderIndex - 1], order[folderIndex]] = [order[folderIndex], order[folderIndex - 1]];
+                        const ids = [...(groups.get("") || [])]; for (const key of order) ids.push(...(groups.get(key) || []));
+                        for (const [key, value] of groups) if (key && !order.includes(key)) ids.push(...value);
+                        return { ...current, serverOrder: ids };
+                      })}>↑</button>
+                      <button type="button" aria-label={"Move folder " + folderName + " down"} disabled={folderIndex === folderNames.length - 1} onClick={() => setPreferences(current => {
+                        const groups = new Map<string, string[]>();
+                        for (const guild of orderedGuilds) { const key = remoteFolderByGuild.get(guild.id)?.name || current.serverFolders[guild.id]?.trim() || ""; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(guild.id); }
+                        const order = [...folderNames]; [order[folderIndex + 1], order[folderIndex]] = [order[folderIndex], order[folderIndex + 1]];
+                        const ids = [...(groups.get("") || [])]; for (const key of order) ids.push(...(groups.get(key) || []));
+                        for (const [key, value] of groups) if (key && !order.includes(key)) ids.push(...value);
+                        return { ...current, serverOrder: ids };
+                      })}>↓</button>
+                    </div>
+                  ))}
+                </div>
+                <button type="button" className="settings-action-button" onClick={async () => {
+                  const sourceFolders = discordGuildFolders?.folders || preferences.cachedDiscordFolders;
+                  const groups = new Map<string, string[]>();
+                  for (const guild of orderedGuilds) {
+                    const name = remoteFolderByGuild.get(guild.id)?.name || preferences.serverFolders[guild.id]?.trim() || "";
+                    if (!groups.has(name)) groups.set(name, []);
+                    groups.get(name)!.push(guild.id);
+                  }
+                  const names = [...groups.keys()].filter(Boolean);
+                  const folders = names.map(name => {
+                    const old = sourceFolders.find(folder => folder.name === name);
+                    return { id: old?.id || null, name, color: old?.color ?? null, guildIds: groups.get(name) || [] };
+                  });
+                  const positions = [...(groups.get("") || []), ...names.flatMap(name => groups.get(name) || [])];
+                  try {
+                    await invoke("sync_settings_proto_v1", { settingsPayload: encodeGuildFolderSettings({ folders, positions }) });
+                    setDiscordGuildFolders({ folders, positions });
+                    setPreferences(current => ({ ...current, cachedServerOrder: positions, cachedDiscordFolders: folders }));
+                    window.alert("Guild folder layout synced to Discord.");
+                  } catch (error) { window.alert("Couldn't sync guild folders to Discord: " + String(error)); }
+                }}>Sync layout to Discord</button>
                 <div className="server-organize-list">
                   {orderedGuilds.map((guild, index) => (
                     <div className="server-organize-row" key={guild.id}>
