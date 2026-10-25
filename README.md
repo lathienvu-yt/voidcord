@@ -1,10 +1,12 @@
+> [!WARNING]
+> This is an experimental project of next-gen native Discord client. Expect bugs and crashes
 # VoidCord
 
 An offline-friendly, zero-bloat Discord client shell built with **Tauri 2**, **Rust**, and **React/TypeScript**. Engineered for bare-metal performance, offline-first message archiving, multi-account routing, and real-time media transport.
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Node.js (v18+)
@@ -28,7 +30,7 @@ npm run tauri build
 
 ---
 
-## 🔥 Key Features & Technical Highlights
+## Key Features & Technical Highlights
 
 * **Rust Account Request Router (`src-tauri/src/discord_router.rs`)**
   * Account-aware REST and Gateway routing layer with isolation between primary identities (write/reactions) and read-only identity scopes.
@@ -51,13 +53,13 @@ npm run tauri build
 
 ---
 
-## 📜 Voice Subsystem Licensing
+## Voice Subsystem Licensing
 
 The voice implementation depends on [`cacophony`](https://crates.io/crates/cacophony) and its [`dave`](https://crates.io/crates/dave) dependency, both licensed under `AGPL-3.0-only`. Please review and comply with these license terms before distributing modified versions of VoidCord or hosting network services utilizing these components.
 
 ---
 
-## 🔒 Security & Privacy
+## Security & Privacy
 
 * Credentials and auth tokens are held strictly inside Rust process memory and are never exposed to local frontend persistent storage or client log outputs.
 * Rate limits, channel permissions, and age gates strictly adhere to the authenticated user identity without silent failover between sessions.
