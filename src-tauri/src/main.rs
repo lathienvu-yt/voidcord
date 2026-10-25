@@ -7,14 +7,14 @@ mod settings_menu;
 mod voice_gateway;
 
 use discord_router::DiscordRouter;
-use std::{collections::HashMap, io::{BufWriter, Write}, path::PathBuf, process::ChildStdin, sync::{Arc, Mutex as StdMutex, OnceLock}};
+use std::{collections::HashMap, io::{BufWriter, Write}, path::PathBuf, process::ChildStdin, sync::{mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError}, Arc, Mutex as StdMutex, OnceLock}, time::Duration};
 use tokio::sync::Mutex;
 use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use voice_gateway::VoiceControlState;
 
 static CONSOLE_STDIN: OnceLock<StdMutex<Option<BufWriter<ChildStdin>>>> = OnceLock::new();
-static LOG_CHANNEL: OnceLock<crossbeam_channel::Sender<String>> = OnceLock::new();
+static LOG_CHANNEL: OnceLock<SyncSender<String>> = OnceLock::new();
 
 pub fn open_rust_console_window() -> Result<(), String> {
     #[cfg(windows)]
@@ -60,14 +60,45 @@ impl log::Log for BackendLogger {
             // Print to standard error instantly
             eprintln!("{line}");
             
-            // Push off to background channel cleanly without any thread blocking
+            // Never block the caller on console I/O or a full logging queue.
+            // Under extreme log floods, a full queue intentionally drops console copies.
             if let Some(tx) = LOG_CHANNEL.get() {
-                let _ = tx.send(line);
+                match tx.try_send(line) {
+                    Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+                }
             }
         }
     }
 
     fn flush(&self) {}
+}
+
+fn run_console_log_writer(receiver: Receiver<String>) {
+    loop {
+        let first = match receiver.recv() {
+            Ok(line) => line,
+            Err(_) => break,
+        };
+        let mut batch = vec![first];
+        // Gather a short batch so console writes and flushes are amortized.
+        while batch.len() < 64 {
+            match receiver.try_recv() {
+                Ok(line) => batch.push(line),
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+
+        if let Some(slot) = CONSOLE_STDIN.get() {
+            if let Ok(mut guard) = slot.lock() {
+                if let Some(writer) = guard.as_mut() {
+                    for line in &batch {
+                        let _ = writeln!(writer, "{line}");
+                    }
+                    let _ = writer.flush();
+                }
+            }
+        }
+    }
 }
 
 static BACKEND_LOGGER: BackendLogger = BackendLogger;
@@ -108,22 +139,15 @@ fn main() {
         default_panic_hook(panic_info);
     }));
 
-    // Initialize the lock-free background logger system thread
-    let (log_tx, log_rx) = crossbeam_channel::unbounded::<String>();
-    LOG_CHANNEL.set(log_tx).unwrap();
+    // A bounded queue prevents log floods from growing memory without limit.
+    // The writer thread batches console output; the logging caller never waits on it.
+    let (log_tx, log_rx) = mpsc::sync_channel::<String>(1024);
+    LOG_CHANNEL.set(log_tx).expect("failed to initialize Rust log channel");
 
-    std::thread::spawn(move || {
-        while let Ok(line) = log_rx.recv() {
-            if let Some(slot) = CONSOLE_STDIN.get() {
-                if let Ok(mut guard) = slot.lock() {
-                    if let Some(writer) = guard.as_mut() {
-                        let _ = writeln!(writer, "{line}");
-                        let _ = writer.flush();
-                    }
-                }
-            }
-        }
-    });
+    std::thread::Builder::new()
+        .name("voidcord-log-writer".to_owned())
+        .spawn(move || run_console_log_writer(log_rx))
+        .expect("failed to start Rust console log writer thread");
 
     log::set_logger(&BACKEND_LOGGER).expect("failed to initialize Rust backend logger");
     log::set_max_level(if cfg!(debug_assertions) {
