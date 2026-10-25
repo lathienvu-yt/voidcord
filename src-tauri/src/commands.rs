@@ -18,6 +18,12 @@ use crate::voice_gateway::{
 use crate::AppState;
 
 
+#[tauri::command]
+pub async fn open_rust_console() -> Result<(), String> {
+    log::info!("Rust console open requested from toolbar");
+    crate::open_rust_console_window()
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn map_err(e: impl std::fmt::Display) -> String {
