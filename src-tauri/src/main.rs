@@ -32,7 +32,6 @@ pub fn open_rust_console_window() -> Result<(), String> {
             .spawn().map_err(|e| format!("Could not open Rust console: {e}"))?;
         let stdin = child.stdin.take().ok_or_else(|| "Rust console stdin unavailable".to_owned())?;
         *current = Some(BufWriter::new(stdin));
-        std::mem::forget(child);
         Ok(())
     }
     #[cfg(not(windows))]
