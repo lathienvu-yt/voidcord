@@ -485,7 +485,7 @@ impl DiscordRouter {
                 DISCORD_GATEWAY
             };
             let mut parsed = url::Url::parse(raw_url).map_err(|_| DiscordError::InvalidWebSocketUrl)?;
-            parsed.query_pairs_mut().append_pair("v", "10").append_pair("encoding", "json");
+            parsed.query_pairs_mut().clear().append_pair("v", "10").append_pair("encoding", "json");
             (parsed.to_string(), can_resume)
         };
 
