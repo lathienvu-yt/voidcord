@@ -123,43 +123,6 @@ input, textarea { font-family: inherit; }
 }
 
 /* ============================================================
-   Titlebar
-   ============================================================ */
-.voidcord-toolbar {
-  height: 32px;
-  background: var(--bg-rail);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 0 0 12px;
-  border-bottom: 1px solid var(--border);
-  user-select: none;
-  flex-shrink: 0;
-}
-.voidcord-toolbar .titlebar-brand { display: flex; align-items: center; gap: 7px; }
-.voidcord-toolbar .titlebar-logo {
-  width: 17px; height: 17px; border-radius: 5px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-bright));
-  display: grid; place-items: center;
-  font-size: 9px; font-weight: 800; color: #fff;
-}
-.voidcord-toolbar .titlebar-name { font-size: 12px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.02em; }
-.build-tag {
-  font-size: 8px; font-weight: 700;
-  color: var(--accent-bright);
-  background: var(--accent-subtle);
-  border: 1px solid rgba(88,101,242,0.25);
-  padding: 1px 5px; border-radius: 3px; letter-spacing: 0.07em;
-}
-
-
-
-
-
-
-
-
-/* ============================================================
    Desktop Layout
    ============================================================ */
 .desktop { flex: 1; display: flex; min-height: 0; overflow: hidden; }
