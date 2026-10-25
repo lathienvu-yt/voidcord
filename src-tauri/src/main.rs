@@ -9,6 +9,8 @@ mod voice_gateway;
 use discord_router::DiscordRouter;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
+use tauri::{Emitter, Manager};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use voice_gateway::VoiceControlState;
 
 struct BackendLogger;
@@ -58,7 +60,28 @@ fn main() {
     let app_builder = app_builder.plugin(tauri_plugin_devtools::init());
 
     app_builder
-    .manage(AppState {
+        .setup(|app| {
+            let file = Submenu::with_items(app, "File", true, &[
+                &MenuItem::with_id(app, "reload", "Reload VoidCord", true, None)?,
+                &MenuItem::with_id(app, "close", "Close window", true, None)?,
+            ])?;
+            let devtool = Submenu::with_items(app, "DevTool", true, &[
+                &MenuItem::with_id(app, "devtools", "Toggle WebView DevTools", true, None)?,
+            ])?;
+            let view = Submenu::with_items(app, "View", true, &[
+                &MenuItem::with_id(app, "reload", "Reload interface", true, None)?,
+            ])?;
+            let logs = Submenu::with_items(app, "Logs", true, &[
+                &MenuItem::with_id(app, "deleted-log", "Deleted messages log", true, None)?,
+            ])?;
+            let menu = Menu::with_items(app, &[&file, &devtool, &view, &logs, &PredefinedMenuItem::separator(app)?])?;
+            app.set_menu(menu)?;
+            app.on_menu_event(|app, event| {
+                let _ = app.emit("native-menu-action", event.id().as_ref());
+            });
+            Ok(())
+        })
+        .manage(AppState {
             router: DiscordRouter::default(),
             token: Arc::new(Mutex::new(None)),
             selected_uploads: Mutex::new(HashMap::new()),
