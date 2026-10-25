@@ -661,7 +661,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
 
   return (
     <div className="login-screen">
-      <header className="voidcord-toolbar"> { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("titlebar-drag-handle")) getCurrentWindow().startDragging(); }}>
+      <header className="voidcord-toolbar">
         <div className="titlebar-brand">
           <div className="titlebar-logo">V</div>
           <span className="titlebar-name">VoidCord</span>
@@ -4167,7 +4167,7 @@ export default function App() {
       )}
 
       {/* Titlebar */}
-      <header className="voidcord-toolbar"> { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("titlebar-drag-handle")) getCurrentWindow().startDragging(); }}>
+      <header className="voidcord-toolbar">
         <div className="titlebar-brand" data-tauri-drag-region>
           <div className="titlebar-logo">V</div>
           <span className="titlebar-name">VoidCord</span>
