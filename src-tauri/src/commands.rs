@@ -1085,6 +1085,12 @@ pub async fn get_current_user_settings(state: State<'_, AppState>) -> Result<Val
         .map_err(map_err)
 }
 
+/// Fetch the current protobuf settings used to mirror Discord's guild folder layout.
+#[tauri::command]
+pub async fn get_guild_folder_settings(state: State<'_, AppState>) -> Result<Value, String> {
+    state.router.rest(AccountIdentity::ReadOnly, Method::GET, "users/@me/settings-proto/1", None).await.map_err(map_err)
+}
+
 /// Send an observed settings-proto/1 delta. The protobuf field payload remains
 /// opaque because this capture does not establish its semantic field names.
 #[tauri::command]

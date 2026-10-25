@@ -9,7 +9,7 @@ mod voice_gateway;
 use discord_router::DiscordRouter;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use voice_gateway::VoiceControlState;
 
@@ -108,6 +108,7 @@ fn main() {
             commands::set_presence,
             commands::update_bio,
             commands::get_current_user_settings,
+            commands::get_guild_folder_settings,
             commands::sync_settings_proto_v1,
             settings_menu::save_client_settings,
             commands::get_user_profile,
