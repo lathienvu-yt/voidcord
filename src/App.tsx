@@ -575,6 +575,18 @@ function AvatarDecorationOverlay({ user, className = "" }: { user: DiscordUser; 
   return url ? <img src={url} alt="" aria-hidden="true" className={`avatar-decoration-overlay ${className}`} /> : null;
 }
 
+type DiscordGuildFolder = { id: string | null; name: string; color: number | null; guildIds: string[] };
+type DiscordGuildFolderSettings = { folders: DiscordGuildFolder[]; positions: string[] };
+function decodeGuildFolderSettings(encoded: string): DiscordGuildFolderSettings {
+  const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+  const readVarint = (data: Uint8Array, cursor: { value: number }): bigint => { let value = 0n, shift = 0n; while (cursor.value < data.length && shift < 70n) { const b = data[cursor.value++]; value |= BigInt(b & 127) << shift; if (!(b & 128)) return value; shift += 7n; } throw new Error("Invalid protobuf varint"); };
+  const fields = (data: Uint8Array) => { const out: Array<{n:number;w:number;v:Uint8Array|bigint}> = [], c={value:0}; while(c.value<data.length){const k=Number(readVarint(data,c)),n=k>>>3,w=k&7;if(!n)throw new Error("Invalid protobuf field");if(w===0)out.push({n,w,v:readVarint(data,c)});else if(w===1||w===5){const size=w===1?8:4;if(c.value+size>data.length)throw new Error("Truncated fixed field");out.push({n,w,v:data.slice(c.value,c.value+size)});c.value+=size;}else if(w===2){const size=Number(readVarint(data,c));if(!Number.isSafeInteger(size)||size<0||c.value+size>data.length)throw new Error("Invalid protobuf length");out.push({n,w,v:data.slice(c.value,c.value+size)});c.value+=size;}else throw new Error("Unsupported protobuf wire type");}return out;};
+  const b=(f:{v:Uint8Array|bigint})=>{if(!(f.v instanceof Uint8Array))throw new Error("Expected bytes");return f.v;};
+  const id=(f:{w:number;v:Uint8Array|bigint})=>{if(f.w===0)return String(f.v);if(f.w===1&&f.v instanceof Uint8Array){let n=0n;for(let i=7;i>=0;i--)n=(n<<8n)|BigInt(f.v[i]);return n.toString();}throw new Error("Unexpected ID encoding");};
+  const root=fields(bytes), parent=root.find(f=>f.n===14&&f.w===2);if(!parent)return {folders:[],positions:[]};const body=fields(b(parent));
+  const folders=body.filter(f=>f.n===1&&f.w===2).map(f=>{const fs=fields(b(f));const guildIds=fs.filter(x=>x.n===1).flatMap(x=>x.w===1?[id(x)]:x.w===2?(()=>{const packed=b(x),ids:string[]=[];for(let o=0;o+8<=packed.length;o+=8)ids.push(id({w:1,v:packed.slice(o,o+8)}));return ids;})():[]);const wrapper=(n:number)=>{const f=fs.find(x=>x.n===n&&x.w===2);return f?fields(b(f)).find(x=>x.n===1):undefined;};const fi=wrapper(2),fn=wrapper(3),fc=wrapper(4);return {id:fi?String(fi.v):null,name:fn&&fn.v instanceof Uint8Array?new TextDecoder().decode(fn.v):"",color:fc?Number(fc.v):null,guildIds};}).filter(f=>f.guildIds.length>0);
+  const p=body.find(f=>f.n===2);let positions:string[]=[];if(p?.w===1)positions=[id(p)];else if(p?.w===2){const packed=b(p);if(packed.length%8===0)for(let o=0;o<packed.length;o+=8)positions.push(id({w:1,v:packed.slice(o,o+8)}));}return {folders,positions};
+}
 function normalizeGuildList(value: unknown): DiscordGuild[] {
   if (!Array.isArray(value)) return [];
   return value.filter((guild): guild is DiscordGuild =>
@@ -889,6 +901,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
+  const [discordGuildFolders, setDiscordGuildFolders] = useState<DiscordGuildFolderSettings | null>(null);
   const [selectedGuild, setSelectedGuild] = useState<DiscordGuild | null>(null);
   const [dmChannels, setDmChannels] = useState<DiscordChannel[]>([]);
   const [recentlyMessaged, setRecentlyMessaged] = useState<string[]>(() => {
@@ -2049,6 +2062,12 @@ export default function App() {
         const list = await invoke<DiscordGuild[]>("get_guilds");
         availableGuilds = normalizeGuildList(list);
         setGuilds(availableGuilds);
+        try {
+          const proto = await invoke<{ settings?: string }>("get_guild_folder_settings");
+          if (proto.settings) setDiscordGuildFolders(decodeGuildFolderSettings(proto.settings));
+        } catch (settingsError) {
+          console.warn("Could not load Discord guild folder settings; keeping local sidebar layout", settingsError);
+        }
         void writeCachedAppData("guilds", availableGuilds);
       } catch (e) {
         notify(`Failed to load servers: ${e}`);
@@ -4099,10 +4118,14 @@ export default function App() {
   const groups = useMemo(() => groupMessages(filteredMessages, ignoredUserIds), [filteredMessages, ignoredUserIds]);
   const ignoredMessageCount = useMemo(() => messages.filter(message => ignoredUserIds.has(message.author?.id || "")).length, [messages, ignoredUserIds]);
   const orderedGuilds = useMemo(() => {
-    const order = new Map(preferences.serverOrder.map((id, index) => [id, index]));
+    const localOrder = new Map(preferences.serverOrder.map((id, index) => [id, index]));
+    const remoteOrder = new Map<string, number>(); let next = 0;
+    for (const folder of discordGuildFolders?.folders || []) for (const id of folder.guildIds) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
+    for (const id of discordGuildFolders?.positions || []) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
     const original = new Map(guilds.map((guild, index) => [guild.id, index]));
-    return [...guilds].sort((a, b) => (order.get(a.id) ?? (preferences.serverOrder.length + (original.get(a.id) || 0))) - (order.get(b.id) ?? (preferences.serverOrder.length + (original.get(b.id) || 0))));
-  }, [guilds, preferences.serverOrder]);
+    return [...guilds].sort((a,b) => { const la=localOrder.get(a.id),lb=localOrder.get(b.id); if(la!==undefined||lb!==undefined){if(la===undefined)return 1;if(lb===undefined)return -1;if(la!==lb)return la-lb;}return (remoteOrder.get(a.id)??(next+(original.get(a.id)||0)))-(remoteOrder.get(b.id)??(next+(original.get(b.id)||0))); });
+  }, [guilds, preferences.serverOrder, discordGuildFolders]);
+  const remoteFolderByGuild = useMemo(() => { const map=new Map<string,DiscordGuildFolder>(); for(const folder of discordGuildFolders?.folders||[])for(const id of folder.guildIds)map.set(id,folder);return map; },[discordGuildFolders]);
   const officialDiscordDm = !!selectedChannel && !selectedChannel.guild_id &&
     !!selectedChannel.recipients?.some(user => user?.bot && user.username?.toLowerCase() === "discord");
   const selectedVoiceChannel = selectedChannel && (
@@ -4220,11 +4243,14 @@ export default function App() {
 
             {orderedGuilds.map((g, i) => {
               const isActive = !isDmView && selectedGuild?.id === g.id;
-              const folder = preferences.serverFolders[g.id]?.trim();
-              const previous = i > 0 ? preferences.serverFolders[orderedGuilds[i - 1].id]?.trim() : undefined;
+              const remoteFolder = remoteFolderByGuild.get(g.id);
+              const folder = remoteFolder?.name || preferences.serverFolders[g.id]?.trim();
+              const previousGuild = i > 0 ? orderedGuilds[i - 1] : undefined;
+              const previous = (previousGuild && remoteFolderByGuild.get(previousGuild.id)?.name) || (previousGuild ? preferences.serverFolders[previousGuild.id]?.trim() : undefined);
+              const folderColor = remoteFolder?.color ? `#${remoteFolder.color.toString(16).padStart(6, "0").slice(-6)}` : undefined;
               return (
                 <React.Fragment key={g.id}>
-                  {folder && folder !== previous && <div className="server-folder-label" title={folder}>{folder}</div>}
+                  {folder && folder !== previous && <div className="server-folder-label" title={folder} style={folderColor ? { borderLeft: `3px solid ${folderColor}` } : undefined}>{folder}</div>}
                   <button
                     className={`server-icon ${isActive ? "active" : ""}`}
                     title={`${folder ? `${folder} · ` : ""}${g.name} (right-click to organize)`}
