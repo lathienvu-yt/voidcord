@@ -139,6 +139,7 @@ fn main() {
             commands::delete_guild_channel,
             commands::start_gateway,
             commands::toggle_devtools,
+            commands::open_rust_console,
             commands::request_guild_member_list,
             commands::set_voice_state,
             commands::list_audio_devices,
