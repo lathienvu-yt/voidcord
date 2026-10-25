@@ -161,7 +161,19 @@ fn main() {
     let app_builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            log::warn!("Another instance tried to launch with args: {:?} from {}", args, cwd);
+            // Bring the primary window to the front instead of opening a duplicate app
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build());
+
 
     #[cfg(debug_assertions)]
     let app_builder = app_builder.plugin(tauri_plugin_devtools::init());

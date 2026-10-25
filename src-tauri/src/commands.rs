@@ -43,15 +43,24 @@ fn encode_query_component(input: &str) -> String {
 }
 
 fn emit_rust_log(app: &AppHandle, level: &str, target: &str, message: impl Into<String>) {
-    let _ = app.emit(
-        "voidcord:rust-log",
-        json!({
-            "level": level,
-            "target": target,
-            "message": message.into(),
-        }),
-    );
+    let app = app.clone();
+    let level = level.to_owned();
+    let target = target.to_owned();
+    let message = message.into();
+    
+    // Spawn off completely decoupled from the gateway dispatch execution context
+    tauri::async_runtime::spawn(async move {
+        let _ = app.emit(
+            "voidcord:rust-log",
+            json!({
+                "level": level,
+                "target": target,
+                "message": message,
+            }),
+        );
+    });
 }
+
 
 /// After the token is set we rebuild the router's token manager.
 async fn rebuild_router(state: &AppState, token: &str) {
