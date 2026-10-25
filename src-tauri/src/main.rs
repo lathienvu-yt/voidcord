@@ -9,7 +9,7 @@ mod voice_gateway;
 use discord_router::DiscordRouter;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use voice_gateway::VoiceControlState;
 
@@ -62,17 +62,17 @@ fn main() {
     app_builder
         .setup(|app| {
             let file = Submenu::with_items(app, "File", true, &[
-                &MenuItem::with_id(app, "reload", "Reload VoidCord", true, None)?,
-                &MenuItem::with_id(app, "close", "Close window", true, None)?,
+                &MenuItem::with_id(app, "reload", "Reload VoidCord", true, None::<&str>)?,
+                &MenuItem::with_id(app, "close", "Close window", true, None::<&str>)?,
             ])?;
             let devtool = Submenu::with_items(app, "DevTool", true, &[
-                &MenuItem::with_id(app, "devtools", "Toggle WebView DevTools", true, None)?,
+                &MenuItem::with_id(app, "devtools", "Toggle WebView DevTools", true, None::<&str>)?,
             ])?;
             let view = Submenu::with_items(app, "View", true, &[
-                &MenuItem::with_id(app, "reload", "Reload interface", true, None)?,
+                &MenuItem::with_id(app, "reload", "Reload interface", true, None::<&str>)?,
             ])?;
             let logs = Submenu::with_items(app, "Logs", true, &[
-                &MenuItem::with_id(app, "deleted-log", "Deleted messages log", true, None)?,
+                &MenuItem::with_id(app, "deleted-log", "Deleted messages log", true, None::<&str>)?,
             ])?;
             let menu = Menu::with_items(app, &[&file, &devtool, &view, &logs, &PredefinedMenuItem::separator(app)?])?;
             app.set_menu(menu)?;
