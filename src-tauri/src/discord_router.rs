@@ -338,6 +338,7 @@ impl DiscordRouter {
     ) -> Result<Value, DiscordError> {
         let log_path = redact_sensitive_query(&path);
         log::debug!("Discord REST request: {} {}", method, log_path);
+        let request_started = std::time::Instant::now();
         let token = {
             let tokens = self.tokens.read().await;
             tokens.get(identity)?.clone()
@@ -367,7 +368,7 @@ impl DiscordRouter {
             }
         };
         let status = response.status();
-        log::debug!("Discord REST response: {} {} -> {}", method, log_path, status);
+        log::debug!("Discord REST response: {} {} -> {} ({:?})", method, log_path, status, request_started.elapsed());
         let captcha_headers = (
             response.headers().get("captcha-sitekey").and_then(|value| value.to_str().ok()).map(str::to_owned),
             response.headers().get("captcha-rqdata").and_then(|value| value.to_str().ok()).map(str::to_owned),
