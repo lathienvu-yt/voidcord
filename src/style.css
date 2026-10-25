@@ -125,7 +125,7 @@ input, textarea { font-family: inherit; }
 /* ============================================================
    Titlebar
    ============================================================ */
-.titlebar {
+.voidcord-toolbar {
   height: 32px;
   background: var(--bg-rail);
   display: flex;
@@ -136,14 +136,14 @@ input, textarea { font-family: inherit; }
   user-select: none;
   flex-shrink: 0;
 }
-.titlebar-brand { display: flex; align-items: center; gap: 7px; }
-.titlebar-logo {
+.voidcord-toolbar .titlebar-brand { display: flex; align-items: center; gap: 7px; }
+.voidcord-toolbar .titlebar-logo {
   width: 17px; height: 17px; border-radius: 5px;
   background: linear-gradient(135deg, var(--accent), var(--accent-bright));
   display: grid; place-items: center;
   font-size: 9px; font-weight: 800; color: #fff;
 }
-.titlebar-name { font-size: 12px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.02em; }
+.voidcord-toolbar .titlebar-name { font-size: 12px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.02em; }
 .build-tag {
   font-size: 8px; font-weight: 700;
   color: var(--accent-bright);
@@ -151,24 +151,13 @@ input, textarea { font-family: inherit; }
   border: 1px solid rgba(88,101,242,0.25);
   padding: 1px 5px; border-radius: 3px; letter-spacing: 0.07em;
 }
-.titlebar-drag-handle {
-  flex: 1;
-  height: 100%;
-  cursor: grab;
-}
-.titlebar-drag-handle:active {
-  cursor: grabbing;
-}
-.window-controls { display: flex; }
-.window-controls button {
-  width: 42px; height: 32px;
-  color: var(--text-muted); font-size: 13px;
-  display: grid; place-items: center;
-  transition: background var(--dur-fast), color var(--dur-fast);
-}
-.window-controls button:hover { background: rgba(255,255,255,0.08); color: var(--text-primary); }
-.window-controls .dev-console-btn:hover { background: var(--accent-subtle); color: var(--accent-bright); }
-.window-controls .close-btn-wc:hover { background: var(--red); color: #fff; }
+
+
+
+
+
+
+
 
 /* ============================================================
    Desktop Layout
