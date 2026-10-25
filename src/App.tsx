@@ -591,6 +591,27 @@ function decodeGuildFolderSettings(encoded: string): DiscordGuildFolderSettings 
   const folders=body.filter(f=>f.n===1&&f.w===2).map(f=>{const fs=fields(b(f));const guildIds=fs.filter(x=>x.n===1).flatMap(x=>x.w===1?[id(x)]:x.w===2?(()=>{const packed=b(x),ids:string[]=[];for(let o=0;o+8<=packed.length;o+=8)ids.push(id({w:1,v:packed.slice(o,o+8)}));return ids;})():[]);const wrapper=(n:number)=>{const f=fs.find(x=>x.n===n&&x.w===2);return f?fields(b(f)).find(x=>x.n===1):undefined;};const fi=wrapper(2),fn=wrapper(3),fc=wrapper(4);return {id:fi?String(fi.v):null,name:fn&&fn.v instanceof Uint8Array?new TextDecoder().decode(fn.v):"",color:fc?Number(fc.v):null,guildIds};}).filter(f=>f.guildIds.length>0);
   const p=body.find(f=>f.n===2);let positions:string[]=[];if(p?.w===1)positions=[id(p)];else if(p?.w===2){const packed=b(p);if(packed.length%8===0)for(let o=0;o<packed.length;o+=8)positions.push(id({w:1,v:packed.slice(o,o+8)}));}return {folders,positions};
 }
+
+function encodeGuildFolderSettings(settings: DiscordGuildFolderSettings): string {
+  const join = (...chunks: Uint8Array[]) => { const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0)); let offset = 0; for (const c of chunks) { out.set(c, offset); offset += c.length; } return out; };
+  const vi = (input: bigint) => { const out: number[] = []; let n = input; while (n > 127n) { out.push(Number(n & 127n) | 128); n >>= 7n; } out.push(Number(n)); return Uint8Array.from(out); };
+  const key = (field: number, wire: number) => vi(BigInt(field * 8 + wire));
+  const blob = (field: number, value: Uint8Array) => join(key(field, 2), vi(BigInt(value.length)), value);
+  const fixed = (field: number, value: string) => { let n = BigInt(value); const b = new Uint8Array(8); for (let i = 0; i < 8; i++) { b[i] = Number(n & 255n); n >>= 8n; } return join(key(field, 1), b); };
+  const wrapper = (field: number, value: Uint8Array) => blob(field, blob(1, value));
+  const folders = settings.folders.map(folder => {
+    const parts = folder.guildIds.map(id => fixed(1, id));
+    if (folder.id) parts.push(wrapper(2, vi(BigInt(folder.id))));
+    if (folder.name) parts.push(wrapper(3, new TextEncoder().encode(folder.name)));
+    if (folder.color !== null) parts.push(wrapper(4, vi(BigInt(folder.color))));
+    return blob(1, join(...parts));
+  });
+  const positions = settings.positions.map(id => fixed(2, id));
+  const encoded = blob(14, join(...folders, ...positions));
+  let binary = ""; for (const byte of encoded) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 function normalizeGuildList(value: unknown): DiscordGuild[] {
   if (!Array.isArray(value)) return [];
   return value.filter((guild): guild is DiscordGuild =>
@@ -4465,7 +4486,7 @@ export default function App() {
                   <div className="profile-card-loading"><Loader2 size={14} className="spinning" /> Loading profile…</div>
                 ) : (
                   <>
-                    <strong>{displayName(profileUser)}</strong>
+                    <strong>{displayName(profileUser)} <PlatformIndicators platforms={memberPlatforms[profileUser.id] || []} /></strong>
                     <span className="profile-popover-handle">@{profileUser.username}{formatDiscriminator(profileUser)}</span>
                     {userProfile?.badges?.length > 0 && (
                       <div className="profile-popover-badges">
@@ -4652,7 +4673,7 @@ export default function App() {
                                   <span className={`status-dot status-${status}`} />
                                 </span>
                                 <span className="directory-person-name">
-                                  <strong>{displayName(friend)}</strong>
+                                  <strong>{displayName(friend)} <PlatformIndicators platforms={memberPlatforms[friend.id] || []} /></strong>
                                   <small>{friend.username}{status !== "offline" ? ` · ${status}` : ""}</small>
                                 </span>
                               </button>
@@ -4783,7 +4804,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={relationship.user} />
                     </span>
                     <div className="request-person-info">
-                      <strong>{displayName(relationship.user)}</strong>
+                      <strong>{displayName(relationship.user)} <PlatformIndicators platforms={memberPlatforms[relationship.user.id] || []} /></strong>
                       <small>@{relationship.user.username} · Incoming request</small>
                     </div>
                     <div className="request-actions">
@@ -4801,7 +4822,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={relationship.user} />
                     </span>
                     <div className="request-person-info">
-                      <strong>{displayName(relationship.user)}</strong>
+                      <strong>{displayName(relationship.user)} <PlatformIndicators platforms={memberPlatforms[relationship.user.id] || []} /></strong>
                       <small>@{relationship.user.username} · Request sent</small>
                     </div>
                     <div className="request-actions">
@@ -4930,7 +4951,7 @@ export default function App() {
                               </span>
                               <div className="request-message-body">
                                 <div className="request-message-header">
-                                  <strong>{displayName(message.author)}</strong>
+                                  <strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong>
                                   <BotTag user={message.author} />
                                   <span className="author-discriminator">{formatDiscriminator(message.author)}</span>
                                   <small>{formatTimestamp(message.timestamp)}</small>
@@ -5537,7 +5558,7 @@ export default function App() {
                 <article className="voice-chat-message" key={message.id}>
                   <img src={avatarUrl(message.author, 32)} alt="" />
                   <div>
-                    <header><strong>{displayName(message.author)}</strong><time>{formatTimestamp(message.timestamp)}</time></header>
+                    <header><strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong><time>{formatTimestamp(message.timestamp)}</time></header>
                     <MessageContent message={message} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(target, emoji) => void toggleMessageReaction(selectedVoiceChannel.id, target, emoji)} autoplayVideos={preferences.autoplayVideos} />
                   </div>
                 </article>
@@ -5592,7 +5613,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={dmProfileUser} />
                       <span className={`status-dot status-${memberPresences[dmUser.id] || "offline"}`} />
                     </span>
-                    <strong>{displayName(dmProfileUser)}</strong>
+                    <strong>{displayName(dmProfileUser)} <PlatformIndicators platforms={memberPlatforms[dmProfileUser.id] || []} /></strong>
                     <small>@{dmProfileUser.username}{formatDiscriminator(dmProfileUser)}</small>
                   </button>
                   {memberCustomStatuses[dmUser.id] && (
@@ -5941,7 +5962,7 @@ export default function App() {
                       ? deletedChannelMessages.map(message => (
                         <article className={`deleted-channel-message ${message.deleted_at ? "deleted-message" : ""}`} key={message.id}>
                           <header>
-                            <strong>{displayName(message.author)}</strong>
+                            <strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong>
                             <span>{formatTimestamp(message.timestamp)}</span>
                             {message.deleted_at && <span className="deleted-message-label">DELETED</span>}
                           </header>
@@ -6054,6 +6075,27 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+                <button type="button" className="settings-action-button" onClick={async () => {
+                  const sourceFolders = discordGuildFolders?.folders || preferences.cachedDiscordFolders;
+                  const groups = new Map<string, string[]>();
+                  for (const guild of orderedGuilds) {
+                    const name = remoteFolderByGuild.get(guild.id)?.name || preferences.serverFolders[guild.id]?.trim() || "";
+                    if (!groups.has(name)) groups.set(name, []);
+                    groups.get(name)!.push(guild.id);
+                  }
+                  const names = [...groups.keys()].filter(Boolean);
+                  const folders = names.map(name => {
+                    const old = sourceFolders.find(folder => folder.name === name);
+                    return { id: old?.id || null, name, color: old?.color ?? null, guildIds: groups.get(name) || [] };
+                  });
+                  const positions = [...(groups.get("") || []), ...names.flatMap(name => groups.get(name) || [])];
+                  try {
+                    await invoke("sync_settings_proto_v1", { settingsPayload: encodeGuildFolderSettings({ folders, positions }) });
+                    setDiscordGuildFolders({ folders, positions });
+                    setPreferences(current => ({ ...current, cachedServerOrder: positions, cachedDiscordFolders: folders }));
+                    window.alert("Guild folder layout synced to Discord.");
+                  } catch (error) { window.alert("Couldn't sync guild folders to Discord: " + String(error)); }
+                }}>Sync layout to Discord</button>
                 <div className="server-organize-list">
                   {orderedGuilds.map((guild, index) => (
                     <div className="server-organize-row" key={guild.id}>
