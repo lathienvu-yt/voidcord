@@ -27,8 +27,6 @@ pub fn open_rust_console_window() -> Result<(), String> {
             .args(["-NoLogo", "-NoProfile", "-Command", script])
             .creation_flags(0x00000010)
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
             .spawn().map_err(|e| format!("Could not open Rust console: {e}"))?;
         let stdin = child.stdin.take().ok_or_else(|| "Rust console stdin unavailable".to_owned())?;
         *current = Some(BufWriter::new(stdin));
