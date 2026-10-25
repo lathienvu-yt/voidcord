@@ -1802,21 +1802,3 @@ pub async fn pick_vcc_file(app: AppHandle) -> Result<String, String> {
         None => Err("Import cancelled by user".to_string()),
     }
 }
-
-#[tauri::command]
-pub async fn pick_vcc_file(app: AppHandle) -> Result<String, String> {
-    use tauri_plugin_dialog::DialogExt;
-    let chosen = app
-        .dialog()
-        .file()
-        .add_filter("VoidCord Cache", &["vcc", "json"])
-        .blocking_pick_file();
-
-    match chosen.and_then(|p| p.into_path().ok()) {
-        Some(path) => {
-            std::fs::read_to_string(&path)
-                .map_err(|e| format!("Failed to read .vcc file at {}: {e}", path.display()))
-        }
-        None => Err("Import cancelled by user".to_string()),
-    }
-}
