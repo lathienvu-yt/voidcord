@@ -45,7 +45,16 @@ impl log::Log for BackendLogger {
 
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
-            let line = format!("[{}] {}: {}", record.level(), record.target(), record.args());
+            let thread = std::thread::current();
+            let thread_name = thread.name().unwrap_or("unnamed");
+            let line = format!(
+                "[{}] [thread={} id={:?}] {}: {}",
+                record.level(),
+                thread_name,
+                thread.id(),
+                record.target(),
+                record.args()
+            );
             eprintln!("{line}");
             if let Some(slot) = CONSOLE_STDIN.get() {
                 if let Ok(mut guard) = slot.lock() {
@@ -71,6 +80,36 @@ pub struct AppState {
 }
 
 fn main() {
+    // Capture panics from Rust threads and async task workers. The default hook is
+    // retained so stderr/debugger output still behaves normally.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("unnamed");
+        let location = panic_info
+            .location()
+            .map(|loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()))
+            .unwrap_or_else(|| "<unknown location>".to_owned());
+        let payload = panic_info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| panic_info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<non-string panic payload>");
+        // Use eprintln as a fallback because the logger may not be initialized yet
+        // or may be involved in a poisoned-lock failure.
+        eprintln!("[PANIC] thread={} id={:?} at {}: {}", thread_name, thread.id(), location, payload);
+        log::error!(
+            target: "panic",
+            "panic on thread={} id={:?} at {}: {}",
+            thread_name,
+            thread.id(),
+            location,
+            payload
+        );
+        default_panic_hook(panic_info);
+    }));
+
     log::set_logger(&BACKEND_LOGGER).expect("failed to initialize Rust backend logger");
     log::set_max_level(if cfg!(debug_assertions) {
         log::LevelFilter::Debug
