@@ -661,18 +661,11 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
 
   return (
     <div className="login-screen">
-      <header className="titlebar" onMouseDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("titlebar-drag-handle")) getCurrentWindow().startDragging(); }}>
+      <header className="voidcord-toolbar"> { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("titlebar-drag-handle")) getCurrentWindow().startDragging(); }}>
         <div className="titlebar-brand">
           <div className="titlebar-logo">V</div>
           <span className="titlebar-name">VoidCord</span>
           <span className="build-tag">PREVIEW</span>
-        </div>
-        <div className="titlebar-drag-handle" />
-        <div className="window-controls">
-          <button title="Dev Console" className="dev-console-btn" onClick={() => tauriInvoke("toggle_devtools")}><Terminal size={12} /></button>
-          <button title="Minimize" onClick={() => getCurrentWindow().minimize()}>─</button>
-          <button title="Maximize" onClick={() => getCurrentWindow().toggleMaximize()}>□</button>
-          <button className="close-btn-wc" title="Close" onClick={() => getCurrentWindow().close()}><X size={13} /></button>
         </div>
       </header>
       <div className="login-body">
@@ -4174,7 +4167,7 @@ export default function App() {
       )}
 
       {/* Titlebar */}
-      <header className="titlebar" data-tauri-drag-region onMouseDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("titlebar-drag-handle")) getCurrentWindow().startDragging(); }}>
+      <header className="voidcord-toolbar"> { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains("titlebar-drag-handle")) getCurrentWindow().startDragging(); }}>
         <div className="titlebar-brand" data-tauri-drag-region>
           <div className="titlebar-logo">V</div>
           <span className="titlebar-name">VoidCord</span>
@@ -4183,13 +4176,6 @@ export default function App() {
             <span className="gateway-status-dot" />
             {gatewayStatus === "connected" ? "Connected" : gatewayStatus === "reconnecting" ? "Reconnecting" : gatewayStatus === "offline" ? "Offline" : "Connecting"}
           </span>
-        </div>
-        <div className="titlebar-drag-handle" data-tauri-drag-region />
-        <div className="window-controls">
-          <button title="Dev Console" className="dev-console-btn" onClick={() => invoke("toggle_devtools")}><Terminal size={12} /></button>
-          <button title="Minimize" onClick={() => getCurrentWindow().minimize()}>─</button>
-          <button title="Maximize" onClick={() => getCurrentWindow().toggleMaximize()}>□</button>
-          <button className="close-btn-wc" title="Close" onClick={() => getCurrentWindow().close()}><X size={13} /></button>
         </div>
       </header>
 
