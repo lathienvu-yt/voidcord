@@ -14,6 +14,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use voice_gateway::VoiceControlState;
 
 static CONSOLE_STDIN: OnceLock<StdMutex<Option<BufWriter<ChildStdin>>>> = OnceLock::new();
+static LOG_CHANNEL: OnceLock<crossbeam_channel::Sender<String>> = OnceLock::new();
 
 pub fn open_rust_console_window() -> Result<(), String> {
     #[cfg(windows)]
@@ -55,11 +56,13 @@ impl log::Log for BackendLogger {
                 record.target(),
                 record.args()
             );
+            
+            // Print to standard error instantly
             eprintln!("{line}");
-            if let Some(slot) = CONSOLE_STDIN.get() {
-                if let Ok(mut guard) = slot.lock() {
-                    if let Some(writer) = guard.as_mut() { let _ = writeln!(writer, "{line}"); let _ = writer.flush(); }
-                }
+            
+            // Push off to background channel cleanly without any thread blocking
+            if let Some(tx) = LOG_CHANNEL.get() {
+                let _ = tx.send(line);
             }
         }
     }
@@ -69,7 +72,6 @@ impl log::Log for BackendLogger {
 
 static BACKEND_LOGGER: BackendLogger = BackendLogger;
 
-/// Shared app state — the router and the stored token.
 pub struct AppState {
     pub router: DiscordRouter,
     pub token: Arc<Mutex<Option<String>>>,
@@ -80,8 +82,6 @@ pub struct AppState {
 }
 
 fn main() {
-    // Capture panics from Rust threads and async task workers. The default hook is
-    // retained so stderr/debugger output still behaves normally.
     let default_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let thread = std::thread::current();
@@ -96,8 +96,6 @@ fn main() {
             .copied()
             .or_else(|| panic_info.payload().downcast_ref::<String>().map(String::as_str))
             .unwrap_or("<non-string panic payload>");
-        // Use eprintln as a fallback because the logger may not be initialized yet
-        // or may be involved in a poisoned-lock failure.
         eprintln!("[PANIC] thread={} id={:?} at {}: {}", thread_name, thread.id(), location, payload);
         log::error!(
             target: "panic",
@@ -109,6 +107,23 @@ fn main() {
         );
         default_panic_hook(panic_info);
     }));
+
+    // Initialize the lock-free background logger system thread
+    let (log_tx, log_rx) = crossbeam_channel::unbounded::<String>();
+    LOG_CHANNEL.set(log_tx).unwrap();
+
+    std::thread::spawn(move || {
+        while let Ok(line) = log_rx.recv() {
+            if let Some(slot) = CONSOLE_STDIN.get() {
+                if let Ok(mut guard) = slot.lock() {
+                    if let Some(writer) = guard.as_mut() {
+                        let _ = writeln!(writer, "{line}");
+                        let _ = writer.flush();
+                    }
+                }
+            }
+        }
+    });
 
     log::set_logger(&BACKEND_LOGGER).expect("failed to initialize Rust backend logger");
     log::set_max_level(if cfg!(debug_assertions) {
@@ -123,7 +138,6 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build());
 
-    // Conditionally add devtools plugin in debug mode without making builder mutable
     #[cfg(debug_assertions)]
     let app_builder = app_builder.plugin(tauri_plugin_devtools::init());
 
