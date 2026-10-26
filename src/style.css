@@ -4123,6 +4123,30 @@ input, textarea { font-family: inherit; }
   font: inherit;
   font-size: 12px;
 }
+.profile-bio-markdown-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, rgba(255,255,255,.1));
+  border-radius: 8px;
+  background: var(--background-secondary, rgba(0,0,0,.14));
+  min-width: 0;
+}
+.profile-bio-markdown-preview-label {
+  margin-bottom: 7px;
+  color: var(--text-muted, #999);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.profile-bio-markdown-empty {
+  color: var(--text-muted, #999);
+  font-size: 12px;
+}
+.profile-bio-markdown-preview .discord-markdown {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
 .profile-bio-editor-footer {
   display: flex;
   align-items: center;
