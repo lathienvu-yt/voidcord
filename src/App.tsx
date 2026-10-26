@@ -4537,6 +4537,12 @@ export default function App() {
                           placeholder="Tell people a little about yourself"
                           onChange={event => setBioDraft(event.target.value)}
                         />
+                        <div className="profile-bio-markdown-preview">
+                          <div className="profile-bio-markdown-preview-label">Markdown preview</div>
+                          {bioDraft.trim()
+                            ? <DiscordMarkdown content={bioDraft} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} />
+                            : <span className="profile-bio-markdown-empty">Bold, italic, links, inline code, and line breaks preview here.</span>}
+                        </div>
                         <div className="profile-bio-editor-footer">
                           <span>{[...bioDraft].length}/190</span>
                           <button type="button" disabled={bioSaving} onClick={() => void saveBio()}>
@@ -5411,7 +5417,7 @@ export default function App() {
                     <div className="slash-command-parameters-section-title">AVAILABLE PARAMETERS</div>
                     <div className="slash-command-parameter-list">
                       {selectedSlashCommand.options.flatMap((option: any) => option.type === 2
-                        ? (option.options || []).filter((child: any) => child.type === 1).map((child: any) => ({ ...child, _insert: '"' + child.name + '" ' }))
+                        ? (option.options || []).filter((child: any) => child.type === 1).map((child: any) => ({ ...child, _insert: '"' + option.name + '" "' + child.name + '" ' }))
                         : [{ ...option, _insert: [1, 2].includes(option.type) ? '"' + option.name + '" ' : '--' + option.name + ' "" ' }]
                       ).map((option: any) => {
                         const typeName = option.type === 3 ? "String"
