@@ -5723,7 +5723,7 @@ export default function App() {
                 <span className="profile-handle">@{selectedMemberProfile.username}{formatDiscriminator(selectedMemberProfile)}</span>
                 {memberProfileData?.user_profile?.pronouns && <span className="profile-pronouns">{memberProfileData.user_profile.pronouns}</span>}
                 <h3>About me</h3>
-                <p className="profile-full-bio">{selectedProfileBio || "This user hasn't added a bio yet."}</p>
+                <div className="profile-full-bio">{selectedProfileBio ? <DiscordMarkdown content={selectedProfileBio} /> : "This user hasn't added a bio yet."}</div>
                 <div className="profile-full-meta">
                   <span>Member since</span>
                   <strong>{snowflakeTime(selectedMemberProfile.id) || "Unknown"}</strong>
@@ -5783,7 +5783,7 @@ export default function App() {
 
                   {selectedProfileBio && (
                     <div className="profile-section-bio">
-                      <p className="profile-bio-preview">{selectedProfileBio}</p>
+                      <div className="profile-bio-preview"><DiscordMarkdown content={selectedProfileBio} /></div>
                       <button className="profile-link-btn" onClick={() => setFullProfileOpen(true)}>View Full Bio</button>
                     </div>
                   )}
