@@ -4510,7 +4510,7 @@ export default function App() {
                     </div>
                     {profileBio && (
                       <>
-                        <p className="profile-popover-bio">{profileBio}</p>
+                        <div className="profile-popover-bio"><DiscordMarkdown content={profileBio} /></div>
                         <button className="profile-bio-link" onClick={() => {
                           setProfileCardOpen(false);
                           void handleOpenMemberProfile(me, true);
@@ -5633,7 +5633,7 @@ export default function App() {
                       )}
                       <div className="dm-profile-about">
                         <strong>ABOUT ME</strong>
-                        <p>{dmBio || "This user hasn't added a bio yet."}</p>
+                        {dmBio ? <DiscordMarkdown content={dmBio} /> : <p>This user hasn't added a bio yet.</p>}
                       </div>
                       {dmProfileData?.user_profile?.pronouns && (
                         <div className="dm-profile-about">
@@ -6632,8 +6632,15 @@ function MessageContent({
   guildId?: string;
   onNotify?: (msg: string) => void;
 }) {
+  const isEphemeral = ((m.flags ?? 0) & 64) === 64;
+
   return (
     <>
+      {isEphemeral && (
+        <div className="ephemeral-message-label" title="This response is ephemeral and may only be visible to its recipient">
+          <span aria-hidden="true">◈</span> Ephemeral response
+        </div>
+      )}
       {m.message_reference && m.message_reference.type !== 1 && (
         <div className="reply-message-reference"><span>↪ {m.referenced_message ? displayName(m.referenced_message.author) : "Reply to message"}</span><div>{m.referenced_message?.content || (m.referenced_message ? "Attachment or system message" : "Original message unavailable")}</div></div>
       )}
