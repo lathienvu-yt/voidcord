@@ -312,18 +312,20 @@ function parseSlashCommandOptions(command: any, rawArguments: string): any[] {
   let selectedGroup: any | null = null;
 
   if (rootOptions.some((option: any) => option.type === 1 || option.type === 2)) {
-    const selectedName = tokens.shift();
+    // Discord subcommand names are single identifiers. Accept the documented quoted
+    // form (/command "subcommand") as well as the unquoted shorthand.
+    const selectedName = tokens.shift()?.replace(/^\[|\]$/g, "");
     const selected = rootOptions.find((option: any) => option.name === selectedName && (option.type === 1 || option.type === 2));
     if (!selected) {
-      throw new Error("Choose a subcommand: " + rootOptions.filter((option: any) => option.type === 1 || option.type === 2).map((option: any) => option.name).join(", "));
+      throw new Error('Choose a subcommand using /' + command.name + ' "[sub command]". Available: ' + rootOptions.filter((option: any) => option.type === 1 || option.type === 2).map((option: any) => option.name).join(", "));
     }
 
     if (selected.type === 2) {
       selectedGroup = selected;
-      const subcommandName = tokens.shift();
+      const subcommandName = tokens.shift()?.replace(/^\[|\]$/g, "");
       selectedSubcommand = (selected.options || []).find((option: any) => option.name === subcommandName && option.type === 1);
       if (!selectedSubcommand) {
-        throw new Error("Choose a subcommand from " + selected.name + ": " + (selected.options || []).map((option: any) => option.name).join(", "));
+        throw new Error('Choose a subcommand from "' + selected.name + '": ' + (selected.options || []).filter((option: any) => option.type === 1).map((option: any) => option.name).join(", "));
       }
       options = Array.isArray(selectedSubcommand.options) ? selectedSubcommand.options : [];
     } else {
@@ -4535,6 +4537,12 @@ export default function App() {
                           placeholder="Tell people a little about yourself"
                           onChange={event => setBioDraft(event.target.value)}
                         />
+                        <div className="profile-bio-markdown-preview">
+                          <div className="profile-bio-markdown-preview-label">Markdown preview</div>
+                          {bioDraft.trim()
+                            ? <DiscordMarkdown content={bioDraft} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} />
+                            : <span className="profile-bio-markdown-empty">Bold, italic, links, inline code, and line breaks preview here.</span>}
+                        </div>
                         <div className="profile-bio-editor-footer">
                           <span>{[...bioDraft].length}/190</span>
                           <button type="button" disabled={bioSaving} onClick={() => void saveBio()}>
@@ -5401,16 +5409,16 @@ export default function App() {
                         <span>How to use parameters in VoidCord</span>
                       </div>
                       <p>
-                        Type <code>--&lt;parameter&gt; &lt;value&gt;</code> (wrap text with spaces in quotes: <code>--query &quot;hello world&quot;</code>).
-                        Or <strong>click any parameter chip below</strong> to insert it into your message.
+                        Use <code>--parameter &quot;value with spaces&quot;</code>. Subcommands use quotes too: <code>&quot;subcommand&quot;</code>.
+                        Click a parameter chip to insert <code>--parameter &quot;&quot;</code>, or a subcommand chip to insert <code>&quot;subcommand&quot;</code>.
                       </p>
                     </div>
 
                     <div className="slash-command-parameters-section-title">AVAILABLE PARAMETERS</div>
                     <div className="slash-command-parameter-list">
                       {selectedSlashCommand.options.flatMap((option: any) => option.type === 2
-                        ? (option.options || []).filter((child: any) => child.type === 1).map((child: any) => ({ ...child, _insert: option.name + " " + child.name + " " }))
-                        : [{ ...option, _insert: [1, 2].includes(option.type) ? option.name + " " : "--" + option.name + " " }]
+                        ? (option.options || []).filter((child: any) => child.type === 1).map((child: any) => ({ ...child, _insert: '"' + option.name + '" "' + child.name + '" ' }))
+                        : [{ ...option, _insert: [1, 2].includes(option.type) ? '"' + option.name + '" ' : '--' + option.name + ' "" ' }]
                       ).map((option: any) => {
                         const typeName = option.type === 3 ? "String"
                           : option.type === 4 ? "Integer"
@@ -5433,8 +5441,12 @@ export default function App() {
                                 const nextDraft = draft.endsWith(" ") ? draft + insertion : draft + " " + insertion;
                                 setDraft(nextDraft);
                                 requestAnimationFrame(() => {
-                                  inputRef.current?.focus();
-                                  inputRef.current?.setSelectionRange(nextDraft.length, nextDraft.length);
+                                  const input = inputRef.current;
+                                  input?.focus();
+                                  // Put the caret inside the empty quoted value so typing can start immediately.
+                                  const emptyValue = nextDraft.lastIndexOf('""');
+                                  const caret = emptyValue >= 0 && insertion.includes('""') ? emptyValue + 1 : nextDraft.length;
+                                  input?.setSelectionRange(caret, caret);
                                 });
                               }}
                             >
