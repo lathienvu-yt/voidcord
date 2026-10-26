@@ -5153,3 +5153,26 @@ input, textarea { font-family: inherit; }
 .server-folder-order-list { display: grid; gap: 5px; margin-bottom: 12px; }
 .server-folder-order-row { grid-template-columns: minmax(0, 1fr) auto auto; }
 .server-folder-order-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+/* Rich profile text and ephemeral interaction responses */
+.ephemeral-message-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  margin: 2px 0 5px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent, #8b75d7) 45%, transparent);
+  border-radius: 5px;
+  color: var(--text-muted, #aaa);
+  background: color-mix(in srgb, var(--accent, #8b75d7) 10%, transparent);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.ephemeral-message-label span { color: var(--accent, #a995f5); }
+.profile-popover-bio .d-codeblock,
+.profile-bio-preview .d-codeblock,
+.profile-full-bio .d-codeblock,
+.dm-profile-about .d-codeblock { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.profile-popover-bio > *, .profile-bio-preview > *, .profile-full-bio > *, .dm-profile-about > * { margin-top: 0; }
