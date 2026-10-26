@@ -12,6 +12,8 @@ use tokio::sync::Mutex;
 use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use voice_gateway::VoiceControlState;
+use tauri::Manager;
+
 
 static CONSOLE_STDIN: OnceLock<StdMutex<Option<BufWriter<ChildStdin>>>> = OnceLock::new();
 static LOG_CHANNEL: OnceLock<SyncSender<String>> = OnceLock::new();
