@@ -18,7 +18,7 @@ export function DiscordMarkdown({ content, channels, users, onChannelClick }: Di
     // token ("[label](https://example.com)") instead of its destination.
     // Normalize that form before passing anything to Tauri's URL allowlist.
     let candidate = rawUrl.trim();
-    const markdownLink = candidate.match(/^\\[([^\\]]*)\\]\\((https?:\\/\\/[^)]+)\\)$/);
+    const markdownLink = candidate.match(/^\[([^\]]*)\]\((https?:\/\/[^)]+)\)$/);
     if (markdownLink) candidate = markdownLink[2];
     if (candidate.startsWith("<") && candidate.endsWith(">")) {
       candidate = candidate.slice(1, -1).trim();
