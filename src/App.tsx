@@ -1668,7 +1668,7 @@ export default function App() {
 
     // React/browser wheel listeners may be passive, so register explicitly as non-passive
     // when we need to cancel the browser zoom/scroll gesture for image zooming.
-    const onWheel = (event: WheelEvent) => zoomMediaAtPointer(event);
+    const onWheel = ((event: WheelEvent) => zoomMediaAtPointer(event)) as EventListener;
     stage.addEventListener("wheel", onWheel, { passive: false });
     return () => stage.removeEventListener("wheel", onWheel);
   }, [mediaViewer?.kind]);
