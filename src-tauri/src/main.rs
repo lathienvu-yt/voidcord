@@ -162,6 +162,13 @@ fn main() {
         log::LevelFilter::Info
     });
     if verbose_network_trace {
+        // Release builds use the Windows GUI subsystem, so stdout/stderr are not
+        // attached to a terminal. Open the app's dedicated Rust log console before
+        // emitting the startup banner and verbose request/event traces.
+        #[cfg(windows)]
+        if let Err(error) = open_rust_console_window() {
+            eprintln!("[WARN] Could not open verbose Rust console: {error}");
+        }
         log::warn!("Verbose network tracing enabled; payloads are redacted and bounded, but message content and other private data may still appear in local logs.");
     }
     log::info!("VoidCord Rust backend starting (debug_assertions={})", cfg!(debug_assertions));
