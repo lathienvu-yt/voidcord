@@ -79,15 +79,15 @@ export function DiscordEmbedView({
   let providerFrame: { src: string; ratio: string; title: string } | null = null;
   try {
     const parsed = new URL(providerUrl);
-    const host = parsed.hostname.toLowerCase().replace(/^www\\./, "");
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
     if (host === "youtu.be" || host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") {
       const id = host === "youtu.be" ? parsed.pathname.split("/").filter(Boolean)[0]
-        : parsed.pathname.match(/^\\/(?:embed|shorts|live)\\/([A-Za-z0-9_-]{11})/)?.[1] || parsed.searchParams.get("v");
+        : parsed.pathname.match(/^\/(?:embed|shorts|live)\/([A-Za-z0-9_-]{11})/)?.[1] || parsed.searchParams.get("v");
       if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) {
         providerFrame = { src: `https://www.youtube.com/embed/${id}`, ratio: "16 / 9", title: embed.title || "YouTube video" };
       }
     } else if (host === "tiktok.com" || host === "m.tiktok.com") {
-      const id = parsed.pathname.match(/\\/video\\/(\\d+)/)?.[1] || parsed.pathname.match(/\\/player\\/v1\\/(\\d+)/)?.[1];
+      const id = parsed.pathname.match(/\/video\/(\d+)/)?.[1] || parsed.pathname.match(/\/player\/v1\/(\d+)/)?.[1];
       if (id) {
         providerFrame = { src: `https://www.tiktok.com/player/v1/${id}?utm_source=discord.gg`, ratio: "9 / 16", title: embed.title || "TikTok video" };
       }
