@@ -253,6 +253,28 @@ pub async fn get_channels(
         .map_err(map_err)
 }
 
+/// Re-fetch one message so stale cached attachment URLs can be refreshed.
+#[tauri::command]
+pub async fn get_message(
+    channel_id: String,
+    message_id: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if channel_id.parse::<u64>().is_err() || message_id.parse::<u64>().is_err() {
+        return Err("A valid channel ID and message ID are required".to_owned());
+    }
+    state
+        .router
+        .rest(
+            AccountIdentity::ReadOnly,
+            Method::GET,
+            &format!("channels/{channel_id}/messages/{message_id}"),
+            None,
+        )
+        .await
+        .map_err(map_err)
+}
+
 /// Fetch the 50 most-recent messages for a channel.
 /// Returns Ok(array) on success, Err("MISSING_ACCESS") on 403, Err("MISSING_PERMS") on 50013, other errors as string.
 #[tauri::command]
