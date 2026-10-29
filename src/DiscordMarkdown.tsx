@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { avatarUrl, DiscordChannel, DiscordUser } from "./types";
 
 interface DiscordMarkdownProps {
@@ -9,7 +10,26 @@ interface DiscordMarkdownProps {
 }
 
 export function DiscordMarkdown({ content, channels, users, onChannelClick }: DiscordMarkdownProps) {
+  const [linkMenu, setLinkMenu] = useState<{ url: string; x: number; y: number } | null>(null);
   if (!content) return null;
+
+  const openExternalLink = async (rawUrl: string) => {
+    let url: URL;
+    try { url = new URL(rawUrl); } catch { return; }
+    if (url.protocol !== "https:" && url.protocol !== "http:") return;
+    setLinkMenu(null);
+    try { await openUrl(url.href); }
+    catch { window.open(url.href, "_blank", "noopener,noreferrer"); }
+  };
+  const linkHandlers = {
+    onClick: (event: React.MouseEvent<HTMLAnchorElement>, url: string) => {
+      event.preventDefault(); event.stopPropagation(); void openExternalLink(url);
+    },
+    onContextMenu: (event: React.MouseEvent<HTMLAnchorElement>, url: string) => {
+      event.preventDefault(); event.stopPropagation();
+      setLinkMenu({ url, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 88)) });
+    },
+  };
 
   // Split content by code blocks first
   const codeBlockRegex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
@@ -21,7 +41,7 @@ export function DiscordMarkdown({ content, channels, users, onChannelClick }: Di
     if (match.index > lastIndex) {
       parts.push(
         <React.Fragment key={`text-${lastIndex}`}>
-          {renderBlockLines(content.substring(lastIndex, match.index), channels, users, onChannelClick)}
+          {renderBlockLines(content.substring(lastIndex, match.index), channels, users, onChannelClick, linkHandlers.onClick, linkHandlers.onContextMenu)}
         </React.Fragment>
       );
     }
@@ -39,12 +59,20 @@ export function DiscordMarkdown({ content, channels, users, onChannelClick }: Di
   if (lastIndex < content.length) {
     parts.push(
       <React.Fragment key={`text-${lastIndex}`}>
-        {renderBlockLines(content.substring(lastIndex), channels, users, onChannelClick)}
+        {renderBlockLines(content.substring(lastIndex), channels, users, onChannelClick, linkHandlers.onClick, linkHandlers.onContextMenu)}
       </React.Fragment>
     );
   }
 
-  return <div className="discord-markdown">{parts}</div>;
+  return (
+    <div className="discord-markdown" onClick={() => linkMenu && setLinkMenu(null)}>
+      {parts}
+      {linkMenu && <div className="app-context-menu markdown-link-context-menu" role="menu" style={{ position: "fixed", left: linkMenu.x, top: linkMenu.y, zIndex: 10000 }} onMouseDown={event => event.stopPropagation()} onContextMenu={event => event.preventDefault()}>
+        <button role="menuitem" onClick={() => { const url = linkMenu.url; setLinkMenu(null); void navigator.clipboard.writeText(url).catch(() => undefined); }}>Copy Link</button>
+        <button role="menuitem" onClick={() => void openExternalLink(linkMenu.url)}>Open Link</button>
+      </div>}
+    </div>
+  );
 }
 
 function renderBlockLines(
@@ -52,6 +80,8 @@ function renderBlockLines(
   channels?: DiscordChannel[],
   users?: DiscordUser[],
   onChannelClick?: (id: string) => void,
+  onLinkClick?: (event: React.MouseEvent<HTMLAnchorElement>, url: string) => void,
+  onLinkContextMenu?: (event: React.MouseEvent<HTMLAnchorElement>, url: string) => void,
 ) {
   const lines = text.split(/\r?\n/);
   const elements: React.ReactNode[] = [];
@@ -64,7 +94,7 @@ function renderBlockLines(
       const h1Match = line.match(/^#\s+(.+)$/);
       elements.push(
         <h1 key={`h1-${i}`} className="d-h1">
-          {renderInline(h1Match![1], channels, users, onChannelClick)}
+          {renderInline(h1Match![1], channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}
         </h1>
       );
       continue;
@@ -75,7 +105,7 @@ function renderBlockLines(
       const h2Match = line.match(/^##\s+(.+)$/);
       elements.push(
         <h2 key={`h2-${i}`} className="d-h2">
-          {renderInline(h2Match![1], channels, users, onChannelClick)}
+          {renderInline(h2Match![1], channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}
         </h2>
       );
       continue;
@@ -86,7 +116,7 @@ function renderBlockLines(
       const h3Match = line.match(/^###\s+(.+)$/);
       elements.push(
         <h3 key={`h3-${i}`} className="d-h3">
-          {renderInline(h3Match![1], channels, users, onChannelClick)}
+          {renderInline(h3Match![1], channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}
         </h3>
       );
       continue;
@@ -97,7 +127,7 @@ function renderBlockLines(
       const subMatch = line.match(/^-#\s+(.+)$/);
       elements.push(
         <div key={`sub-${i}`} className="d-subtext">
-          {renderInline(subMatch![1], channels, users, onChannelClick)}
+          {renderInline(subMatch![1], channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}
         </div>
       );
       continue;
@@ -108,7 +138,7 @@ function renderBlockLines(
       const bqMatch = line.match(/^>\s+(.+)$/);
       elements.push(
         <blockquote key={`bq-${i}`} className="d-blockquote">
-          {renderInline(bqMatch![1], channels, users, onChannelClick)}
+          {renderInline(bqMatch![1], channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}
         </blockquote>
       );
       continue;
@@ -120,7 +150,7 @@ function renderBlockLines(
       elements.push(
         <div key={`li-${i}`} className="d-list-item">
           <span className="d-list-bullet">•</span>
-          <span>{renderInline(liMatch![1], channels, users, onChannelClick)}</span>
+          <span>{renderInline(liMatch![1], channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}</span>
         </div>
       );
       continue;
@@ -132,7 +162,7 @@ function renderBlockLines(
     } else {
       elements.push(
         <div key={`p-${i}`} className="d-line">
-          {renderInline(line, channels, users, onChannelClick)}
+          {renderInline(line, channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}
         </div>
       );
     }
@@ -146,6 +176,8 @@ export function renderInline(
   channels?: DiscordChannel[],
   users?: DiscordUser[],
   onChannelClick?: (id: string) => void,
+  onLinkClick?: (event: React.MouseEvent<HTMLAnchorElement>, url: string) => void,
+  onLinkContextMenu?: (event: React.MouseEvent<HTMLAnchorElement>, url: string) => void,
 ): React.ReactNode {
   // Regex parsing inline tokens in priority order:
   // 1: Inline code `...`
@@ -316,8 +348,10 @@ export function renderInline(
             target="_blank"
             rel="noopener noreferrer"
             className="d-link"
+            onClick={event => onLinkClick?.(event, linkMatch[2])}
+            onContextMenu={event => onLinkContextMenu?.(event, linkMatch[2])}
           >
-            {linkMatch[1]}
+            {renderInline(linkMatch[1], channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}
           </a>
         );
       } else {
@@ -333,6 +367,8 @@ export function renderInline(
           target="_blank"
           rel="noopener noreferrer"
           className="d-link"
+          onClick={event => onLinkClick?.(event, token)}
+          onContextMenu={event => onLinkContextMenu?.(event, token)}
         >
           {token}
         </a>
@@ -346,28 +382,28 @@ export function renderInline(
     else if (token.startsWith("***") && token.endsWith("***") && token.length >= 6) {
       result.push(
         <strong key={`bi-${match.index}`}>
-          <em>{token.slice(3, -3)}</em>
+          <em>{renderInline(token.slice(3, -3), channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}</em>
         </strong>
       );
     }
     // Bold **...**
     else if (token.startsWith("**") && token.endsWith("**") && token.length >= 4) {
-      result.push(<strong key={`b-${match.index}`}>{token.slice(2, -2)}</strong>);
+      result.push(<strong key={`b-${match.index}`}>{renderInline(token.slice(2, -2), channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}</strong>);
     }
     // Underline __...__
     else if (token.startsWith("__") && token.endsWith("__") && token.length >= 4) {
-      result.push(<u key={`u-${match.index}`}>{token.slice(2, -2)}</u>);
+      result.push(<u key={`u-${match.index}`}>{renderInline(token.slice(2, -2), channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}</u>);
     }
     // Italic *...* or _..._
     else if (
       (token.startsWith("*") && token.endsWith("*") && token.length >= 2) ||
       (token.startsWith("_") && token.endsWith("_") && token.length >= 2)
     ) {
-      result.push(<em key={`em-${match.index}`}>{token.slice(1, -1)}</em>);
+      result.push(<em key={`em-${match.index}`}>{renderInline(token.slice(1, -1), channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}</em>);
     }
     // Strikethrough ~~...~~
     else if (token.startsWith("~~") && token.endsWith("~~") && token.length >= 4) {
-      result.push(<del key={`del-${match.index}`}>{token.slice(2, -2)}</del>);
+      result.push(<del key={`del-${match.index}`}>{renderInline(token.slice(2, -2), channels, users, onChannelClick, onLinkClick, onLinkContextMenu)}</del>);
     } else {
       result.push(token);
     }
