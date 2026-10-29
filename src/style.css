@@ -5214,3 +5214,11 @@ input, textarea { font-family: inherit; }
 .notification-center-copy small { color: var(--text-muted, #aaa); font-size: 11px; }
 .notification-ack-button { border: 0; border-radius: 6px; padding: 6px; background: transparent; color: var(--text-muted, #aaa); cursor: pointer; }
 .notification-ack-button:hover { background: rgba(127,127,127,.18); color: var(--text, #fff); }
+
+
+/* Slash-command application filters */
+.slash-command-app-tabs { display: flex; gap: 5px; overflow-x: auto; padding: 4px 2px 8px; margin-bottom: 4px; border-bottom: 1px solid var(--border, #393746); scrollbar-width: thin; }
+.slash-command-app-tabs > button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; max-width: 180px; padding: 6px 9px; border: 1px solid transparent; border-radius: 7px; background: var(--bg-tertiary, #393746); color: var(--text-secondary, #b8b5c4); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.slash-command-app-tabs > button > span { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 5px; background: #0002; font-size: 10px; }
+.slash-command-app-tabs > button.active { border-color: var(--accent, #5865f2); background: color-mix(in srgb, var(--accent, #5865f2) 24%, var(--bg-tertiary, #393746)); color: var(--text-primary, #f0eef6); }
+.slash-command-app-tabs > button:hover { background: var(--bg-hover, #353343); color: var(--text-primary, #f0eef6); }
