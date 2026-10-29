@@ -1144,6 +1144,21 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [replyToMessage, setReplyToMessage] = useState<DiscordMessage | null>(null);
   const [slashCommands, setSlashCommands] = useState<any[]>([]);
+  const [slashCommandAppFilter, setSlashCommandAppFilter] = useState("all");
+  const slashCommandApps = useMemo(() => {
+    const appIds = [...new Set(slashCommands.map(command => String(command.application_id || "unknown")))];
+    return appIds.map(applicationId => {
+      const command = slashCommands.find(item => String(item.application_id || "unknown") === applicationId);
+      const botFromDm = dmChannels.flatMap(channel => channel.recipients || []).find(user => user.bot && user.id === applicationId);
+      const botFromGuild = guildMembers.map(member => member?.user || member).find(user => user?.bot && String(user.id) === applicationId);
+      const bot = botFromDm || botFromGuild;
+      const label = command?.application?.name || command?.application_name || bot?.global_name || bot?.username || (applicationId === "unknown" ? "Unknown app" : `App …${applicationId.slice(-4)}`);
+      return { id: applicationId, label, count: slashCommands.filter(item => String(item.application_id || "unknown") === applicationId).length };
+    }).sort((left, right) => left.label.localeCompare(right.label));
+  }, [slashCommands, dmChannels, guildMembers]);
+  const visibleSlashCommands = useMemo(() => slashCommandAppFilter === "all"
+    ? slashCommands
+    : slashCommands.filter(command => String(command.application_id || "unknown") === slashCommandAppFilter), [slashCommands, slashCommandAppFilter]);
   const [slashCommandSearchStatus, setSlashCommandSearchStatus] = useState("");
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<any | null>(null);
   const [gatewaySessionId, setGatewaySessionId] = useState("");
@@ -1316,7 +1331,7 @@ export default function App() {
       && command.id && command.application_id
     );
     if (cachedHits.length) {
-      setSlashCommands(cachedHits.slice(0, 15));
+      setSlashCommands(cachedHits.slice(0, 50));
       setSlashCommandSearchStatus("⚡ Cached commands — refreshing…");
     } else {
       setSlashCommands([]);
@@ -1383,19 +1398,19 @@ export default function App() {
         for (const command of fetched) merged.set(command.application_id + ":" + command.id, command);
         cachedCommandsRef.current = [...merged.values()].slice(-500);
         if (fetched.length) void writeCachedCommands(cachedCommandsRef.current);
-        const matching = fetched.filter(command => command.name.toLowerCase().startsWith(query)).slice(0, 15);
+        const matching = fetched.filter(command => command.name.toLowerCase().startsWith(query)).slice(0, 50);
         if (matching.length) {
           setSlashCommands(matching);
           setSlashCommandSearchStatus("");
         } else {
-          setSlashCommands(cachedHits.slice(0, 15));
+          setSlashCommands(cachedHits.slice(0, 50));
           setSlashCommandSearchStatus(cachedHits.length
             ? "⚡ Showing cached commands"
             : ids.length ? "No matching registered slash commands found." : "No bot application IDs discovered yet. Open a bot DM or use Developer Tools → Application Commands.");
         }
       } catch (error) {
         if (!cancelled) {
-          setSlashCommands(cachedHits.slice(0, 15));
+          setSlashCommands(cachedHits.slice(0, 50));
           setSlashCommandSearchStatus(cachedHits.length ? "⚡ Offline — showing cached commands" : "Could not load commands: " + String(error));
         }
       }
@@ -5432,7 +5447,11 @@ export default function App() {
                 {(slashCommands.length > 0 || slashCommandSearchStatus) && /^\/[^\s]*$/.test(draft) && (
                   <div className="slash-command-autocomplete" role="listbox" aria-label="Slash commands">
                     {slashCommandSearchStatus && <div className="slash-command-search-status" role="status">{slashCommandSearchStatus}</div>}
-                    {slashCommands.map(command => <button type="button" role="option" key={command.application_id + ":" + command.id} onMouseDown={event => event.preventDefault()} onClick={() => {
+                    {slashCommandApps.length > 1 && <div className="slash-command-app-tabs" role="tablist" aria-label="Filter commands by app">
+                      <button type="button" role="tab" aria-selected={slashCommandAppFilter === "all"} className={slashCommandAppFilter === "all" ? "active" : ""} onMouseDown={event => event.preventDefault()} onClick={() => setSlashCommandAppFilter("all")}>All apps <span>{slashCommands.length}</span></button>
+                      {slashCommandApps.map(appOption => <button type="button" role="tab" aria-selected={slashCommandAppFilter === appOption.id} className={slashCommandAppFilter === appOption.id ? "active" : ""} key={appOption.id} title={appOption.label} onMouseDown={event => event.preventDefault()} onClick={() => setSlashCommandAppFilter(appOption.id)}>{appOption.label} <span>{appOption.count}</span></button>)}
+                    </div>}
+                    {visibleSlashCommands.map(command => <button type="button" role="option" key={command.application_id + ":" + command.id} onMouseDown={event => event.preventDefault()} onClick={() => {
                       setSelectedSlashCommand(command); setDraft("/" + command.name + " "); setSlashCommands([]); setSlashCommandSearchStatus("");
                       requestAnimationFrame(() => { inputRef.current?.focus(); inputRef.current?.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length); });
                     }}><span className="slash-command-icon">/</span><span><strong>/{command.name}</strong><small>{command.description || "Application command"}</small></span></button>)}
