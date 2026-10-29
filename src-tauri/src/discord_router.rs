@@ -707,6 +707,7 @@ impl DiscordRouter {
                                         })
                                     };
                                     log::debug!("Gateway handshake sending: op={} (resume={should_resume}); token redacted", handshake.get("op").and_then(Value::as_u64).unwrap_or_default());
+                                    trace_payload("Gateway handshake", &handshake);
                                     if let Err(e) = socket.send(WsMessage::Text(handshake.to_string())).await {
                                         log::warn!("Gateway handshake send error: {e}");
                                         break;
