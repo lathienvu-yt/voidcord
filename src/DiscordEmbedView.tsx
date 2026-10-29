@@ -46,7 +46,7 @@ export function DiscordEmbedView({
     const videoUrl = resolveUrl(embed.video.url);
     const poster = thumbnailUrl || undefined;
     return (
-      <div className="embed-gifv" style={{ width: "min(100%, 448px)" }}>
+      <div className="embed-gifv" style={{ width: "min(100%, 320px)" }}>
         <video
           src={videoUrl}
           poster={poster}
@@ -54,9 +54,8 @@ export function DiscordEmbedView({
           muted
           loop
           playsInline
-          controls
           preload="metadata"
-          style={{ display: "block", width: "100%", maxHeight: 480, objectFit: "contain", borderRadius: 8, background: "#000" }}
+          style={{ display: "block", width: "100%", maxHeight: 220, objectFit: "contain", borderRadius: 8, background: "#000" }}
           onError={event => {
             const video = event.currentTarget;
             video.style.display = "none";
@@ -65,7 +64,7 @@ export function DiscordEmbedView({
           }}
         />
         {poster && <a href={poster} target="_blank" rel="noopener noreferrer" style={{ display: "none" }}>
-          <img src={poster} alt={embed.title || "Animated GIF preview"} style={{ display: "block", maxWidth: "100%", borderRadius: 8 }} />
+          <img src={poster} alt={embed.title || "Animated GIF preview"} style={{ display: "block", maxWidth: "100%", maxHeight: 220, objectFit: "contain", borderRadius: 8 }} />
         </a>}
         <div className="embed-gifv-title" style={{ marginTop: 5, fontWeight: 600 }}>
           GIF - {embed.title || embed.provider?.name || "Animated image"}
@@ -95,8 +94,9 @@ export function DiscordEmbedView({
   } catch { /* malformed or non-URL embed: use the normal embed renderer */ }
 
   if (providerFrame) {
+    const isTikTok = providerFrame.ratio === "9 / 16";
     return (
-      <div className="discord-provider-video" style={{ width: "min(100%, 560px)" }}>
+      <div className="discord-provider-video" style={{ width: isTikTok ? "min(100%, 230px)" : "min(100%, 380px)" }}>
         <iframe
           src={providerFrame.src}
           title={providerFrame.title}
@@ -105,10 +105,10 @@ export function DiscordEmbedView({
           referrerPolicy="strict-origin-when-cross-origin"
           sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
           allowFullScreen
-          style={{ display: "block", width: "100%", aspectRatio: providerFrame.ratio, border: 0, borderRadius: 8, background: "#000" }}
+          style={{ display: "block", width: "100%", aspectRatio: providerFrame.ratio, maxHeight: isTikTok ? 370 : 214, border: 0, borderRadius: 8, background: "#000" }}
         />
-        {embed.title && <div style={{ marginTop: 5, fontWeight: 600 }}>{embed.title}</div>}
-        <a href={providerUrl} target="_blank" rel="noopener noreferrer">Open on {providerUrl.toLowerCase().includes("tiktok.com") ? "TikTok" : "YouTube"}</a>
+        {embed.title && <div style={{ marginTop: 4, fontWeight: 600, fontSize: 13 }}>{embed.title}</div>}
+        <a href={providerUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>Open on {isTikTok ? "TikTok" : "YouTube"}</a>
       </div>
     );
   }
