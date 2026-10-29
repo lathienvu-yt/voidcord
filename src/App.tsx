@@ -6645,6 +6645,8 @@ function MessageContent({
   onNotify?: (msg: string) => void;
 }) {
   const isEphemeral = ((m.flags ?? 0) & 64) === 64;
+  const hideGifSourceLink = !!m.content?.trim()
+    && m.embeds?.some(embed => embed.type === "gifv" && !!embed.url && m.content.trim() === embed.url.trim());
 
   return (
     <>
@@ -6716,14 +6718,14 @@ function MessageContent({
         </div>
       )}
 
-      {m.type !== 0 && m.type !== 3 && m.type !== 20 && !m.content && !m.call
-        && !(m.attachments?.length) && !(m.embeds?.length) && (
+      {m.type !== 0 && m.type !== 3 && m.type !== 19 && m.type !== 20 && !m.content && !m.call
+        && !(m.attachments?.length) && !(m.embeds?.length) && !(m.components?.length) && (
         <div className="msg-special-card msg-system-card" role="note">
           <span>{SYSTEM_MESSAGE_LABELS[m.type] || `Discord system message · type ${m.type}`}</span>
         </div>
       )}
 
-      {m.content && (
+      {m.content && !hideGifSourceLink && (
         <div className="msg-text">
           <DiscordMarkdown content={m.content} channels={channels} users={users} onChannelClick={onChannelClick} />
         </div>
