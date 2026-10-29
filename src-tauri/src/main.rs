@@ -153,11 +153,17 @@ fn main() {
         .expect("failed to start Rust console log writer thread");
 
     log::set_logger(&BACKEND_LOGGER).expect("failed to initialize Rust backend logger");
-    log::set_max_level(if cfg!(debug_assertions) {
+    let verbose_network_trace = std::env::var("VOIDCORD_TRACE_NETWORK")
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    log::set_max_level(if verbose_network_trace || cfg!(debug_assertions) {
         log::LevelFilter::Debug
     } else {
         log::LevelFilter::Info
     });
+    if verbose_network_trace {
+        log::warn!("Verbose network tracing enabled; payloads are redacted and bounded, but message content and other private data may still appear in local logs.");
+    }
     log::info!("VoidCord Rust backend starting (debug_assertions={})", cfg!(debug_assertions));
 
     let app_builder = tauri::Builder::default()
