@@ -26,13 +26,59 @@ fn redact_sensitive_query(path: &str) -> String {
     let mut safe_query = Vec::new();
     for parameter in query.split('&') {
         let (key, _) = parameter.split_once('=').unwrap_or((parameter, ""));
-        if key == "refresh_token" {
+        if matches!(key.to_ascii_lowercase().as_str(), "refresh_token" | "token" | "access_token" | "authorization" | "session_id" | "code" | "password") {
             safe_query.push(format!("{key}=[REDACTED]"));
         } else {
             safe_query.push(parameter.to_owned());
         }
     }
     format!("{route}?{}", safe_query.join("&"))
+}
+
+/// Enable verbose payload logging with VOIDCORD_TRACE_NETWORK=1 before launching.
+/// Secrets are recursively redacted and payload output is bounded to avoid log floods.
+fn verbose_network_trace() -> bool {
+    std::env::var("VOIDCORD_TRACE_NETWORK")
+        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn redact_json(value: &Value) -> Value {
+    const SECRET_KEYS: &[&str] = &[
+        "token", "access_token", "refresh_token", "authorization", "cookie", "set-cookie",
+        "password", "captcha_key", "captcha-rqtoken", "captcha_rqtoken", "captcha_session_id", "session_id",
+        "secret", "client_secret",
+    ];
+    match value {
+        Value::Object(object) => {
+            let mut safe = serde_json::Map::new();
+            for (key, child) in object {
+                if SECRET_KEYS.iter().any(|secret| key.eq_ignore_ascii_case(secret)) {
+                    safe.insert(key.clone(), Value::String("[REDACTED]".to_owned()));
+                } else {
+                    safe.insert(key.clone(), redact_json(child));
+                }
+            }
+            Value::Object(safe)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(redact_json).collect()),
+        _ => value.clone(),
+    }
+}
+
+fn trace_payload(label: &str, value: &Value) {
+    if !verbose_network_trace() {
+        return;
+    }
+    let serialized = serde_json::to_string(&redact_json(value))
+        .unwrap_or_else(|_| "<payload serialization failed>".to_owned());
+    const MAX_TRACE_CHARS: usize = 12_000;
+    if serialized.chars().count() > MAX_TRACE_CHARS {
+        let truncated: String = serialized.chars().take(MAX_TRACE_CHARS).collect();
+        log::debug!("{label} payload (truncated to {MAX_TRACE_CHARS} chars): {truncated}");
+    } else {
+        log::debug!("{label} payload: {serialized}");
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,8 +281,11 @@ impl DiscordRouter {
         };
         // Ask Discord for the current identity's tier. The backend repeats this
         // check at send time; UI supplied tier values are never trusted.
+        let upload_check_started = std::time::Instant::now();
+        log::debug!("Discord upload tier request: GET /users/@me (identity={identity:?})");
         let account_response = self.client.get(format!("{DISCORD_API}/users/@me"))
             .header(header::AUTHORIZATION, token.0.as_ref()).send().await?;
+        log::debug!("Discord upload tier response: GET /users/@me -> {} ({:?})", account_response.status(), upload_check_started.elapsed());
         let account_status = account_response.status();
         let account: Value = account_response.json().await?;
         if !account_status.is_success() {
@@ -283,6 +332,8 @@ impl DiscordRouter {
             let part = reqwest::multipart::Part::stream_with_length(body, file_size).file_name(filename);
             form = form.part(format!("files[{index}]"), part);
         }
+        let upload_started = std::time::Instant::now();
+        log::debug!("Discord multipart request: POST /channels/{channel_id}/messages (bytes={total_size}, identity={identity:?})");
         let response = self.client
             .post(format!("{DISCORD_API}/channels/{channel_id}/messages"))
             .header(header::AUTHORIZATION, token.0.as_ref())
@@ -290,6 +341,12 @@ impl DiscordRouter {
             .send().await?;
         let status = response.status();
         let bytes = response.bytes().await?;
+        log::debug!("Discord multipart response: POST /channels/{channel_id}/messages -> {status} ({:?}, response_bytes={})", upload_started.elapsed(), bytes.len());
+        if verbose_network_trace() {
+            let response_value = serde_json::from_slice::<Value>(&bytes)
+                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+            trace_payload("Discord multipart response", &response_value);
+        }
         if !status.is_success() {
             let detail = serde_json::from_slice::<DiscordErrorBody>(&bytes)
                 .map(|error| format!("{} (Discord code {:?})", error.message.unwrap_or_default(), error.code))
@@ -337,7 +394,10 @@ impl DiscordRouter {
         captcha: Option<(String, Option<String>, Option<String>)>,
     ) -> Result<Value, DiscordError> {
         let log_path = redact_sensitive_query(&path);
-        log::debug!("Discord REST request: {} {}", method, log_path);
+        log::debug!("Discord REST request: {} {} (identity={identity:?})", method, log_path);
+        if let Some(request_body) = body.as_ref() {
+            trace_payload("Discord REST request", request_body);
+        }
         let request_started = std::time::Instant::now();
         let token = {
             let tokens = self.tokens.read().await;
@@ -377,6 +437,11 @@ impl DiscordRouter {
             response.headers().get("captcha-service").and_then(|value| value.to_str().ok()).map(str::to_owned),
         );
         let bytes = response.bytes().await?;
+        if verbose_network_trace() {
+            let response_value = serde_json::from_slice::<Value>(&bytes)
+                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+            trace_payload(&format!("Discord REST response {method} {log_path} -> {status}"), &response_value);
+        }
         if !status.is_success() {
             let response_json = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
             let site_key = response_json.get("captcha_sitekey").and_then(Value::as_str)
@@ -416,7 +481,13 @@ impl DiscordRouter {
         if bytes.is_empty() {
             return Ok(Value::Null);
         }
-        Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        match serde_json::from_slice(&bytes) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                log::warn!("Discord REST response JSON parse failed for {} {}: {error}; body_len={}", method, log_path, bytes.len());
+                Ok(Value::Null)
+            }
+        }
     }
 
     /// Open a gateway connection as a specifically selected authorized account.
@@ -454,15 +525,19 @@ impl DiscordRouter {
         // Do not repeatedly attempt WebSocket connects while offline. Any HTTP
         // response from Discord (including an error status) proves reachability.
         loop {
+            let reachability_started = std::time::Instant::now();
             match self.client
                 .get(format!("{DISCORD_API}/gateway"))
                 .timeout(Duration::from_secs(3))
                 .send()
                 .await
             {
-                Ok(_) => break,
+                Ok(response) => {
+                    log::debug!("Discord reachability request: GET /gateway -> {} ({:?})", response.status(), reachability_started.elapsed());
+                    break;
+                }
                 Err(error) => {
-                    log::debug!("Discord is not reachable yet; waiting before gateway connect: {error}");
+                    log::debug!("Discord reachability request failed: GET /gateway ({:?}): {error}; retrying in 5s", reachability_started.elapsed());
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             }
@@ -490,10 +565,21 @@ impl DiscordRouter {
             (parsed.to_string(), can_resume)
         };
 
+        let gateway_connect_started = std::time::Instant::now();
+        let safe_gateway_url = url::Url::parse(&connect_url)
+            .map(|mut parsed| {
+                parsed.set_query(None);
+                parsed.to_string()
+            })
+            .unwrap_or_else(|_| "<invalid gateway URL>".to_owned());
+        log::debug!("Gateway WebSocket connecting: {safe_gateway_url} (resume={should_resume})");
         let (mut socket, _) = match connect_async(connect_url.as_str()).await {
-            Ok(res) => res,
+            Ok(res) => {
+                log::debug!("Gateway WebSocket connected ({:?})", gateway_connect_started.elapsed());
+                res
+            }
             Err(e) => {
-                log::warn!("Gateway connection failed: {e}");
+                log::warn!("Gateway connection failed after {:?}: {e}", gateway_connect_started.elapsed());
                 return Err(DiscordError::WebSocket(e));
             }
         };
@@ -520,7 +606,10 @@ impl DiscordRouter {
                     if payload.is_null() {
                         continue;
                     }
-                    if payload.get("op").and_then(Value::as_u64) == Some(14) {
+                    let payload_op = payload.get("op").and_then(Value::as_u64);
+                    log::debug!("Gateway outbound payload queued (op={payload_op:?}, bytes={})", payload.to_string().len());
+                    trace_payload("Gateway outbound", &payload);
+                    if payload_op == Some(14) {
                         pending_member_request = Some(payload);
                     } else {
                         if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
@@ -570,6 +659,10 @@ impl DiscordRouter {
                             };
 
                             let op = event.get("op").and_then(Value::as_u64);
+                            let event_name = event.get("t").and_then(Value::as_str).unwrap_or("<no-dispatch-name>");
+                            let event_bytes = text.len();
+                            log::debug!("Gateway inbound event: name={event_name} op={op:?} seq={:?} bytes={event_bytes}", event.get("s").and_then(Value::as_u64));
+                            trace_payload(&format!("Gateway inbound {event_name} op={op:?}"), &event);
                             if let Some(seq) = event.get("s").and_then(Value::as_u64) {
                                 sequence = Some(seq);
                             }
@@ -613,6 +706,8 @@ impl DiscordRouter {
                                             }
                                         })
                                     };
+                                    log::debug!("Gateway handshake sending: op={} (resume={should_resume}); token redacted", handshake.get("op").and_then(Value::as_u64).unwrap_or_default());
+                                    trace_payload("Gateway handshake", &handshake);
                                     if let Err(e) = socket.send(WsMessage::Text(handshake.to_string())).await {
                                         log::warn!("Gateway handshake send error: {e}");
                                         break;
@@ -687,6 +782,7 @@ impl DiscordRouter {
                             on_event(event);
                         }
                         WsMessage::Ping(payload) => {
+                            log::trace!("Gateway WebSocket ping received ({} bytes)", payload.len());
                             let _ = socket.send(WsMessage::Pong(payload)).await;
                         }
                         WsMessage::Close(frame) => {
