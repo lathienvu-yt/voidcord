@@ -203,16 +203,17 @@ export function renderInline(
     }
     // Slash-command mention </command:command_id>. Discord's Markdown parser
     // doesn't make these clickable; render a command-shaped affordance instead.
+    // Slash-command mention </command:command_id>
     else if (token.startsWith("</") && token.endsWith(">")) {
-      const commandMention = token.match(/^<\\/([a-zA-Z0-9_-]+):(\\d+)>$/);
+      const commandMatch = token.match(/^<\/([a-zA-Z0-9_-]+):(\d+)>$/);
       result.push(
         <span
           key={`cmd-mention-${match.index}`}
           className="d-mention d-command-mention"
-          title={commandMention ? `Slash command: /${commandMention[1]} (ID ${commandMention[2]})` : "Slash command"}
+          title={commandMatch ? `Slash command: /${commandMatch[1]} (ID ${commandMatch[2]})` : "Slash command"}
           role="text"
         >
-          <span aria-hidden="true">⌘</span> /{commandMention?.[1] || token.slice(2, -1).split(":")[0]}
+          <span aria-hidden="true">⌘</span> /{commandMatch?.[1] || token.slice(2, -1).split(":")[0]}
         </span>
       );
     }
