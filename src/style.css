@@ -5200,3 +5200,17 @@ input, textarea { font-family: inherit; }
 .profile-full-bio .d-codeblock,
 .dm-profile-about .d-codeblock { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .profile-popover-bio > *, .profile-bio-preview > *, .profile-full-bio > *, .dm-profile-about > * { margin-top: 0; }
+
+
+/* Discord notification center */
+.notification-center-view { display: flex; flex-direction: column; min-width: 0; height: 100%; overflow: auto; padding: 24px; }
+.notification-center-list { display: flex; flex-direction: column; gap: 8px; max-width: 980px; width: 100%; margin: 12px auto 0; }
+.notification-center-item { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid var(--border, rgba(255,255,255,.08)); border-radius: 10px; background: var(--panel, rgba(255,255,255,.025)); }
+.notification-center-item.unacked { background: color-mix(in srgb, var(--accent-bright, #5865f2) 7%, transparent); }
+.notification-center-icon, .notification-center-icon-fallback { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 50%; object-fit: cover; display: flex; align-items: center; justify-content: center; background: rgba(127,127,127,.14); }
+.notification-center-copy { min-width: 0; flex: 1; }
+.notification-center-copy strong { display: block; text-transform: capitalize; font-size: 13px; }
+.notification-center-copy p { margin: 4px 0; color: var(--text-muted, #aaa); font-size: 13px; overflow-wrap: anywhere; }
+.notification-center-copy small { color: var(--text-muted, #aaa); font-size: 11px; }
+.notification-ack-button { border: 0; border-radius: 6px; padding: 6px; background: transparent; color: var(--text-muted, #aaa); cursor: pointer; }
+.notification-ack-button:hover { background: rgba(127,127,127,.18); color: var(--text, #fff); }
