@@ -6,7 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { load } from "@tauri-apps/plugin-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  AlertTriangle, Archive, Ban, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
+  AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
   Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
   Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut
@@ -939,7 +939,7 @@ export default function App() {
     } catch { return []; }
   });
   const [isDmView, setIsDmView] = useState(true);
-  const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "nitro" | "shop" | "quests" | "chat">("friends");
+  const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "notifications" | "nitro" | "shop" | "quests" | "chat">("friends");
   const [relationships, setRelationships] = useState<DiscordRelationship[]>([]);
   const [ignoredUserIds, setIgnoredUserIds] = useState<Set<string>>(() => {
     try {
@@ -1016,13 +1016,14 @@ export default function App() {
 
   const [channels, setChannels] = useState<DiscordChannel[]>([]);
   const [unreadByChannel, setUnreadByChannel] = useState<Record<string, number>>(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("voidcord:unread-channels") || "{}");
-      return saved && typeof saved === "object" ? saved : {};
-    } catch {
-      return {};
-    }
+    // Only ping/reply counts are shown as red numbers, not ordinary unread messages.
+    try { const saved = JSON.parse(localStorage.getItem("voidcord:ping-counts") || "{}"); return saved && typeof saved === "object" ? saved : {}; }
+    catch { return {}; }
   });
+  type NotificationCenterItem = { id: string; type: string; body?: string; acked: boolean; icon_url?: string | null; other_user?: DiscordUser | null; message?: DiscordMessage | null; message_id?: string | null; message_channel_id?: string | null; message_content?: string | null; deeplink?: string; };
+  const [notificationItems, setNotificationItems] = useState<NotificationCenterItem[]>([]);
+  const [notificationLoading, setNotificationLoading] = useState(false);
+  const [notificationError, setNotificationError] = useState("");
   const [selectedChannel, setSelectedChannel] = useState<DiscordChannel | null>(null);
   const selectedChannelRef = useRef<DiscordChannel | null>(null);
   const [channelAccess, setChannelAccess] = useState<"ok" | "MISSING_ACCESS" | "MISSING_PERMS">("ok");
@@ -1231,6 +1232,20 @@ export default function App() {
     if (!preferences.showSystemNotifications) return;
     setSystemNotice({ id: ++notificationSequence.current, message: msg, duration: ms, exiting: false });
   }, [preferences.showSystemNotifications, preferences.systemNotificationDuration]);
+
+  const loadNotificationCenter = useCallback(async () => {
+    setNotificationLoading(true); setNotificationError("");
+    try { const response = await invoke<{ items?: NotificationCenterItem[] }>("get_notification_center_items"); setNotificationItems(Array.isArray(response?.items) ? response.items : []); }
+    catch (error) { setNotificationError(String(error)); }
+    finally { setNotificationLoading(false); }
+  }, [invoke]);
+
+  const acknowledgeNotification = useCallback(async (item: NotificationCenterItem) => {
+    try { await invoke("ack_notification_center_item", { itemId: item.id }); setNotificationItems(previous => previous.map(current => current.id === item.id ? { ...current, acked: true } : current)); }
+    catch (error) { notify("Could not acknowledge notification: " + error); }
+  }, [invoke, notify]);
+
+  useEffect(() => { if (me && isDmView && activeDmTab === "notifications") void loadNotificationCenter(); }, [me?.id, isDmView, activeDmTab, loadNotificationCenter]);
 
   // Load cached commands immediately so autocomplete remains useful during startup/offline.
   useEffect(() => {
@@ -2326,11 +2341,16 @@ export default function App() {
         if (payload.message?.author?.id === me?.id) {
           setRecentlyMessaged(order => [payload.channel_id, ...order.filter(id => id !== payload.channel_id)]);
         } else if (payload.channel_id !== selectedChannel?.id || (isDmView && activeDmTab !== "chat")) {
-          setUnreadByChannel(previous => {
-            const next = { ...previous, [payload.channel_id]: (previous[payload.channel_id] || 0) + 1 };
-            try { localStorage.setItem("voidcord:unread-channels", JSON.stringify(next)); } catch { /* optional cache */ }
-            return next;
-          });
+          const incomingMessage = payload.message as DiscordMessage & { mentions?: DiscordUser[] };
+          const isDirectPing = Array.isArray(incomingMessage.mentions) && incomingMessage.mentions.some(user => user.id === me?.id);
+          const isReplyToMe = incomingMessage.referenced_message?.author?.id === me?.id;
+          if (isDirectPing || isReplyToMe) {
+            setUnreadByChannel(previous => {
+              const next = { ...previous, [payload.channel_id]: (previous[payload.channel_id] || 0) + 1 };
+              try { localStorage.setItem("voidcord:ping-counts", JSON.stringify(next)); } catch { /* optional cache */ }
+              return next;
+            });
+          }
         }
 
         setDmChannels(prevDms => {
@@ -2880,7 +2900,7 @@ export default function App() {
       if (!previous[channel.id]) return previous;
       const next = { ...previous };
       delete next[channel.id];
-      try { localStorage.setItem("voidcord:unread-channels", JSON.stringify(next)); } catch { /* optional cache */ }
+      try { localStorage.setItem("voidcord:ping-counts", JSON.stringify(next)); } catch { /* optional cache */ }
       return next;
     });
     const permissionGuild = selectedGuildRef.current;
@@ -3764,7 +3784,7 @@ export default function App() {
       .slice(0, 8);
   }, [mentionQuery, mentionUsers]);
   const showingDirectory = isDmView
-    && (activeDmTab === "friends" || activeDmTab === "friend-requests" || activeDmTab === "message-requests");
+    && (activeDmTab === "friends" || activeDmTab === "friend-requests" || activeDmTab === "message-requests" || activeDmTab === "notifications");
 
   useEffect(() => {
     try { localStorage.setItem("voidcord:recently-messaged", JSON.stringify(recentlyMessaged)); }
@@ -3826,7 +3846,7 @@ export default function App() {
       const next = { ...previous };
       delete next[channel.id];
       try {
-        localStorage.setItem("voidcord:unread-channels", JSON.stringify(next));
+        localStorage.setItem("voidcord:ping-counts", JSON.stringify(next));
       } catch {
         // Unread state remains updated for this session if storage is unavailable.
       }
@@ -4346,6 +4366,7 @@ export default function App() {
                       .catch(error => setMessageRequestsError(String(error)))
                       .finally(() => setMessageRequestsLoading(false));
                   }}><MessageSquare size={16} /><span>Message Requests</span>{messageRequests.length > 0 && <span className="dm-nav-count">{messageRequests.length}</span>}</button>
+                  <button className={"dm-nav-item " + (activeDmTab === "notifications" ? "active" : "")} onClick={() => setActiveDmTab("notifications")}><Bell size={16} /><span>Notifications</span>{notificationItems.filter(item => !item.acked && (item.type === "recent_mention" || item.type === "reply_mention")).length > 0 && <span className="dm-nav-count">{notificationItems.filter(item => !item.acked && (item.type === "recent_mention" || item.type === "reply_mention")).length}</span>}</button>
                   <button className={`dm-nav-item ${activeDmTab === "nitro" ? "active" : ""}`} onClick={() => setActiveDmTab("nitro")}><Flame size={16} /><span>Nitro Home</span></button>
                   <button className={`dm-nav-item ${activeDmTab === "shop" ? "active" : ""}`} onClick={() => setActiveDmTab("shop")}><ShoppingBag size={16} /><span>Shop</span></button>
                   <button className={`dm-nav-item ${activeDmTab === "quests" ? "active" : ""}`} onClick={() => setActiveDmTab("quests")}><Trophy size={16} /><span>Quests</span></button>
@@ -4628,7 +4649,19 @@ export default function App() {
               )}
             </header>
 
-            {activeDmTab === "friends" ? (
+            {activeDmTab === "notifications" ? (
+              <section className="notification-center-view">
+                <header className="directory-header"><div><h2>Notifications</h2><p>Mentions, replies, friend activity, and other Discord notifications.</p></div><button className="directory-add-button" onClick={() => void loadNotificationCenter()} disabled={notificationLoading}><RotateCcw size={14} /> Refresh</button></header>
+                {notificationLoading && <div className="directory-empty"><Loader2 size={18} className="spinning" /> Loading notifications…</div>}
+                {notificationError && <div className="directory-error">{notificationError}</div>}
+                {!notificationLoading && !notificationError && notificationItems.length === 0 && <div className="directory-empty">No notifications to show.</div>}
+                <div className="notification-center-list">{notificationItems.map(item => <article className={"notification-center-item " + (item.acked ? "acked" : "unacked")} key={item.id}>
+                  {item.icon_url ? <img className="notification-center-icon" src={item.icon_url} alt="" /> : <span className="notification-center-icon-fallback"><Bell size={16} /></span>}
+                  <div className="notification-center-copy"><strong>{item.type === "reply_mention" ? "Reply to you" : item.type === "recent_mention" ? "Mention" : item.type.replaceAll("_", " ")}</strong><p>{item.message_content || item.body || item.message?.content || "Discord notification"}</p>{item.other_user && <small>{displayName(item.other_user)}</small>}</div>
+                  {!item.acked && <button className="notification-ack-button" onClick={() => void acknowledgeNotification(item)} title="Mark as read" aria-label="Mark notification as read"><Check size={15} /></button>}
+                </article>)}</div>
+              </section>
+            ) : activeDmTab === "friends" ? (
               <>
                 <nav className="friend-filter-tabs" aria-label="Friend filters">
                   <button className={friendView === "online" ? "active" : ""} onClick={() => setFriendView("online")}>Online</button>
