@@ -236,7 +236,7 @@ export function renderInline(
     // Slash-command mention </command:command_id>. Discord's Markdown parser
     // doesn't make these clickable; render a command-shaped affordance instead.
     else if (token.startsWith("</") && token.endsWith(">")) {
-      const commandMention = token.match(/^<\\/([a-zA-Z0-9_-]+):(\\d+)>$/);
+      const commandMention = token.match(/^<\/([a-zA-Z0-9_-]+):(\d+)>$/);
       result.push(
         <span
           key={`cmd-mention-${match.index}`}
