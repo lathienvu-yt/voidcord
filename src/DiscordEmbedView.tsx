@@ -70,7 +70,6 @@ export function DiscordEmbedView({
         <div className="embed-gifv-title" style={{ marginTop: 5, fontWeight: 600 }}>
           GIF - {embed.title || embed.provider?.name || "Animated image"}
         </div>
-        {embed.url && <a href={embed.url} target="_blank" rel="noopener noreferrer" className="embed-gifv-source">Open GIF source</a>}
       </div>
     );
   }
