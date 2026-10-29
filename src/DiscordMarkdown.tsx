@@ -150,7 +150,8 @@ export function renderInline(
   // Regex parsing inline tokens in priority order:
   // 1: Inline code `...`
   // 2: Custom Emoji <:name:id> or <a:name:id>
-  // 3: Channel mention <#id>
+  // 3: Slash-command mention </command:command_id>
+  // 4: Channel mention <#id>
   // 4: User mention <@!?id>
   // 5: Role mention <@&id>
   // 6: Timestamp <t:123456:R>
@@ -161,7 +162,7 @@ export function renderInline(
   // 11: Underline __...__
   // 12: Italic *...* or _..._
   // 13: Strikethrough ~~...~~
-  const tokenRegex = /(`[^`]+`)|(<a?:[a-zA-Z0-9_]+:\d+>)|(<#\d+>)|(<@!?[0-9]+>)|(<@&[0-9]+>)|(<t:\d+(?::[tTdDfFR])?>)|(\[[^\]]+\]\([^)]+\))|(https?:\/\/[^\s<]+[^<.,:;"')\]\s])|(\|\|[\s\S]+?\|\|)|(\*\*\*[\s\S]+?\*\*\*)|(\*\*[\s\S]+?\*\*)|(__[\s\S]+?__)|(\*[\s\S]+?\*)|(_[\s\S]+?_)|(~~[\s\S]+?~~)/g;
+  const tokenRegex = /(`[^`]+`)|(<a?:[a-zA-Z0-9_]+:\d+>)|(<\/[a-zA-Z0-9_-]+:\d+>)|(<#\d+>)|(<@!?[0-9]+>)|(<@&[0-9]+>)|(<t:\d+(?::[tTdDfFR])?>)|(\[[^\]]+\]\([^)]+\))|(https?:\/\/[^\s<]+[^<.,:;"')\]\s])|(\|\|[\s\S]+?\|\|)|(\*\*\*[\s\S]+?\*\*\*)|(\*\*[\s\S]+?\*\*)|(__[\s\S]+?__)|(\*[\s\S]+?\*)|(_[\s\S]+?_)|(~~[\s\S]+?~~)/g;
 
   const result: React.ReactNode[] = [];
   let lastIndex = 0;
@@ -199,6 +200,21 @@ export function renderInline(
       } else {
         result.push(token);
       }
+    }
+    // Slash-command mention </command:command_id>. Discord's Markdown parser
+    // doesn't make these clickable; render a command-shaped affordance instead.
+    else if (token.startsWith("</") && token.endsWith(">")) {
+      const commandMention = token.match(/^<\\/([a-zA-Z0-9_-]+):(\\d+)>$/);
+      result.push(
+        <span
+          key={`cmd-mention-${match.index}`}
+          className="d-mention d-command-mention"
+          title={commandMention ? `Slash command: /${commandMention[1]} (ID ${commandMention[2]})` : "Slash command"}
+          role="text"
+        >
+          <span aria-hidden="true">⌘</span> /{commandMention?.[1] || token.slice(2, -1).split(":")[0]}
+        </span>
+      );
     }
     // Channel mention <#id>
     else if (token.startsWith("<#") && token.endsWith(">")) {
@@ -259,9 +275,30 @@ export function renderInline(
       if (tsMatch) {
         const timestamp = parseInt(tsMatch[1], 10) * 1000;
         const date = new Date(timestamp);
+        const style = tsMatch[2] || "f";
+        const relative = (target: Date) => {
+          const delta = Math.round((target.getTime() - Date.now()) / 1000);
+          const abs = Math.abs(delta);
+          const unit = abs < 60 ? "second" : abs < 3600 ? "minute" : abs < 86400 ? "hour" : abs < 2_592_000 ? "day" : abs < 31_536_000 ? "month" : "year";
+          const divisor: Record<string, number> = { second: 1, minute: 60, hour: 3600, day: 86400, month: 2592000, year: 31536000 };
+          const amount = Math.max(1, Math.round(abs / divisor[unit]));
+          const phrase = `${amount} ${unit}${amount === 1 ? "" : "s"}`;
+          return delta < 0 ? `in ${phrase}` : `${phrase} ago`;
+        };
+        const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        const dateShort = date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+        const dateLong = date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+        const dateTime = date.toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+        const rendered = style === "t" ? time
+          : style === "T" ? date.toLocaleTimeString()
+          : style === "d" ? date.toLocaleDateString()
+          : style === "D" ? dateLong
+          : style === "F" ? `${dateLong} ${time}`
+          : style === "R" ? relative(date)
+          : dateTime;
         result.push(
           <span key={`ts-${match.index}`} className="d-timestamp" title={date.toLocaleString()}>
-            {date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+            {rendered}
           </span>
         );
       } else {
