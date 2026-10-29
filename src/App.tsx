@@ -1600,10 +1600,12 @@ export default function App() {
     setMediaViewer({ url, kind, name });
   }, []);
 
-  const zoomMediaAtPointer = (event: React.WheelEvent<HTMLDivElement>) => {
+  const zoomMediaAtPointer = (event: WheelEvent) => {
     event.preventDefault();
     const zoomTarget = mediaViewerRef.current?.querySelector(".media-image-zoom");
-    const bounds = zoomTarget?.getBoundingClientRect() || event.currentTarget.getBoundingClientRect();
+    const stage = mediaViewerRef.current?.querySelector(".media-viewer-stage");
+    const bounds = zoomTarget?.getBoundingClientRect() || stage?.getBoundingClientRect();
+    if (!bounds || !bounds.width || !bounds.height) return;
     setMediaZoomOrigin(`${((event.clientX - bounds.left) / bounds.width) * 100}% ${((event.clientY - bounds.top) / bounds.height) * 100}%`);
     setMediaZoom(zoom => Math.max(0.5, Math.min(4, Number((zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12)).toFixed(3)))));
   };
@@ -1636,9 +1638,17 @@ export default function App() {
     });
   };
 
-  const handleMediaImageWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (mediaViewer?.kind === "image") zoomMediaAtPointer(event);
-  };
+  useEffect(() => {
+    if (mediaViewer?.kind !== "image") return;
+    const stage = mediaViewerRef.current?.querySelector(".media-viewer-stage");
+    if (!stage) return;
+
+    // React/browser wheel listeners may be passive, so register explicitly as non-passive
+    // when we need to cancel the browser zoom/scroll gesture for image zooming.
+    const onWheel = (event: WheelEvent) => zoomMediaAtPointer(event);
+    stage.addEventListener("wheel", onWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", onWheel);
+  }, [mediaViewer?.kind]);
 
   const toggleMediaFullscreen = async () => {
     try {
@@ -6202,7 +6212,7 @@ export default function App() {
               <button type="button" className="media-viewer-close" aria-label="Close media viewer" title="Close" onClick={() => setMediaViewer(null)}><X size={19} /></button>
             </div>
           </div>
-          <div className={`media-viewer-stage ${mediaViewer.kind === "image" ? "image-stage" : "video-stage"}`} onWheel={handleMediaImageWheel}>
+          <div className={`media-viewer-stage ${mediaViewer.kind === "image" ? "image-stage" : "video-stage"}`}>
             {mediaViewer.kind === "image"
               ? <>
                   <div
