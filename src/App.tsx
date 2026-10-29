@@ -6629,7 +6629,7 @@ type RefreshableAttachmentImageProps = {
   role?: React.AriaRole;
   tabIndex?: number;
   ariaLabel?: string;
-  onClick?: () => void;
+  onClick?: (url: string) => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLImageElement>) => void;
 };
 
@@ -6709,7 +6709,7 @@ function RefreshableAttachmentImage({
       role={role}
       tabIndex={tabIndex}
       aria-label={ariaLabel}
-      onClick={onClick}
+      onClick={() => onClick?.(src)}
       onKeyDown={onKeyDown}
       onError={handleImageError}
     />
@@ -6782,7 +6782,7 @@ function MessageContent({
               className="msg-attachment-img"
               role="button"
               tabIndex={0}
-              onClick={() => onMediaOpen?.(attachment.url, "image", attachment.filename)}
+              onClick={url => onMediaOpen?.(url, "image", attachment.filename)}
             />
           ))}
           {snapshot.attachments?.filter(isVideoAttachment).map(attachment => (
@@ -6851,7 +6851,7 @@ function MessageContent({
             role="button"
             tabIndex={0}
             ariaLabel={`Open image ${a.filename}`}
-            onClick={() => onMediaOpen?.(a.url, "image", a.filename)}
+            onClick={url => onMediaOpen?.(url, "image", a.filename)}
             onKeyDown={event => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
