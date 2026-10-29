@@ -4971,7 +4971,7 @@ export default function App() {
                                   <DiscordComponents components={message.components} message={message} channelId={selectedMessageRequest.id} />
                                 )}
                                 {message.attachments?.map(attachment => attachment.content_type?.startsWith("image/")
-                                  ? <img key={attachment.id} src={attachment.url} alt={attachment.filename} className="msg-attachment-img" style={{ maxWidth: 400, maxHeight: 300, borderRadius: 6 }} />
+                                  ? <RefreshableAttachmentImage key={attachment.id} channelId={selectedMessageRequest.id} messageId={message.id} attachment={attachment} alt={attachment.filename} className="msg-attachment-img" style={{ maxWidth: 400, maxHeight: 300, borderRadius: 6 }} />
                                   : <a key={attachment.id} className="msg-file-link" href={attachment.url}>{attachment.filename}</a>)}
                               </div>
                             </div>
@@ -6619,6 +6619,103 @@ function BotTag({
   );
 }
 
+type RefreshableAttachmentImageProps = {
+  channelId: string;
+  messageId: string;
+  attachment: { id: string; url: string; proxy_url?: string; filename: string; width?: number; height?: number };
+  alt?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  role?: React.AriaRole;
+  tabIndex?: number;
+  ariaLabel?: string;
+  onClick?: () => void;
+  onKeyDown?: (event: React.KeyboardEvent<HTMLImageElement>) => void;
+};
+
+function RefreshableAttachmentImage({
+  channelId,
+  messageId,
+  attachment,
+  alt,
+  className,
+  style,
+  role,
+  tabIndex,
+  ariaLabel,
+  onClick,
+  onKeyDown,
+}: RefreshableAttachmentImageProps) {
+  const [src, setSrc] = useState(attachment.url);
+  const [failed, setFailed] = useState(false);
+  const refreshInFlight = useRef(false);
+  const lastFailedUrl = useRef<string | null>(null);
+
+  useEffect(() => {
+    setSrc(attachment.url);
+    setFailed(false);
+    lastFailedUrl.current = null;
+  }, [attachment.url, attachment.id]);
+
+  const refreshAttachment = useCallback(async () => {
+    if (refreshInFlight.current || !navigator.onLine) return;
+    refreshInFlight.current = true;
+    try {
+      const freshMessage = await tauriInvoke<DiscordMessage>("get_message", {
+        channelId,
+        messageId,
+      });
+      const freshAttachment = freshMessage.attachments?.find(item => item.id === attachment.id);
+      // Merge the freshly fetched message into the persistent cache even if this
+      // particular attachment was removed; the server response is authoritative.
+      await writeCachedMessages(channelId, [freshMessage]);
+      if (freshAttachment?.url && freshAttachment.url !== src) {
+        lastFailedUrl.current = null;
+        setSrc(freshAttachment.url);
+        setFailed(false);
+      }
+    } catch (error) {
+      console.warn("Could not refresh expired Discord attachment URL", {
+        channelId,
+        messageId,
+        attachmentId: attachment.id,
+        error,
+      });
+    } finally {
+      refreshInFlight.current = false;
+    }
+  }, [channelId, messageId, attachment.id, src]);
+
+  const handleImageError = () => {
+    if (lastFailedUrl.current === src) return;
+    lastFailedUrl.current = src;
+    setFailed(true);
+    void refreshAttachment();
+  };
+
+  useEffect(() => {
+    if (!failed) return;
+    const retryWhenOnline = () => void refreshAttachment();
+    window.addEventListener("online", retryWhenOnline);
+    return () => window.removeEventListener("online", retryWhenOnline);
+  }, [failed, refreshAttachment]);
+
+  return (
+    <img
+      src={src}
+      alt={alt ?? attachment.filename}
+      className={className}
+      style={style}
+      role={role}
+      tabIndex={tabIndex}
+      aria-label={ariaLabel}
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+      onError={handleImageError}
+    />
+  );
+}
+
 function MessageContent({
   message: m,
   channels,
@@ -6676,9 +6773,11 @@ function MessageContent({
             />
           ))}
           {snapshot.attachments?.filter(isImageAttachment).map(attachment => (
-            <img
+            <RefreshableAttachmentImage
               key={attachment.id}
-              src={attachment.url}
+              channelId={m.channel_id || channelId || ""}
+              messageId={m.id}
+              attachment={attachment}
               alt={attachment.filename}
               className="msg-attachment-img"
               role="button"
@@ -6742,14 +6841,16 @@ function MessageContent({
         ?.filter(a => !m.embeds?.some(e => [e.image?.url, e.thumbnail?.url, e.type === "image" ? e.url : undefined]
           .some(url => url === a.url || url === a.proxy_url || !!url?.includes(a.filename))))
         ?.map(a => (
-          <img
+          <RefreshableAttachmentImage
             key={a.id}
-            src={a.url}
+            channelId={m.channel_id || channelId || ""}
+            messageId={m.id}
+            attachment={a}
             alt={a.filename}
             className="msg-attachment-img"
             role="button"
             tabIndex={0}
-            aria-label={`Open image ${a.filename}`}
+            ariaLabel={`Open image ${a.filename}`}
             onClick={() => onMediaOpen?.(a.url, "image", a.filename)}
             onKeyDown={event => {
               if (event.key === "Enter" || event.key === " ") {
