@@ -39,6 +39,80 @@ export function DiscordEmbedView({
   const officialLearnMore = customFieldMap.get("learn_more_link");
   const officialCtas = customFieldMap.get("ctas");
   const officialDetails = customFields.filter(field => !["header", "body", "learn_more_link", "ctas", "timestamp", "theme", "icon_type", "content_type", "classification_id"].includes(String(field.name || "").toLowerCase()));
+
+  // GIF providers frequently return a gifv embed whose actual animation is MP4.
+  // Render the video directly instead of a generic embed card.
+  if (embed.type === "gifv" && embed.video?.url) {
+    const videoUrl = resolveUrl(embed.video.url);
+    const poster = thumbnailUrl || undefined;
+    return (
+      <div className="embed-gifv" style={{ width: "min(100%, 448px)" }}>
+        <video
+          src={videoUrl}
+          poster={poster}
+          autoPlay
+          muted
+          loop
+          playsInline
+          controls
+          preload="metadata"
+          style={{ display: "block", width: "100%", maxHeight: 480, objectFit: "contain", borderRadius: 8, background: "#000" }}
+          onError={event => {
+            const video = event.currentTarget;
+            video.style.display = "none";
+            const fallback = video.nextElementSibling as HTMLElement | null;
+            if (fallback) fallback.style.display = "block";
+          }}
+        />
+        {poster && <a href={poster} target="_blank" rel="noopener noreferrer" style={{ display: "none" }}>
+          <img src={poster} alt={embed.title || "Animated GIF preview"} style={{ display: "block", maxWidth: "100%", borderRadius: 8 }} />
+        </a>}
+        <div className="embed-gifv-title" style={{ marginTop: 5, fontWeight: 600 }}>
+          GIF - {embed.title || embed.provider?.name || "Animated image"}
+        </div>
+        {embed.url && <a href={embed.url} target="_blank" rel="noopener noreferrer" className="embed-gifv-source">Open GIF source</a>}
+      </div>
+    );
+  }
+
+  // Use official provider iframe endpoints for supported YouTube and TikTok URLs.
+  const providerUrl = embed.url || embed.author?.url || "";
+  let providerFrame: { src: string; ratio: string; title: string } | null = null;
+  try {
+    const parsed = new URL(providerUrl);
+    const host = parsed.hostname.toLowerCase().replace(/^www\\./, "");
+    if (host === "youtu.be" || host === "youtube.com" || host === "m.youtube.com" || host === "youtube-nocookie.com") {
+      const id = host === "youtu.be" ? parsed.pathname.split("/").filter(Boolean)[0]
+        : parsed.pathname.match(/^\\/(?:embed|shorts|live)\\/([A-Za-z0-9_-]{11})/)?.[1] || parsed.searchParams.get("v");
+      if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) {
+        providerFrame = { src: `https://www.youtube.com/embed/${id}`, ratio: "16 / 9", title: embed.title || "YouTube video" };
+      }
+    } else if (host === "tiktok.com" || host === "m.tiktok.com") {
+      const id = parsed.pathname.match(/\\/video\\/(\\d+)/)?.[1] || parsed.pathname.match(/\\/player\\/v1\\/(\\d+)/)?.[1];
+      if (id) {
+        providerFrame = { src: `https://www.tiktok.com/player/v1/${id}?utm_source=discord.gg`, ratio: "9 / 16", title: embed.title || "TikTok video" };
+      }
+    }
+  } catch { /* malformed or non-URL embed: use the normal embed renderer */ }
+
+  if (providerFrame) {
+    return (
+      <div className="discord-provider-video" style={{ width: "min(100%, 560px)" }}>
+        <iframe
+          src={providerFrame.src}
+          title={providerFrame.title}
+          loading="lazy"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          referrerPolicy="strict-origin-when-cross-origin"
+          sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
+          allowFullScreen
+          style={{ display: "block", width: "100%", aspectRatio: providerFrame.ratio, border: 0, borderRadius: 8, background: "#000" }}
+        />
+        {embed.title && <div style={{ marginTop: 5, fontWeight: 600 }}>{embed.title}</div>}
+        <a href={providerUrl} target="_blank" rel="noopener noreferrer">Open on {providerUrl.toLowerCase().includes("tiktok.com") ? "TikTok" : "YouTube"}</a>
+      </div>
+    );
+  }
   if (officialBody && (officialHeader || /discord/i.test(embed.title || ""))) {
     return (
       <div className="discord-official-embed" role="note">
