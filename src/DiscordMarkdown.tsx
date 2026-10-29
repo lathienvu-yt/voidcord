@@ -259,9 +259,30 @@ export function renderInline(
       if (tsMatch) {
         const timestamp = parseInt(tsMatch[1], 10) * 1000;
         const date = new Date(timestamp);
+        const style = tsMatch[2] || "f";
+        const relative = (target: Date) => {
+          const delta = Math.round((target.getTime() - Date.now()) / 1000);
+          const abs = Math.abs(delta);
+          const unit = abs < 60 ? "second" : abs < 3600 ? "minute" : abs < 86400 ? "hour" : abs < 2_592_000 ? "day" : abs < 31_536_000 ? "month" : "year";
+          const divisor: Record<string, number> = { second: 1, minute: 60, hour: 3600, day: 86400, month: 2592000, year: 31536000 };
+          const amount = Math.max(1, Math.round(abs / divisor[unit]));
+          const phrase = `${amount} ${unit}${amount === 1 ? "" : "s"}`;
+          return delta < 0 ? `in ${phrase}` : `${phrase} ago`;
+        };
+        const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        const dateShort = date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+        const dateLong = date.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+        const dateTime = date.toLocaleString([], { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+        const rendered = style === "t" ? time
+          : style === "T" ? date.toLocaleTimeString()
+          : style === "d" ? date.toLocaleDateString()
+          : style === "D" ? dateLong
+          : style === "F" ? `${dateLong} ${time}`
+          : style === "R" ? relative(date)
+          : dateTime;
         result.push(
           <span key={`ts-${match.index}`} className="d-timestamp" title={date.toLocaleString()}>
-            {date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+            {rendered}
           </span>
         );
       } else {
