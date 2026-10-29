@@ -1247,6 +1247,14 @@ export default function App() {
 
   useEffect(() => { if (me && isDmView && activeDmTab === "notifications") void loadNotificationCenter(); }, [me?.id, isDmView, activeDmTab, loadNotificationCenter]);
 
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    void listen("discord:notification_center_update", () => {
+      if (me && isDmView && activeDmTab === "notifications") void loadNotificationCenter();
+    }).then(stop => { unlisten = stop; }).catch(error => console.warn("Could not subscribe to notification center updates", error));
+    return () => { unlisten?.(); };
+  }, [me?.id, isDmView, activeDmTab, loadNotificationCenter]);
+
   // Load cached commands immediately so autocomplete remains useful during startup/offline.
   useEffect(() => {
     let cancelled = false;
@@ -2894,6 +2902,10 @@ export default function App() {
     setOlderMessagesLoading(false);
     setHasOlderMessages(false);
     setSelectedChannel(channel);
+    if (channel.last_message_id) {
+      void invoke("acknowledge_message", { channelId: channel.id, messageId: channel.last_message_id })
+        .catch(error => console.warn("Could not acknowledge channel read state", error));
+    }
     setEditingMessageId(null);
     setMessages([]);
     setUnreadByChannel(previous => {
