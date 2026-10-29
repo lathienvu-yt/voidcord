@@ -148,6 +148,45 @@ pub async fn get_current_user(state: State<'_, AppState>) -> Result<Value, Strin
         .map_err(map_err)
 }
 
+/// Fetch notification center items for the current user.
+#[tauri::command]
+pub async fn get_notification_center_items(state: State<'_, AppState>) -> Result<Value, String> {
+    state.router.rest(
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        "users/@me/notification-center/items?limit=50&with_mentions=true",
+        None,
+    ).await.map_err(map_err)
+}
+
+/// Acknowledge one notification center item.
+#[tauri::command]
+pub async fn ack_notification_center_item(item_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    if item_id.parse::<u64>().is_err() {
+        return Err("A valid notification ID is required".to_owned());
+    }
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::POST,
+        &format!("users/@me/notification-center/items/{item_id}/ack"),
+        Some(json!({})),
+    ).await.map_err(map_err)
+}
+
+/// Acknowledge the latest visible message in a channel.
+#[tauri::command]
+pub async fn acknowledge_message(channel_id: String, message_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    if channel_id.parse::<u64>().is_err() || message_id.parse::<u64>().is_err() {
+        return Err("A valid channel ID and message ID are required".to_owned());
+    }
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::POST,
+        &format!("channels/{channel_id}/messages/{message_id}/ack"),
+        Some(json!({ "token": null })),
+    ).await.map_err(map_err)
+}
+
 /// Fetch Discord's client-internal content inventory for the current user's activity feed.
 /// The optional refresh token is kept in the frontend session and is never logged.
 #[tauri::command]
