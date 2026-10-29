@@ -46,7 +46,7 @@ fn verbose_network_trace() -> bool {
 fn redact_json(value: &Value) -> Value {
     const SECRET_KEYS: &[&str] = &[
         "token", "access_token", "refresh_token", "authorization", "cookie", "set-cookie",
-        "password", "captcha_key", "captcha-rqtoken", "captcha_session_id", "session_id",
+        "password", "captcha_key", "captcha-rqtoken", "captcha_rqtoken", "captcha_session_id", "session_id",
         "secret", "client_secret",
     ];
     match value {
@@ -333,7 +333,7 @@ impl DiscordRouter {
             form = form.part(format!("files[{index}]"), part);
         }
         let upload_started = std::time::Instant::now();
-        log::debug!("Discord multipart request: POST /channels/{channel_id}/messages (files={}, bytes={total_size}, identity={identity:?})", total_size);
+        log::debug!("Discord multipart request: POST /channels/{channel_id}/messages (bytes={total_size}, identity={identity:?})");
         let response = self.client
             .post(format!("{DISCORD_API}/channels/{channel_id}/messages"))
             .header(header::AUTHORIZATION, token.0.as_ref())
