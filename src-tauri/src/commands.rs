@@ -1644,7 +1644,7 @@ pub async fn start_gateway(
                             let _ = app2.emit("discord:call_delete", d);
                         }
                         "NOTIFICATION_CENTER_ITEM_CREATE" | "NOTIFICATION_CENTER_ITEM_DELETE" | "NOTIFICATION_CENTER_ITEMS_ACK" | "RELATIONSHIP_ADD" | "RELATIONSHIP_REMOVE" => {
-                            let _ = app2.emit("discord:notification_center_update", json!({ "event": t, "data": d }));
+                            let _ = app2.emit("discord:notification_center_update", json!({ "event": t.clone(), "data": d }));
                         }
                         "READY" => {
                             emit_rust_log(&app2, "info", "gateway", "Gateway READY received");
