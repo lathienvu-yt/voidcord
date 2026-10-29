@@ -235,6 +235,7 @@ fn main() {
             commands::get_user_profile,
             commands::get_channels,
             commands::get_messages,
+            commands::get_message,
             commands::archive_message_media,
             commands::send_message,
             commands::send_message_with_files,
