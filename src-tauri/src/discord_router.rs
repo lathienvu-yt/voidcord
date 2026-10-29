@@ -281,8 +281,11 @@ impl DiscordRouter {
         };
         // Ask Discord for the current identity's tier. The backend repeats this
         // check at send time; UI supplied tier values are never trusted.
+        let upload_check_started = std::time::Instant::now();
+        log::debug!("Discord upload tier request: GET /users/@me (identity={identity:?})");
         let account_response = self.client.get(format!("{DISCORD_API}/users/@me"))
             .header(header::AUTHORIZATION, token.0.as_ref()).send().await?;
+        log::debug!("Discord upload tier response: GET /users/@me -> {} ({:?})", account_response.status(), upload_check_started.elapsed());
         let account_status = account_response.status();
         let account: Value = account_response.json().await?;
         if !account_status.is_success() {
@@ -329,6 +332,8 @@ impl DiscordRouter {
             let part = reqwest::multipart::Part::stream_with_length(body, file_size).file_name(filename);
             form = form.part(format!("files[{index}]"), part);
         }
+        let upload_started = std::time::Instant::now();
+        log::debug!("Discord multipart request: POST /channels/{channel_id}/messages (files={}, bytes={total_size}, identity={identity:?})", total_size);
         let response = self.client
             .post(format!("{DISCORD_API}/channels/{channel_id}/messages"))
             .header(header::AUTHORIZATION, token.0.as_ref())
@@ -336,6 +341,12 @@ impl DiscordRouter {
             .send().await?;
         let status = response.status();
         let bytes = response.bytes().await?;
+        log::debug!("Discord multipart response: POST /channels/{channel_id}/messages -> {status} ({:?}, response_bytes={})", upload_started.elapsed(), bytes.len());
+        if verbose_network_trace() {
+            let response_value = serde_json::from_slice::<Value>(&bytes)
+                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+            trace_payload("Discord multipart response", &response_value);
+        }
         if !status.is_success() {
             let detail = serde_json::from_slice::<DiscordErrorBody>(&bytes)
                 .map(|error| format!("{} (Discord code {:?})", error.message.unwrap_or_default(), error.code))
@@ -514,15 +525,19 @@ impl DiscordRouter {
         // Do not repeatedly attempt WebSocket connects while offline. Any HTTP
         // response from Discord (including an error status) proves reachability.
         loop {
+            let reachability_started = std::time::Instant::now();
             match self.client
                 .get(format!("{DISCORD_API}/gateway"))
                 .timeout(Duration::from_secs(3))
                 .send()
                 .await
             {
-                Ok(_) => break,
+                Ok(response) => {
+                    log::debug!("Discord reachability request: GET /gateway -> {} ({:?})", response.status(), reachability_started.elapsed());
+                    break;
+                }
                 Err(error) => {
-                    log::debug!("Discord is not reachable yet; waiting before gateway connect: {error}");
+                    log::debug!("Discord reachability request failed: GET /gateway ({:?}): {error}; retrying in 5s", reachability_started.elapsed());
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             }
@@ -550,10 +565,21 @@ impl DiscordRouter {
             (parsed.to_string(), can_resume)
         };
 
+        let gateway_connect_started = std::time::Instant::now();
+        let safe_gateway_url = url::Url::parse(&connect_url)
+            .map(|mut parsed| {
+                parsed.set_query(None);
+                parsed.to_string()
+            })
+            .unwrap_or_else(|_| "<invalid gateway URL>".to_owned());
+        log::debug!("Gateway WebSocket connecting: {safe_gateway_url} (resume={should_resume})");
         let (mut socket, _) = match connect_async(connect_url.as_str()).await {
-            Ok(res) => res,
+            Ok(res) => {
+                log::debug!("Gateway WebSocket connected ({:?})", gateway_connect_started.elapsed());
+                res
+            }
             Err(e) => {
-                log::warn!("Gateway connection failed: {e}");
+                log::warn!("Gateway connection failed after {:?}: {e}", gateway_connect_started.elapsed());
                 return Err(DiscordError::WebSocket(e));
             }
         };
@@ -680,6 +706,7 @@ impl DiscordRouter {
                                             }
                                         })
                                     };
+                                    log::debug!("Gateway handshake sending: op={} (resume={should_resume}); token redacted", handshake.get("op").and_then(Value::as_u64).unwrap_or_default());
                                     if let Err(e) = socket.send(WsMessage::Text(handshake.to_string())).await {
                                         log::warn!("Gateway handshake send error: {e}");
                                         break;
