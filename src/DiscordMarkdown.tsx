@@ -150,7 +150,8 @@ export function renderInline(
   // Regex parsing inline tokens in priority order:
   // 1: Inline code `...`
   // 2: Custom Emoji <:name:id> or <a:name:id>
-  // 3: Channel mention <#id>
+  // 3: Slash-command mention </command:command_id>
+  // 4: Channel mention <#id>
   // 4: User mention <@!?id>
   // 5: Role mention <@&id>
   // 6: Timestamp <t:123456:R>
@@ -199,6 +200,21 @@ export function renderInline(
       } else {
         result.push(token);
       }
+    }
+    // Slash-command mention </command:command_id>. Discord's Markdown parser
+    // doesn't make these clickable; render a command-shaped affordance instead.
+    else if (token.startsWith("</") && token.endsWith(">")) {
+      const commandMention = token.match(/^<\\/([a-zA-Z0-9_-]+):(\\d+)>$/);
+      result.push(
+        <span
+          key={`cmd-mention-${match.index}`}
+          className="d-mention d-command-mention"
+          title={commandMention ? `Slash command: /${commandMention[1]} (ID ${commandMention[2]})` : "Slash command"}
+          role="text"
+        >
+          <span aria-hidden="true">⌘</span> /{commandMention?.[1] || token.slice(2, -1).split(":")[0]}
+        </span>
+      );
     }
     // Channel mention <#id>
     else if (token.startsWith("<#") && token.endsWith(">")) {
