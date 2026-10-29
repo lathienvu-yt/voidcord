@@ -14,12 +14,30 @@ export function DiscordMarkdown({ content, channels, users, onChannelClick }: Di
   if (!content) return null;
 
   const openExternalLink = async (rawUrl: string) => {
+    // Some Discord payloads or nested renderers can hand us the whole Markdown
+    // token ("[label](https://example.com)") instead of its destination.
+    // Normalize that form before passing anything to Tauri's URL allowlist.
+    let candidate = rawUrl.trim();
+    const markdownLink = candidate.match(/^\[([^\]]*)\]\((https?:\/\/[^)]+)\)$/);
+    if (markdownLink) candidate = markdownLink[2];
+    if (candidate.startsWith("<") && candidate.endsWith(">")) {
+      candidate = candidate.slice(1, -1).trim();
+    }
+    // Strip common sentence punctuation, but leave URL query strings and fragments intact.
+    candidate = candidate.replace(/[.,!?;]+$/, "");
+
     let url: URL;
-    try { url = new URL(rawUrl); } catch { return; }
+    try { url = new URL(candidate); } catch {
+      console.warn("Blocked malformed external link", rawUrl);
+      return;
+    }
     if (url.protocol !== "https:" && url.protocol !== "http:") return;
     setLinkMenu(null);
     try { await openUrl(url.href); }
-    catch { window.open(url.href, "_blank", "noopener,noreferrer"); }
+    catch (error) {
+      console.warn("Tauri opener rejected external URL; using browser fallback", error);
+      window.open(url.href, "_blank", "noopener,noreferrer");
+    }
   };
   const linkHandlers = {
     onClick: (event: React.MouseEvent<HTMLAnchorElement>, url: string) => {
