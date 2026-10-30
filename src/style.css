@@ -5222,3 +5222,15 @@ input, textarea { font-family: inherit; }
 .slash-command-app-tabs > button > span { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 5px; background: #0002; font-size: 10px; }
 .slash-command-app-tabs > button.active { border-color: var(--accent, #5865f2); background: color-mix(in srgb, var(--accent, #5865f2) 24%, var(--bg-tertiary, #393746)); color: var(--text-primary, #f0eef6); }
 .slash-command-app-tabs > button:hover { background: var(--bg-hover, #353343); color: var(--text-primary, #f0eef6); }
+
+/* Discord Gateway interaction modals. */
+.interaction-modal-backdrop{position:fixed;inset:0;z-index:5000;display:grid;place-items:center;padding:20px;background:#000b}
+.interaction-modal{position:relative;display:flex;flex-direction:column;gap:16px;width:min(100%,520px);max-height:88vh;overflow:auto;padding:24px;border:1px solid var(--border,#393746);border-radius:12px;color:var(--text-primary,#f2f3f5);background:var(--bg-secondary,#242331);box-shadow:0 20px 70px #0009}
+.interaction-modal h2{margin:0;padding-right:32px;font-size:20px}.interaction-modal-close{position:absolute;top:14px;right:16px;border:0;background:transparent;color:var(--text-muted,#aaa);font-size:24px;cursor:pointer}
+.interaction-modal-body,.interaction-modal-row{display:flex;flex-direction:column;gap:16px}.interaction-modal-text{color:var(--text-secondary,#b8b5c4);font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.interaction-modal-field{display:flex;flex-direction:column;gap:7px;font-size:13px}.interaction-modal-label{font-weight:650}.interaction-modal-label em{color:#ed4245;font-style:normal}
+.interaction-modal-field small{color:var(--text-muted,#aaa);font-size:11px}.interaction-modal-field textarea{box-sizing:border-box;width:100%;min-height:76px;resize:vertical;padding:11px 12px;border:1px solid var(--border,#484653);border-radius:7px;outline:none;color:var(--text-primary,#f2f3f5);background:var(--bg-tertiary,#191820);font:inherit}
+.interaction-modal-field textarea:focus{border-color:var(--accent,#5865f2)}.interaction-modal-counter{align-self:flex-end}.interaction-modal-unsupported{padding:10px;border:1px dashed var(--border,#484653);border-radius:6px;color:var(--text-muted,#aaa);font-size:12px}
+.interaction-modal-error{color:#ff777b;font-size:12px;overflow-wrap:anywhere}.interaction-modal-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:8px;border-top:1px solid #ffffff14}
+.interaction-modal-actions button{padding:9px 15px;border:0;border-radius:6px;font:inherit;font-size:13px;font-weight:600;cursor:pointer}.interaction-modal-actions button:disabled{opacity:.55;cursor:wait}
+.interaction-modal-cancel{color:var(--text-primary,#eee);background:#ffffff14}.interaction-modal-submit{color:white;background:var(--accent,#5865f2)}
