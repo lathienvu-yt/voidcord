@@ -21,6 +21,7 @@ import {
 import { DiscordMarkdown } from "./DiscordMarkdown";
 import { DiscordEmbedView } from "./DiscordEmbedView";
 import { DiscordComponents } from "./DiscordComponents";
+import InteractionModal from "./InteractionModal";
 import SettingsMenu from "./SettingsMenu";
 import {
   deleteDeletedMessage, deleteEditedMessage, markCachedMessageDeleted, readArchivedMedia, readCachedAppData, readCachedDraft,
@@ -1162,6 +1163,7 @@ export default function App() {
   const [slashCommandSearchStatus, setSlashCommandSearchStatus] = useState("");
   const [selectedSlashCommand, setSelectedSlashCommand] = useState<any | null>(null);
   const [gatewaySessionId, setGatewaySessionId] = useState("");
+  const [interactionModal, setInteractionModal] = useState<any | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [contextBusy, setContextBusy] = useState(false);
@@ -2587,6 +2589,13 @@ export default function App() {
     listen<any>("discord:presence_update", ({ payload }) => {
       applyPresenceUpdates([payload]);
     }).then(u => unsubs.push(u));
+
+    listen<any>("discord:interaction_modal_create", ({ payload }) => {
+      if (payload && typeof payload === "object") setInteractionModal(payload);
+    }).then(unsub => unsubs.push(unsub));
+    listen<any>("discord:interaction_iframe_modal_create", () => {
+      notify("This interaction uses an embedded iframe modal, which VoidCord does not support yet.");
+    }).then(unsub => unsubs.push(unsub));
 
     listen<any>("discord:gateway_ready", ({ payload }) => {
       if (typeof payload?.session_id === "string") setGatewaySessionId(payload.session_id);
@@ -6624,6 +6633,18 @@ export default function App() {
       {toast && <div key={toast.id} className={`toast ${toast.exiting ? "exiting" : ""}`} role="status" aria-live="polite">{toast.message}</div>}
     </main>
   );
+      {interactionModal && (
+        <InteractionModal
+          modal={interactionModal}
+          onClose={() => setInteractionModal(null)}
+          onSubmit={async components => {
+            if (!gatewaySessionId) throw new Error("Discord gateway session is not ready");
+            const nonce = String((BigInt(Date.now()) << 12n) + BigInt(Math.floor(Math.random() * 4096)));
+            await invoke("submit_interaction_modal", { modal: interactionModal, sessionId: gatewaySessionId, components, nonce });
+            setInteractionModal(null);
+          }}
+        />
+      )}
 }
 
 function ChannelRow({
