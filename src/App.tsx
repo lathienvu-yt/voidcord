@@ -6631,8 +6631,6 @@ export default function App() {
         </div>
       )}
       {toast && <div key={toast.id} className={`toast ${toast.exiting ? "exiting" : ""}`} role="status" aria-live="polite">{toast.message}</div>}
-    </main>
-  );
       {interactionModal && (
         <InteractionModal
           modal={interactionModal}
@@ -6645,6 +6643,8 @@ export default function App() {
           }}
         />
       )}
+    </main>
+  );
 }
 
 function ChannelRow({
