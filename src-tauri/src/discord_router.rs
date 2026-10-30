@@ -394,7 +394,7 @@ impl DiscordRouter {
         captcha: Option<(String, Option<String>, Option<String>)>,
     ) -> Result<Value, DiscordError> {
         let log_path = redact_sensitive_query(&path);
-        log::debug!("Discord REST request: {} {} (identity={identity:?})", method, log_path);
+        log::info!("HTTP >>> {} {} [identity={identity:?}]", method, log_path);
         if let Some(request_body) = body.as_ref() {
             trace_payload("Discord REST request", request_body);
         }
@@ -428,7 +428,13 @@ impl DiscordRouter {
             }
         };
         let status = response.status();
-        log::debug!("Discord REST response: {} {} -> {} ({:?})", method, log_path, status, request_started.elapsed());
+        let elapsed = request_started.elapsed();
+        let retry_after = response.headers().get("retry-after").and_then(|v| v.to_str().ok()).unwrap_or("-");
+        let rate_limit_remaining = response.headers().get("x-ratelimit-remaining").and_then(|v| v.to_str().ok()).unwrap_or("-");
+        let rate_limit_reset = response.headers().get("x-ratelimit-reset-after").and_then(|v| v.to_str().ok()).unwrap_or("-");
+        let rate_limit_bucket = response.headers().get("x-ratelimit-bucket").and_then(|v| v.to_str().ok()).unwrap_or("-");
+        log::info!("HTTP <<< {} {} -> {} ({:?}, retry-after={}, remaining={}, reset-after={}, bucket={})",
+            method, log_path, status, elapsed, retry_after, rate_limit_remaining, rate_limit_reset, rate_limit_bucket);
         let captcha_headers = (
             response.headers().get("captcha-sitekey").and_then(|value| value.to_str().ok()).map(str::to_owned),
             response.headers().get("captcha-rqdata").and_then(|value| value.to_str().ok()).map(str::to_owned),
@@ -444,6 +450,10 @@ impl DiscordRouter {
         }
         if !status.is_success() {
             let response_json = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+            if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND {
+                log::warn!("HTTP ERROR BODY {} {} -> {}: {}", method, log_path, status,
+                    serde_json::to_string(&redact_json(&response_json)).unwrap_or_else(|_| "<unserializable>".to_owned()));
+            }
             let site_key = response_json.get("captcha_sitekey").and_then(Value::as_str)
                 .map(str::to_owned).or(captcha_headers.0);
             let rq_data = response_json.get("captcha_rqdata").and_then(Value::as_str)
@@ -572,10 +582,10 @@ impl DiscordRouter {
                 parsed.to_string()
             })
             .unwrap_or_else(|_| "<invalid gateway URL>".to_owned());
-        log::debug!("Gateway WebSocket connecting: {safe_gateway_url} (resume={should_resume})");
+        log::info!("GATEWAY connecting: {safe_gateway_url} (resume={should_resume}, identity={identity:?})");
         let (mut socket, _) = match connect_async(connect_url.as_str()).await {
             Ok(res) => {
-                log::debug!("Gateway WebSocket connected ({:?})", gateway_connect_started.elapsed());
+                log::info!("GATEWAY connected ({:?})", gateway_connect_started.elapsed());
                 res
             }
             Err(e) => {
@@ -607,11 +617,12 @@ impl DiscordRouter {
                         continue;
                     }
                     let payload_op = payload.get("op").and_then(Value::as_u64);
-                    log::debug!("Gateway outbound payload queued (op={payload_op:?}, bytes={})", payload.to_string().len());
+                    log::info!("GATEWAY >>> outbound op={payload_op:?}, bytes={}", payload.to_string().len());
                     trace_payload("Gateway outbound", &payload);
                     if payload_op == Some(14) {
                         pending_member_request = Some(payload);
                     } else {
+                        log::debug!("GATEWAY sending outbound op={payload_op:?}");
                         if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
                             log::warn!("Gateway send error: {e}");
                             break;
@@ -624,11 +635,13 @@ impl DiscordRouter {
                             log::warn!("Gateway member request send error: {e}");
                             break;
                         }
+                        log::info!("GATEWAY >>> sent delayed member-list request");
                         next_member_request_at = tokio::time::Instant::now() + Duration::from_secs(2);
                     }
                 }
                 _ = heartbeat.tick(), if heartbeat_interval.is_some() => {
                     let payload = serde_json::json!({"op": 1, "d": sequence});
+                    log::debug!("GATEWAY >>> heartbeat op=1 seq={sequence:?}");
                     if let Err(e) = socket.send(WsMessage::Text(payload.to_string())).await {
                         log::warn!("Gateway heartbeat send error: {e}");
                         break;
@@ -661,7 +674,7 @@ impl DiscordRouter {
                             let op = event.get("op").and_then(Value::as_u64);
                             let event_name = event.get("t").and_then(Value::as_str).unwrap_or("<no-dispatch-name>");
                             let event_bytes = text.len();
-                            log::debug!("Gateway inbound event: name={event_name} op={op:?} seq={:?} bytes={event_bytes}", event.get("s").and_then(Value::as_u64));
+                            log::info!("GATEWAY <<< event={event_name} op={op:?} seq={:?} bytes={event_bytes}", event.get("s").and_then(Value::as_u64));
                             trace_payload(&format!("Gateway inbound {event_name} op={op:?}"), &event);
                             if let Some(seq) = event.get("s").and_then(Value::as_u64) {
                                 sequence = Some(seq);
@@ -717,13 +730,16 @@ impl DiscordRouter {
                             }
 
                             if op == Some(1) {
+                                log::debug!("GATEWAY heartbeat requested by server (op=1, seq={sequence:?})");
                                 let payload = serde_json::json!({"op": 1, "d": sequence});
                                 let _ = socket.send(WsMessage::Text(payload.to_string())).await;
                             } else if op == Some(7) {
                                 // Discord explicitly asks us to reconnect and resume.
+                                log::warn!("GATEWAY server requested reconnect (op=7)");
                                 return Err(DiscordError::WebSocketClosed);
                             } else if op == Some(9) {
                                 let resumable = event.get("d").and_then(Value::as_bool).unwrap_or(false);
+                                log::warn!("GATEWAY invalid session (op=9, resumable={resumable})");
                                 let mut session = self.gateway_session.lock().await;
                                 session.resumable = resumable;
                                 if !resumable {
@@ -779,15 +795,22 @@ impl DiscordRouter {
                                 self.gateway_session.lock().await.sequence = Some(seq);
                             }
 
+                            log::debug!("GATEWAY dispatching event {event_name} to frontend callback");
                             on_event(event);
                         }
                         WsMessage::Ping(payload) => {
-                            log::trace!("Gateway WebSocket ping received ({} bytes)", payload.len());
+                            log::debug!("GATEWAY WebSocket ping received ({} bytes)", payload.len());
                             let _ = socket.send(WsMessage::Pong(payload)).await;
                         }
                         WsMessage::Close(frame) => {
-                            log::info!("Gateway WebSocket closed: {frame:?}");
+                            log::warn!("GATEWAY WebSocket close frame: {frame:?}");
                             return Err(DiscordError::WebSocketClosed);
+                        }
+                        WsMessage::Pong(payload) => {
+                            log::debug!("GATEWAY WebSocket pong received ({} bytes)", payload.len());
+                        }
+                        WsMessage::Binary(payload) => {
+                            log::warn!("GATEWAY unexpected binary frame ({} bytes)", payload.len());
                         }
                         _ => {}
                     }
