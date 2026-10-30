@@ -7,7 +7,7 @@ mod settings_menu;
 mod voice_gateway;
 
 use discord_router::DiscordRouter;
-use std::{collections::HashMap, io::{BufWriter, Write}, path::PathBuf, process::ChildStdin, sync::{mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError}, Arc, Mutex as StdMutex, OnceLock}, time::Duration};
+use std::{collections::HashMap, io::{BufWriter, Write}, path::PathBuf, process::{Child, ChildStdin}, sync::{atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError}, Arc, Mutex as StdMutex, OnceLock}, time::Duration};
 use tokio::sync::Mutex;
 use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -15,16 +15,31 @@ use voice_gateway::VoiceControlState;
 use tauri::Manager;
 
 
-static CONSOLE_STDIN: OnceLock<StdMutex<Option<BufWriter<ChildStdin>>>> = OnceLock::new();
+struct RustConsoleProcess {
+    child: Child,
+    stdin: BufWriter<ChildStdin>,
+}
+
+static CONSOLE_PROCESS: OnceLock<StdMutex<Option<RustConsoleProcess>>> = OnceLock::new();
+static AUTO_REOPEN_CONSOLE: AtomicBool = AtomicBool::new(false);
 static LOG_CHANNEL: OnceLock<SyncSender<String>> = OnceLock::new();
 
 pub fn open_rust_console_window() -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let slot = CONSOLE_STDIN.get_or_init(|| StdMutex::new(None));
+        let slot = CONSOLE_PROCESS.get_or_init(|| StdMutex::new(None));
         let mut current = slot.lock().map_err(|_| "Rust console lock poisoned".to_owned())?;
-        if current.is_some() { return Ok(()); }
+
+        // A closed PowerShell window closes its stdin pipe. Do not mistake the
+        // stale BufWriter for a live console: reap the child and replace it.
+        if let Some(console) = current.as_mut() {
+            match console.child.try_wait() {
+                Ok(None) => return Ok(()),
+                Ok(Some(_)) | Err(_) => *current = None,
+            }
+        }
+
         let script = "$Host.UI.RawUI.WindowTitle = 'VoidCord Rust Console'; while ($true) { $line = [Console]::In.ReadLine(); if ($null -eq $line) { break }; [Console]::WriteLine($line) }";
         let mut child = std::process::Command::new("powershell.exe")
             .args(["-NoLogo", "-NoProfile", "-Command", script])
@@ -32,7 +47,7 @@ pub fn open_rust_console_window() -> Result<(), String> {
             .stdin(std::process::Stdio::piped())
             .spawn().map_err(|e| format!("Could not open Rust console: {e}"))?;
         let stdin = child.stdin.take().ok_or_else(|| "Rust console stdin unavailable".to_owned())?;
-        *current = Some(BufWriter::new(stdin));
+        *current = Some(RustConsoleProcess { child, stdin: BufWriter::new(stdin) });
         Ok(())
     }
     #[cfg(not(windows))]
@@ -91,13 +106,26 @@ fn run_console_log_writer(receiver: Receiver<String>) {
             }
         }
 
-        if let Some(slot) = CONSOLE_STDIN.get() {
+        // If the user closed PowerShell, the next log batch recreates it.
+        // The flag is enabled only when startup tracing requested an auto console.
+        if AUTO_REOPEN_CONSOLE.load(Ordering::Relaxed) {
+            let _ = open_rust_console_window();
+        }
+        if let Some(slot) = CONSOLE_PROCESS.get() {
             if let Ok(mut guard) = slot.lock() {
-                if let Some(writer) = guard.as_mut() {
+                if let Some(console) = guard.as_mut() {
+                    let mut write_failed = false;
                     for line in &batch {
-                        let _ = writeln!(writer, "{line}");
+                        if writeln!(console.stdin, "{line}").is_err() {
+                            write_failed = true;
+                            break;
+                        }
                     }
-                    let _ = writer.flush();
+                    if console.stdin.flush().is_err() { write_failed = true; }
+                    if write_failed {
+                        // Drop the stale pipe now; the next batch can reopen it.
+                        *guard = None;
+                    }
                 }
             }
         }
@@ -161,7 +189,13 @@ fn main() {
     } else {
         log::LevelFilter::Info
     });
+    eprintln!(
+        "[BOOT] VOIDCORD_TRACE_NETWORK={} => verbose_payload_logging={}",
+        std::env::var("VOIDCORD_TRACE_NETWORK").unwrap_or_else(|_| "<unset>".to_owned()),
+        verbose_network_trace
+    );
     if verbose_network_trace {
+        AUTO_REOPEN_CONSOLE.store(true, Ordering::Relaxed);
         // Release builds use the Windows GUI subsystem, so stdout/stderr are not
         // attached to a terminal. Open the app's dedicated Rust log console before
         // emitting the startup banner and verbose request/event traces.
