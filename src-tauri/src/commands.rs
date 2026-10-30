@@ -662,6 +662,46 @@ pub async fn execute_component_interaction(
     state.router.rest(AccountIdentity::Primary, Method::POST, "interactions", Some(payload)).await.map_err(map_err)
 }
 
+/// Submit a modal opened by an INTERACTION_MODAL_CREATE Gateway dispatch.
+#[tauri::command]
+pub async fn submit_interaction_modal(
+    modal: Value,
+    session_id: String,
+    components: Value,
+    nonce: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if session_id.trim().is_empty() || nonce.trim().is_empty() {
+        return Err("A connected gateway session is required to submit this modal".to_owned());
+    }
+    let channel_id = modal.get("channel_id").and_then(Value::as_str)
+        .ok_or("Modal is missing its channel ID")?.to_owned();
+    if channel_id.parse::<u64>().is_err() {
+        return Err("Modal contains an invalid channel ID".to_owned());
+    }
+    let application_id = modal.pointer("/application/bot/id")
+        .and_then(Value::as_str)
+        .or_else(|| modal.get("application_id").and_then(Value::as_str))
+        .ok_or("Modal is missing its application ID")?.to_owned();
+    let modal_id = modal.get("id").and_then(Value::as_str)
+        .ok_or("Modal is missing its interaction ID")?.to_owned();
+    let custom_id = modal.get("custom_id").and_then(Value::as_str)
+        .ok_or("Modal is missing its custom ID")?.to_owned();
+    if !components.is_array() {
+        return Err("Modal component values must be an array".to_owned());
+    }
+    let payload = json!({
+        "type": 5,
+        "application_id": application_id,
+        "channel_id": channel_id,
+        "session_id": session_id,
+        "nonce": nonce,
+        "data": { "id": modal_id, "custom_id": custom_id, "components": components }
+    });
+    state.router.rest(AccountIdentity::Primary, Method::POST, "interactions", Some(payload))
+        .await.map_err(map_err)
+}
+
 /// Decline/end a private call for the selected DM channel.
 #[tauri::command]
 pub async fn decline_private_call(
@@ -1645,6 +1685,12 @@ pub async fn start_gateway(
                         }
                         "NOTIFICATION_CENTER_ITEM_CREATE" | "NOTIFICATION_CENTER_ITEM_DELETE" | "NOTIFICATION_CENTER_ITEMS_ACK" | "RELATIONSHIP_ADD" | "RELATIONSHIP_REMOVE" => {
                             let _ = app2.emit("discord:notification_center_update", json!({ "event": t.clone(), "data": d }));
+                        }
+                        "INTERACTION_MODAL_CREATE" => {
+                            let _ = app2.emit("discord:interaction_modal_create", d);
+                        }
+                        "INTERACTION_IFRAME_MODAL_CREATE" => {
+                            let _ = app2.emit("discord:interaction_iframe_modal_create", d);
                         }
                         "READY" => {
                             emit_rust_log(&app2, "info", "gateway", "Gateway READY received");
