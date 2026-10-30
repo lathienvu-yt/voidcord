@@ -75,9 +75,9 @@ fn trace_payload(label: &str, value: &Value) {
     const MAX_TRACE_CHARS: usize = 12_000;
     if serialized.chars().count() > MAX_TRACE_CHARS {
         let truncated: String = serialized.chars().take(MAX_TRACE_CHARS).collect();
-        log::debug!("{label} payload (truncated to {MAX_TRACE_CHARS} chars): {truncated}");
+        log::info!("{label} payload (truncated to {MAX_TRACE_CHARS} chars): {truncated}");
     } else {
-        log::debug!("{label} payload: {serialized}");
+        log::info!("{label} payload: {serialized}");
     }
 }
 
