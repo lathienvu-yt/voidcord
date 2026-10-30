@@ -301,6 +301,7 @@ fn main() {
             commands::get_guild_application_command_permissions,
             commands::execute_application_command,
             commands::execute_component_interaction,
+            commands::submit_interaction_modal,
             commands::decline_private_call,
             commands::select_attachment_files,
             commands::get_upload_limit,
