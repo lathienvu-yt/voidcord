@@ -153,9 +153,16 @@ fn main() {
         .expect("failed to start Rust console log writer thread");
 
     log::set_logger(&BACKEND_LOGGER).expect("failed to initialize Rust backend logger");
-    let verbose_network_trace = std::env::var("VOIDCORD_TRACE_NETWORK")
-        .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
+    let trace_env_raw = std::env::var("VOIDCORD_TRACE_NETWORK").unwrap_or_else(|_| "<unset>".to_owned());
+    let verbose_network_trace = matches!(
+        trace_env_raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    );
+    eprintln!(
+        "[BOOT] VOIDCORD_TRACE_NETWORK={} => verbose_payload_logging={}",
+        trace_env_raw,
+        verbose_network_trace
+    );
     log::set_max_level(if verbose_network_trace || cfg!(debug_assertions) {
         log::LevelFilter::Debug
     } else {
