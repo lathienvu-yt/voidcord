@@ -57,7 +57,7 @@ export interface DiscordGuild {
 
 export interface DiscordChannel {
   id: string;
-  type: number; // 0=text, 1=DM, 2=voice, 3=GroupDM, 4=category, 5=announcement, 13=stage
+  type: number; // 0=text, 1=DM, 2=voice, 3=GroupDM, 4=category, 5=announcement, 10=announcement thread, 11=public thread, 12=private thread, 13=stage, 15=forum
   name?: string;
   topic?: string | null;
   status?: string | null;
@@ -382,4 +382,8 @@ export const CHANNEL_TYPE_VOICE        = 2;
 export const CHANNEL_TYPE_GROUP_DM     = 3;
 export const CHANNEL_TYPE_CATEGORY     = 4;
 export const CHANNEL_TYPE_ANNOUNCEMENT = 5;
-export const CHANNEL_TYPE_STAGE        = 13;
+export const CHANNEL_TYPE_ANNOUNCEMENT_THREAD = 10;
+export const CHANNEL_TYPE_PUBLIC_THREAD       = 11;
+export const CHANNEL_TYPE_PRIVATE_THREAD      = 12;
+export const CHANNEL_TYPE_STAGE               = 13;
+export const CHANNEL_TYPE_FORUM                = 15;
