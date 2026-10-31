@@ -65,6 +65,8 @@ export interface DiscordChannel {
   parent_id?: string | null;
   guild_id?: string;
   last_message_id?: string | null;
+  message_count?: number;
+  member_count?: number;
   last_pin_timestamp?: string | null;
   is_message_request?: boolean;
   is_message_request_timestamp?: string | null;
