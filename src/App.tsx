@@ -5473,8 +5473,8 @@ export default function App() {
             )}
             <div className={`composer-box ${editingMessageId ? "editing-message" : ""} ${!canSend || officialDiscordDm || channelAccess === "MISSING_ACCESS" ? "composer-readonly" : ""}`}>
                 {officialDiscordDm && <span className="composer-readonly-hint">Official Discord messages are read-only</span>}
-                {selectedChannel && isForumChannel(selectedChannel) && <span className="composer-readonly-hint">Open a forum post to reply. Creating new posts is not supported yet.</span>}
-                 {(!selectedChannel || !isForumChannel(selectedChannel)) && !officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
+                {isForumChannel(selectedChannel!) && <span className="composer-readonly-hint">Open a forum post to reply. Creating new posts is not supported yet.</span>}
+                 {!isForumChannel(selectedChannel!) && !officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
                 {channelAccess === "MISSING_ACCESS" && <span className="composer-readonly-hint">{messages.length > 0 ? "Locked channel · Viewing offline cached messages (read-only)" : "You don’t have access to this channel"}</span>}
                 {editingMessageId && (
                   <div className="message-editing-indicator">
