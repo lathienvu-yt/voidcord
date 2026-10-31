@@ -16,7 +16,8 @@ import {
   avatarDecorationUrl, avatarUrl, bannerUrl, displayName, formatDiscriminator, isVerifiedBot, formatTimestamp, guildIconUrl, primaryGuildBadgeUrl,
   DiscordChannel, DiscordGuild, DiscordMessage, DiscordReaction, DiscordRelationship, DiscordUser,
   CHANNEL_TYPE_CATEGORY, CHANNEL_TYPE_DM, CHANNEL_TYPE_GROUP_DM, CHANNEL_TYPE_TEXT, CHANNEL_TYPE_VOICE,
-  CHANNEL_TYPE_ANNOUNCEMENT, CHANNEL_TYPE_STAGE,
+  CHANNEL_TYPE_ANNOUNCEMENT, CHANNEL_TYPE_STAGE, CHANNEL_TYPE_FORUM,
+  CHANNEL_TYPE_ANNOUNCEMENT_THREAD, CHANNEL_TYPE_PUBLIC_THREAD, CHANNEL_TYPE_PRIVATE_THREAD,
 } from "./types";
 import { DiscordMarkdown } from "./DiscordMarkdown";
 import { DiscordEmbedView } from "./DiscordEmbedView";
@@ -35,6 +36,16 @@ import "./style.css";
 
 function isTextChannel(c: DiscordChannel) {
   return c.type === CHANNEL_TYPE_TEXT || c.type === CHANNEL_TYPE_ANNOUNCEMENT;
+}
+
+function isForumChannel(c: DiscordChannel) {
+  return c.type === CHANNEL_TYPE_FORUM;
+}
+
+function isThreadChannel(c: DiscordChannel) {
+  return c.type === CHANNEL_TYPE_ANNOUNCEMENT_THREAD
+    || c.type === CHANNEL_TYPE_PUBLIC_THREAD
+    || c.type === CHANNEL_TYPE_PRIVATE_THREAD;
 }
 
 const EMOJI_PICKER_ITEMS = [
@@ -140,7 +151,7 @@ function readVoiceDevicePreference(key: string) {
 }
 
 function isMessageChannel(c: DiscordChannel) {
-  return isTextChannel(c) || c.type === CHANNEL_TYPE_DM || c.type === CHANNEL_TYPE_GROUP_DM;
+  return isTextChannel(c) || isThreadChannel(c) || c.type === CHANNEL_TYPE_DM || c.type === CHANNEL_TYPE_GROUP_DM;
 }
 function channelDisplayName(c: DiscordChannel) {
   if (!c || typeof c !== "object") return "Select a channel";
@@ -1026,6 +1037,9 @@ export default function App() {
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [notificationError, setNotificationError] = useState("");
   const [selectedChannel, setSelectedChannel] = useState<DiscordChannel | null>(null);
+  const [forumThreads, setForumThreads] = useState<DiscordChannel[]>([]);
+  const [forumThreadsLoading, setForumThreadsLoading] = useState(false);
+  const [forumThreadsError, setForumThreadsError] = useState("");
   const selectedChannelRef = useRef<DiscordChannel | null>(null);
   const [channelAccess, setChannelAccess] = useState<"ok" | "MISSING_ACCESS" | "MISSING_PERMS">("ok");
   const [knownLockedChannels, setKnownLockedChannels] = useState<Set<string>>(new Set());
@@ -2919,7 +2933,7 @@ export default function App() {
   const selectChannel = async (channel: DiscordChannel) => {
     if (isVoiceChannel(channel) && voiceHandshakeRef.current?.channelId !== channel.id) {
       void joinVoiceChannel(channel);
-    } else if (!isMessageChannel(channel) && !isVoiceChannel(channel)) {
+    } else if (!isMessageChannel(channel) && !isVoiceChannel(channel) && !isForumChannel(channel)) {
       return;
     }
     try {
@@ -2936,6 +2950,28 @@ export default function App() {
     setOlderMessagesLoading(false);
     setHasOlderMessages(false);
     setSelectedChannel(channel);
+    setForumThreads([]);
+    setForumThreadsError("");
+    if (isForumChannel(channel)) {
+      setForumThreadsLoading(true);
+      setMsgLoading(false);
+      setMessages([]);
+      setCanSend(false);
+      try {
+        if (!channel.guild_id) throw new Error("Forum channel is missing its server ID");
+        const response = await invoke<{ threads?: DiscordChannel[] }>("get_active_guild_threads", { guildId: channel.guild_id });
+        const threads = Array.isArray(response?.threads) ? response.threads : [];
+        if (requestId !== channelLoadRequest.current) return;
+        setForumThreads((Array.isArray(threads) ? threads : [])
+          .filter(thread => thread.parent_id === channel.id)
+          .sort((left, right) => (right.last_message_id || right.id).localeCompare(left.last_message_id || left.id)));
+      } catch (error) {
+        if (requestId === channelLoadRequest.current) setForumThreadsError(String(error));
+      } finally {
+        if (requestId === channelLoadRequest.current) setForumThreadsLoading(false);
+      }
+      return;
+    }
     if (channel.last_message_id) {
       void invoke("acknowledge_message", { channelId: channel.id, messageId: channel.last_message_id })
         .catch(error => console.warn("Could not acknowledge channel read state", error));
@@ -3761,14 +3797,14 @@ export default function App() {
     });
     const categories = channels.filter(c => c.type === CHANNEL_TYPE_CATEGORY);
     const uncategorized = orderByOwnSend(channels.filter(
-      c => (isTextChannel(c) || isVoiceChannel(c)) && !c.parent_id
+      c => (isTextChannel(c) || isForumChannel(c) || isVoiceChannel(c)) && !c.parent_id
     ));
     return {
       uncategorized,
       categories: categories.map(cat => ({
         category: cat,
         children: orderByOwnSend(channels.filter(
-          c => c.parent_id === cat.id && (isTextChannel(c) || isVoiceChannel(c))
+          c => c.parent_id === cat.id && (isTextChannel(c) || isForumChannel(c) || isVoiceChannel(c))
         )),
       })),
     };
@@ -5258,6 +5294,26 @@ export default function App() {
                 )}
               </section>
             )}
+            {selectedChannel && isForumChannel(selectedChannel) && (
+              <section className="forum-browser" aria-label="Forum posts">
+                <header className="forum-browser-header">
+                  <div><h2>Forum posts</h2><p>{selectedChannel.topic || "Browse discussions in this forum"}</p></div>
+                  <span>{forumThreads.length} active</span>
+                </header>
+                {forumThreadsLoading && <div className="forum-browser-state"><Loader2 size={16} className="spinning" /> Loading forum posts…</div>}
+                {!forumThreadsLoading && forumThreadsError && <div className="forum-browser-state forum-browser-error">Could not load forum posts: {forumThreadsError}</div>}
+                {!forumThreadsLoading && !forumThreadsError && forumThreads.length === 0 && <div className="forum-browser-state">No active posts found. Archived posts are not included yet.</div>}
+                <div className="forum-post-list">
+                  {forumThreads.map(thread => (
+                    <button type="button" className="forum-post-card" key={thread.id} onClick={() => void selectChannel(thread)}>
+                      <span className="forum-post-icon"><MessageSquare size={18} /></span>
+                      <span className="forum-post-copy"><strong>{thread.name || "Untitled post"}</strong><small>{thread.message_count ?? 0} replies · {thread.member_count ?? 0} members</small></span>
+                      <ChevronRight size={17} />
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
             {olderMessagesLoading && (
               <div className="older-messages-indicator" role="status">
                 <Loader2 size={15} className="spinning" /> Loading older messages…
@@ -5417,7 +5473,8 @@ export default function App() {
             )}
             <div className={`composer-box ${editingMessageId ? "editing-message" : ""} ${!canSend || officialDiscordDm || channelAccess === "MISSING_ACCESS" ? "composer-readonly" : ""}`}>
                 {officialDiscordDm && <span className="composer-readonly-hint">Official Discord messages are read-only</span>}
-                {!officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
+                {isForumChannel(selectedChannel!) && <span className="composer-readonly-hint">Open a forum post to reply. Creating new posts is not supported yet.</span>}
+                 {!isForumChannel(selectedChannel!) && !officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
                 {channelAccess === "MISSING_ACCESS" && <span className="composer-readonly-hint">{messages.length > 0 ? "Locked channel · Viewing offline cached messages (read-only)" : "You don’t have access to this channel"}</span>}
                 {editingMessageId && (
                   <div className="message-editing-indicator">

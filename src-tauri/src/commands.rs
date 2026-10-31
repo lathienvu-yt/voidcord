@@ -292,6 +292,23 @@ pub async fn get_channels(
         .map_err(map_err)
 }
 
+/// Fetch active threads across a guild; the frontend filters them by forum parent channel.
+#[tauri::command]
+pub async fn get_active_guild_threads(
+    guild_id: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if guild_id.parse::<u64>().is_err() {
+        return Err("A valid server ID is required".to_owned());
+    }
+    state.router.rest(
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("guilds/{guild_id}/threads/active"),
+        None,
+    ).await.map_err(map_err)
+}
+
 /// Re-fetch one message so stale cached attachment URLs can be refreshed.
 #[tauri::command]
 pub async fn get_message(

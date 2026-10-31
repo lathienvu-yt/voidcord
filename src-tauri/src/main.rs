@@ -288,6 +288,7 @@ fn main() {
             settings_menu::save_client_settings,
             commands::get_user_profile,
             commands::get_channels,
+            commands::get_active_guild_threads,
             commands::get_messages,
             commands::get_message,
             commands::get_notification_center_items,
