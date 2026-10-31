@@ -2959,7 +2959,8 @@ export default function App() {
       setCanSend(false);
       try {
         if (!channel.guild_id) throw new Error("Forum channel is missing its server ID");
-        const threads = await invoke<DiscordChannel[]>("get_active_guild_threads", { guildId: channel.guild_id });
+        const response = await invoke<{ threads?: DiscordChannel[] }>("get_active_guild_threads", { guildId: channel.guild_id });
+        const threads = Array.isArray(response?.threads) ? response.threads : [];
         if (requestId !== channelLoadRequest.current) return;
         setForumThreads((Array.isArray(threads) ? threads : [])
           .filter(thread => thread.parent_id === channel.id)
@@ -3796,14 +3797,14 @@ export default function App() {
     });
     const categories = channels.filter(c => c.type === CHANNEL_TYPE_CATEGORY);
     const uncategorized = orderByOwnSend(channels.filter(
-      c => (isTextChannel(c) || isVoiceChannel(c)) && !c.parent_id
+      c => (isTextChannel(c) || isForumChannel(c) || isVoiceChannel(c)) && !c.parent_id
     ));
     return {
       uncategorized,
       categories: categories.map(cat => ({
         category: cat,
         children: orderByOwnSend(channels.filter(
-          c => c.parent_id === cat.id && (isTextChannel(c) || isVoiceChannel(c))
+          c => c.parent_id === cat.id && (isTextChannel(c) || isForumChannel(c) || isVoiceChannel(c))
         )),
       })),
     };
