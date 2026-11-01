@@ -1,6 +1,6 @@
 [package]
 name = "VoidCord"
-version = "0.2.1"
+version = "0.2.9"
 description = "A customizable, offline-friendly Discord client shell"
 authors = ["lathienvu_XD"]
 edition = "2021"
@@ -31,6 +31,7 @@ uuid = { version = "1", features = ["v4"] }
 tauri-plugin-single-instance = "2.0" # Use version 2.0 matching your Tauri v2 setup
 
 log = "0.4"
+keyring = "4.2.0"
 
 [features]
 default = ["custom-protocol"]

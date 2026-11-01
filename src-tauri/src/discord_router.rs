@@ -109,7 +109,7 @@ pub struct TokenManager {
 }
 
 #[derive(Clone)]
-struct SecretToken(Arc<str>);
+pub(crate) struct SecretToken(pub(crate) Arc<str>);
 
 impl std::fmt::Debug for SecretToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -125,19 +125,39 @@ impl TokenManager {
         read_only_token: Option<String>,
     ) -> Self {
         Self {
-            primary_token: primary_token.map(|s| SecretToken(Arc::from(s))),
-            secondary_token: secondary_token.map(|s| SecretToken(Arc::from(s))),
-            read_only_token: read_only_token.map(|s| SecretToken(Arc::from(s))),
+            primary_token: primary_token.filter(|s| !s.trim().is_empty()).map(|s| SecretToken(Arc::from(s))),
+            secondary_token: secondary_token.filter(|s| !s.trim().is_empty()).map(|s| SecretToken(Arc::from(s))),
+            read_only_token: read_only_token.filter(|s| !s.trim().is_empty()).map(|s| SecretToken(Arc::from(s))),
         }
     }
 
-    fn get(&self, identity: AccountIdentity) -> Result<&SecretToken, DiscordError> {
-        let token = match identity {
-            AccountIdentity::Primary => self.primary_token.as_ref(),
-            AccountIdentity::Secondary => self.secondary_token.as_ref(),
-            AccountIdentity::ReadOnly => self.read_only_token.as_ref(),
-        };
-        token.ok_or(DiscordError::MissingCredential(identity))
+    /// Return candidate tokens in priority order for fault tolerance and smart selecting:
+    /// - Primary: Primary token first, fallback to Secondary
+    /// - Secondary: Secondary token first, fallback to Primary
+    /// - ReadOnly: ReadOnly token first; if none, fall back to Secondary, then Primary!
+    pub(crate) fn candidate_tokens(&self, identity: AccountIdentity) -> Vec<SecretToken> {
+        let mut list = Vec::new();
+        match identity {
+            AccountIdentity::Primary => {
+                if let Some(t) = &self.primary_token { list.push(t.clone()); }
+                if let Some(t) = &self.secondary_token { list.push(t.clone()); }
+            }
+            AccountIdentity::Secondary => {
+                if let Some(t) = &self.secondary_token { list.push(t.clone()); }
+                if let Some(t) = &self.primary_token { list.push(t.clone()); }
+            }
+            AccountIdentity::ReadOnly => {
+                if let Some(t) = &self.read_only_token { list.push(t.clone()); }
+                if let Some(t) = &self.secondary_token { list.push(t.clone()); }
+                if let Some(t) = &self.primary_token { list.push(t.clone()); }
+            }
+        }
+        list
+    }
+
+    fn get(&self, identity: AccountIdentity) -> Result<SecretToken, DiscordError> {
+        let candidates = self.candidate_tokens(identity);
+        candidates.into_iter().next().ok_or(DiscordError::MissingCredential(identity))
     }
 }
 
@@ -257,12 +277,28 @@ impl DiscordRouter {
         if path.contains("..") || path.starts_with("http") {
             return Err(DiscordError::InvalidPath);
         }
-        self.perform_rest(identity, method, path.to_owned(), body, None).await
+        self.rest_with_auth(None, identity, method, path, body).await
+    }
+
+    pub async fn rest_with_auth(
+        &self,
+        custom_token: Option<&str>,
+        identity: AccountIdentity,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, DiscordError> {
+        let path = path.trim_start_matches('/');
+        if path.contains("..") || path.starts_with("http") {
+            return Err(DiscordError::InvalidPath);
+        }
+        self.perform_rest(custom_token, identity, method, path.to_owned(), body, None).await
     }
 
     /// Upload attachments and send a message with the explicitly selected account.
     pub async fn send_message_with_files(
         &self,
+        custom_token: Option<&str>,
         identity: AccountIdentity,
         channel_id: &str,
         content: &str,
@@ -275,10 +311,13 @@ impl DiscordRouter {
         if files.is_empty() || files.len() > 10 {
             return Err(DiscordError::Http { status: StatusCode::BAD_REQUEST, body: "Choose between 1 and 10 files".to_owned() });
         }
-        let token = {
+        let token_string = if let Some(t) = custom_token {
+            Arc::from(t)
+        } else {
             let tokens = self.tokens.read().await;
-            tokens.get(identity)?.clone()
+            tokens.get(identity)?.0.clone()
         };
+        let token = SecretToken(token_string);
         // Ask Discord for the current identity's tier. The backend repeats this
         // check at send time; UI supplied tier values are never trusted.
         let upload_check_started = std::time::Instant::now();
@@ -377,6 +416,7 @@ impl DiscordRouter {
             });
         }
         self.perform_rest(
+            None,
             pending.identity,
             pending.method,
             pending.path,
@@ -387,6 +427,7 @@ impl DiscordRouter {
 
     async fn perform_rest(
         &self,
+        custom_token: Option<&str>,
         identity: AccountIdentity,
         method: Method,
         path: String,
@@ -399,34 +440,57 @@ impl DiscordRouter {
             trace_payload("Discord REST request", request_body);
         }
         let request_started = std::time::Instant::now();
-        let token = {
+        let candidate_tokens = if let Some(t) = custom_token {
+            vec![SecretToken(Arc::from(t))]
+        } else {
             let tokens = self.tokens.read().await;
-            tokens.get(identity)?.clone()
+            let list = tokens.candidate_tokens(identity);
+            if list.is_empty() {
+                return Err(DiscordError::MissingCredential(identity));
+            }
+            list
         };
-        // Internal endpoints observed on API v9 can opt in with the "api-v9/" route prefix.
-        // Strip the marker before sending so it never becomes part of the URL path.
+
         let (api_base, request_path) = if let Some(route) = path.strip_prefix("api-v9/") {
             ("https://discord.com/api/v9", route)
         } else {
             (DISCORD_API, path.as_str())
         };
-        let mut request = self.client.request(method.clone(), format!("{api_base}/{request_path}"))
-            .header(header::AUTHORIZATION, token.0.as_ref());
-        if let Some((captcha_key, rq_token, session_id)) = &captcha {
-            request = request.header("X-Captcha-Key", captcha_key);
-            if let Some(rq_token) = rq_token { request = request.header("X-Captcha-Rqtoken", rq_token); }
-            if let Some(session_id) = session_id { request = request.header("X-Captcha-Session-Id", session_id); }
-        }
-        if let Some(json) = &body {
-            request = request.json(json);
-        }
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(error) => {
-                log::warn!("Discord REST transport error: {} {} ({})", method, log_path, error);
-                return Err(DiscordError::from(error));
+
+        let mut last_response = None;
+        let candidate_count = candidate_tokens.len();
+
+        for (idx, token) in candidate_tokens.into_iter().enumerate() {
+            let mut request = self.client.request(method.clone(), format!("{api_base}/{request_path}"))
+                .header(header::AUTHORIZATION, token.0.as_ref());
+            if let Some((captcha_key, rq_token, session_id)) = &captcha {
+                request = request.header("X-Captcha-Key", captcha_key);
+                if let Some(rq_token) = rq_token { request = request.header("X-Captcha-Rqtoken", rq_token); }
+                if let Some(session_id) = session_id { request = request.header("X-Captcha-Session-Id", session_id); }
             }
-        };
+            if let Some(json) = &body {
+                request = request.json(json);
+            }
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    log::warn!("Discord REST transport error: {} {} ({})", method, log_path, error);
+                    return Err(DiscordError::from(error));
+                }
+            };
+
+            let status = response.status();
+            // If response is unauthorized or forbidden and we have another candidate credential, retry with fallback!
+            if (status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN) && idx + 1 < candidate_count {
+                log::warn!("Discord REST {} {} [identity={:?}] received status {}, retrying with fallback credential...", method, log_path, identity, status);
+                continue;
+            }
+
+            last_response = Some(response);
+            break;
+        }
+
+        let response = last_response.ok_or(DiscordError::MissingCredential(identity))?;
         let status = response.status();
         let elapsed = request_started.elapsed();
         let retry_after = response.headers().get("retry-after").and_then(|v| v.to_str().ok()).unwrap_or("-");
@@ -823,6 +887,7 @@ impl DiscordRouter {
 
 /// UI-neutral request intents map all message/reaction writes to the primary
 /// identity and browsing/event listening to the read-only identity.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestIntent {
     Browse,
@@ -832,6 +897,7 @@ pub enum RequestIntent {
     RemoveReaction,
 }
 
+#[allow(dead_code)]
 impl RequestIntent {
     pub const fn identity(self) -> AccountIdentity {
         match self {
@@ -842,11 +908,13 @@ impl RequestIntent {
 }
 
 /// Optional local routing policy for communities.
+#[allow(dead_code)]
 #[derive(Default, Clone)]
 pub struct CommunityAccountPreferences {
     by_community: Arc<RwLock<HashMap<String, AccountIdentity>>>,
 }
 
+#[allow(dead_code)]
 impl CommunityAccountPreferences {
     pub async fn set(&self, community_id: String, identity: AccountIdentity) {
         self.by_community.write().await.insert(community_id, identity);
@@ -858,6 +926,7 @@ impl CommunityAccountPreferences {
 }
 
 /// Settings can be persisted without ever serializing tokens.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SafeAccountSettings {
     pub primary_account_label: Option<String>,

@@ -18,7 +18,7 @@ import {
   CHANNEL_TYPE_CATEGORY, CHANNEL_TYPE_DM, CHANNEL_TYPE_GROUP_DM, CHANNEL_TYPE_TEXT, CHANNEL_TYPE_VOICE,
   CHANNEL_TYPE_ANNOUNCEMENT, CHANNEL_TYPE_STAGE, CHANNEL_TYPE_FORUM,
   CHANNEL_TYPE_ANNOUNCEMENT_THREAD, CHANNEL_TYPE_PUBLIC_THREAD, CHANNEL_TYPE_PRIVATE_THREAD,
-} from "./types";
+  displayNameFontClass, roleColorStyle } from './types';
 import { DiscordMarkdown } from "./DiscordMarkdown";
 import { DiscordEmbedView } from "./DiscordEmbedView";
 import { DiscordComponents } from "./DiscordComponents";
@@ -34,18 +34,20 @@ import "./style.css";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function isTextChannel(c: DiscordChannel) {
-  return c.type === CHANNEL_TYPE_TEXT || c.type === CHANNEL_TYPE_ANNOUNCEMENT;
+function isTextChannel(c?: DiscordChannel | null): boolean {
+  return !!c && (c.type === CHANNEL_TYPE_TEXT || c.type === CHANNEL_TYPE_ANNOUNCEMENT);
 }
 
-function isForumChannel(c: DiscordChannel) {
-  return c.type === CHANNEL_TYPE_FORUM;
+function isForumChannel(c?: DiscordChannel | null): boolean {
+  return !!c && c.type === CHANNEL_TYPE_FORUM;
 }
 
-function isThreadChannel(c: DiscordChannel) {
-  return c.type === CHANNEL_TYPE_ANNOUNCEMENT_THREAD
+function isThreadChannel(c?: DiscordChannel | null): boolean {
+  return !!c && (
+    c.type === CHANNEL_TYPE_ANNOUNCEMENT_THREAD
     || c.type === CHANNEL_TYPE_PUBLIC_THREAD
-    || c.type === CHANNEL_TYPE_PRIVATE_THREAD;
+    || c.type === CHANNEL_TYPE_PRIVATE_THREAD
+  );
 }
 
 const EMOJI_PICKER_ITEMS = [
@@ -150,10 +152,11 @@ function readVoiceDevicePreference(key: string) {
   }
 }
 
-function isMessageChannel(c: DiscordChannel) {
+function isMessageChannel(c?: DiscordChannel | null): boolean {
+  if (!c) return false;
   return isTextChannel(c) || isThreadChannel(c) || c.type === CHANNEL_TYPE_DM || c.type === CHANNEL_TYPE_GROUP_DM;
 }
-function channelDisplayName(c: DiscordChannel) {
+function channelDisplayName(c?: DiscordChannel | null) {
   if (!c || typeof c !== "object") return "Select a channel";
   if (c.name) return c.name;
   if (c.type === CHANNEL_TYPE_DM) {
@@ -165,10 +168,12 @@ function channelDisplayName(c: DiscordChannel) {
   }
   return "Select a channel";
 }
-function isVoiceChannel(c: DiscordChannel) {
+function isVoiceChannel(c?: DiscordChannel | null): boolean {
+  if (!c) return false;
   return c.type === CHANNEL_TYPE_VOICE || c.type === CHANNEL_TYPE_STAGE;
 }
-function isPrivateCallChannel(c: DiscordChannel) {
+function isPrivateCallChannel(c?: DiscordChannel | null): boolean {
+  if (!c) return false;
   return c.type === CHANNEL_TYPE_DM || c.type === CHANNEL_TYPE_GROUP_DM;
 }
 
@@ -273,7 +278,9 @@ function hasGuildPermission(
   return (permissions & (1n << 3n)) !== 0n || (permissions & (1n << BigInt(permissionBit))) !== 0n;
 }
 
-function getUserRoleColor(authorId: string, guildMembers: unknown[], guildRoles: unknown[], roleIdsFromMessage?: string[]): string | undefined {
+interface RoleColorInfo { hex?: string; style?: React.CSSProperties; }
+
+function getUserRoleColorInfo(authorId: string, guildMembers: unknown[], guildRoles: unknown[], roleIdsFromMessage?: string[]): RoleColorInfo {
   const member = guildMembers.find((entry): entry is { user?: { id?: string }; id?: string; roles?: unknown } =>
     !!entry && typeof entry === "object"
       && ((entry as { user?: { id?: string } }).user?.id === authorId || (entry as { id?: string }).id === authorId)
@@ -281,16 +288,28 @@ function getUserRoleColor(authorId: string, guildMembers: unknown[], guildRoles:
   const memberRoleIds = Array.isArray(member?.roles)
     ? member.roles.filter((roleId): roleId is string => typeof roleId === "string")
     : roleIdsFromMessage || [];
-  if (memberRoleIds.length === 0) return undefined;
+  if (memberRoleIds.length === 0) return {};
 
-  const roles = guildRoles.filter((entry): entry is { id: string; color?: number; position?: number } =>
+  const roles = guildRoles.filter((entry): entry is { id: string; color?: number; colors?: { primary_color?: number | null; secondary_color?: number | null; tertiary_color?: number | null } | null; position?: number } =>
     !!entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string"
   );
   const roleIds = new Set(memberRoleIds);
   const highestColoredRole = roles
     .filter(role => roleIds.has(role.id) && typeof role.color === "number" && role.color > 0)
     .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))[0];
-  return highestColoredRole ? roleColorToHex(highestColoredRole.color) : undefined;
+  if (!highestColoredRole) return {};
+
+  const rc = highestColoredRole.colors;
+  const primary = rc?.primary_color ?? highestColoredRole.color;
+  const secondary = rc?.secondary_color ?? null;
+  const tertiary = rc?.tertiary_color ?? null;
+  const style = roleColorStyle(primary, secondary, tertiary);
+  const hasGradient = secondary != null;
+  return { hex: hasGradient ? undefined : roleColorToHex(highestColoredRole.color), style };
+}
+
+function getUserRoleColor(authorId: string, guildMembers: unknown[], guildRoles: unknown[], roleIdsFromMessage?: string[]): string | undefined {
+  return getUserRoleColorInfo(authorId, guildMembers, guildRoles, roleIdsFromMessage).hex;
 }
 
 const SYSTEM_MESSAGE_LABELS: Record<number, string> = {
@@ -660,15 +679,117 @@ function PlatformIndicators({ platforms }: { platforms: UserPlatform[] }) {
 
 // ── Login screen ────────────────────────────────────────────────────────────
 
-type SavedDiscordAccount = { user: DiscordUser; token: string };
+export type AccountRole = "primary" | "secondary" | "readonly";
+export type SavedDiscordAccount = { user: DiscordUser; token: string; role?: AccountRole };
 
-async function persistDiscordAccount(user: DiscordUser, token: string): Promise<SavedDiscordAccount[]> {
+async function secureSaveToken(accountId: string, token: string): Promise<void> {
+  try {
+    await tauriInvoke("save_secure_token", { accountId, token });
+  } catch (err) {
+    console.error("Failed to save secure token to OS keyring:", err);
+  }
+}
+
+async function secureGetToken(accountId: string): Promise<string | null> {
+  try {
+    return await tauriInvoke<string | null>("get_secure_token", { accountId });
+  } catch (err) {
+    console.error("Failed to get secure token from OS keyring:", err);
+    return null;
+  }
+}
+
+async function secureDeleteToken(accountId: string): Promise<void> {
+  try {
+    await tauriInvoke("delete_secure_token", { accountId });
+  } catch (err) {
+    console.error("Failed to delete secure token from OS keyring:", err);
+  }
+}
+
+async function persistDiscordAccount(user: DiscordUser, token: string, role?: AccountRole): Promise<SavedDiscordAccount[]> {
   const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
-  const current = await store.get<SavedDiscordAccount[]>("accounts") || [];
-  const next = [{ user, token }, ...current.filter(account => account.user?.id !== user.id)];
-  await store.set("accounts", next);
-  await store.set("token", token);
-  return next;
+  const diskAccounts = await store.get<SavedDiscordAccount[]>("accounts") || [];
+  const existing = diskAccounts.find(account => account.user?.id === user.id);
+  const assignedRole = role || existing?.role || (diskAccounts.length === 0 ? "primary" : "secondary");
+  
+  if (token) {
+    await secureSaveToken(user.id, token);
+  }
+
+  // Scrub raw tokens from disk JSON
+  const sanitized = diskAccounts.map(a => ({ ...a, token: "" }));
+  const nextDisk = [{ user, token: "", role: assignedRole }, ...sanitized.filter(account => account.user?.id !== user.id)];
+  await store.set("accounts", nextDisk);
+  if (assignedRole === "primary" || !diskAccounts.some(a => a.role === "primary")) {
+    await store.set("active_account_id", user.id);
+    await store.set("token", "");
+  }
+
+  // Hydrate all in-memory accounts with their tokens from keyring
+  const nextMemory: SavedDiscordAccount[] = [];
+  for (const acc of nextDisk) {
+    if (acc.user.id === user.id) {
+      nextMemory.push({ ...acc, token });
+    } else {
+      const secToken = await secureGetToken(acc.user.id);
+      nextMemory.push({ ...acc, token: secToken || "" });
+    }
+  }
+
+  // Sync router identities to Rust backend:
+  // Primary = primary account
+  // Secondary = secondary account
+  // ReadOnly = ONLY explicitly configured readonly account (never auto-alias to secondary/alt!)
+  const primaryAcc = nextMemory.find(a => a.role === "primary") || nextMemory[0];
+  const secondaryAcc = nextMemory.find(a => a.role === "secondary");
+  const readOnlyAcc = nextMemory.find(a => a.role === "readonly");
+  void tauriInvoke("set_router_accounts", {
+    primary: primaryAcc?.token || null,
+    secondary: secondaryAcc?.token || null,
+    readOnly: readOnlyAcc?.token || null,
+  }).catch(() => {});
+
+  return nextMemory;
+}
+
+async function updateAccountRole(userId: string, newRole: AccountRole, accounts: SavedDiscordAccount[]): Promise<SavedDiscordAccount[]> {
+  let updated = accounts.map(account => {
+    if (account.user.id === userId) {
+      return { ...account, role: newRole };
+    }
+    if (newRole === "primary" && (account.role === "primary" || !account.role)) {
+      return { ...account, role: "secondary" as AccountRole };
+    }
+    return account;
+  });
+  if (!updated.some(a => a.role === "primary") && updated.length > 0) {
+    updated[0].role = "primary";
+  }
+  const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
+  await store.set("accounts", updated.map(a => ({ ...a, token: "" })));
+  const primary = updated.find(a => a.role === "primary");
+  if (primary) {
+    await store.set("active_account_id", primary.user.id);
+  }
+
+  // Hydrate all in-memory accounts with secure tokens from keyring
+  const memoryAccounts: SavedDiscordAccount[] = [];
+  for (const acc of updated) {
+    const secToken = acc.token || (await secureGetToken(acc.user.id)) || "";
+    memoryAccounts.push({ ...acc, token: secToken });
+  }
+
+  const primaryAcc = memoryAccounts.find(a => a.role === "primary") || memoryAccounts[0];
+  const secondaryAcc = memoryAccounts.find(a => a.role === "secondary");
+  const readOnlyAcc = memoryAccounts.find(a => a.role === "readonly");
+  void tauriInvoke("set_router_accounts", {
+    primary: primaryAcc?.token || null,
+    secondary: secondaryAcc?.token || null,
+    readOnly: readOnlyAcc?.token || null,
+  }).catch(() => {});
+
+  return memoryAccounts;
 }
 
 function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: SavedDiscordAccount[]) => void }) {
@@ -886,9 +1007,10 @@ function AccountSwitcher({
   };
 
   const removeAccount = async (userId: string) => {
+    await secureDeleteToken(userId);
     const next = accounts.filter(account => account.user.id !== userId);
     const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
-    await store.set("accounts", next);
+    await store.set("accounts", next.map(a => ({ ...a, token: "" })));
     onConnected(activeUser, "", next);
   };
 
@@ -905,13 +1027,54 @@ function AccountSwitcher({
             return (
               <div className={`account-switcher-row ${current ? "current" : ""}`} key={account.user.id}>
                 <img src={avatarUrl(account.user, 48)} alt="" />
-                <div className="account-switcher-name"><strong>{displayName(account.user)}</strong><small>@{account.user.username}{formatDiscriminator(account.user)}{current ? " · Current" : ""}</small></div>
-                {current
-                  ? <span className="account-current-badge">Current</span>
-                  : <>
-                    <button type="button" className="account-switch-button" disabled={busy} onClick={() => { setBusyId(account.user.id); void connect(account.token); }}>Switch</button>
-                    <button type="button" className="account-remove-button" title={`Remove ${displayName(account.user)} from saved accounts`} onClick={() => void removeAccount(account.user.id)}><X size={14} /></button>
-                  </>}
+                <div className="account-switcher-name">
+                  <div className="account-switcher-name-row">
+                    <strong>{displayName(account.user)}</strong>
+                    <span className={`account-role-tag role-${account.role || (current ? "primary" : "secondary")}`}>
+                      ({account.role || (current ? "primary" : "secondary")})
+                    </span>
+                  </div>
+                  <small>@{account.user.username}{formatDiscriminator(account.user)}{current ? " · Current session" : ""}</small>
+                  <div className="account-switcher-role-picker">
+                    <span className="role-picker-label">Assign role:</span>
+                    <button
+                      type="button"
+                      className={`role-chip ${(account.role || (current ? "primary" : "secondary")) === "primary" ? "active" : ""}`}
+                      onClick={async () => {
+                        const updated = await updateAccountRole(account.user.id, "primary", accounts);
+                        onConnected(activeUser, "", updated);
+                      }}
+                    >
+                      Primary
+                    </button>
+                    <button
+                      type="button"
+                      className={`role-chip ${(account.role || (current ? "primary" : "secondary")) === "secondary" ? "active" : ""}`}
+                      onClick={async () => {
+                        const updated = await updateAccountRole(account.user.id, "secondary", accounts);
+                        onConnected(activeUser, "", updated);
+                      }}
+                    >
+                      Secondary
+                    </button>
+                    <button
+                      type="button"
+                      className={`role-chip ${(account.role || (current ? "primary" : "secondary")) === "readonly" ? "active" : ""}`}
+                      onClick={async () => {
+                        const updated = await updateAccountRole(account.user.id, "readonly", accounts);
+                        onConnected(activeUser, "", updated);
+                      }}
+                    >
+                      ReadOnly
+                    </button>
+                  </div>
+                </div>
+                <div className="account-switcher-actions">
+                  {current
+                    ? <span className="account-current-badge">Active</span>
+                    : <button type="button" className="account-switch-button" disabled={busy} onClick={() => { setBusyId(account.user.id); void connect(account.token); }}>Switch</button>}
+                  {!current && <button type="button" className="account-remove-button" title={`Remove ${displayName(account.user)} from saved accounts`} onClick={() => void removeAccount(account.user.id)}><X size={14} /></button>}
+                </div>
               </div>
             );
           })}
@@ -1038,8 +1201,49 @@ export default function App() {
   const [notificationError, setNotificationError] = useState("");
   const [selectedChannel, setSelectedChannel] = useState<DiscordChannel | null>(null);
   const [forumThreads, setForumThreads] = useState<DiscordChannel[]>([]);
+  const [activeThreads, setActiveThreads] = useState<DiscordChannel[]>([]);
+  const activeThreadsRef = useRef<DiscordChannel[]>([]);
+  const [threadsDrawerOpen, setThreadsDrawerOpen] = useState(false);
+  const [channelThreadsList, setChannelThreadsList] = useState<DiscordChannel[]>([]);
+  const [channelThreadsLoading, setChannelThreadsLoading] = useState(false);
+  const [forumQuery, setForumQuery] = useState("");
+  const [forumFilter, setForumFilter] = useState<"all" | "active" | "archived">("all");
+  const [forumTagFilter, setForumTagFilter] = useState<string | null>(null);
+
+  const mergeThreads = useCallback((incoming: DiscordChannel[]) => {
+    if (!incoming || !incoming.length) return;
+    setActiveThreads(prev => {
+      const map = new Map<string, DiscordChannel>();
+      for (const t of prev) if (t?.id) map.set(t.id, t);
+      for (const t of incoming) if (t?.id) map.set(t.id, { ...(map.get(t.id) || {}), ...t });
+      const next = [...map.values()];
+      activeThreadsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const removeThread = useCallback((threadId: string) => {
+    if (!threadId) return;
+    setActiveThreads(prev => {
+      const next = prev.filter(t => t.id !== threadId);
+      activeThreadsRef.current = next;
+      return next;
+    });
+  }, []);
   const [forumThreadsLoading, setForumThreadsLoading] = useState(false);
   const [forumThreadsError, setForumThreadsError] = useState("");
+
+  const filteredForumThreads = useMemo(() => {
+    return forumThreads.filter(thread => {
+      if (forumQuery.trim() && !thread.name?.toLowerCase().includes(forumQuery.trim().toLowerCase())) {
+        return false;
+      }
+      if (forumFilter === "active" && thread.thread_metadata?.archived) return false;
+      if (forumFilter === "archived" && !thread.thread_metadata?.archived) return false;
+      if (forumTagFilter && !thread.applied_tags?.includes(forumTagFilter)) return false;
+      return true;
+    });
+  }, [forumThreads, forumQuery, forumFilter, forumTagFilter]);
   const selectedChannelRef = useRef<DiscordChannel | null>(null);
   const [channelAccess, setChannelAccess] = useState<"ok" | "MISSING_ACCESS" | "MISSING_PERMS">("ok");
   const [knownLockedChannels, setKnownLockedChannels] = useState<Set<string>>(new Set());
@@ -1104,6 +1308,19 @@ export default function App() {
   const [composerFiles, setComposerFiles] = useState<ComposerAttachment[]>([]);
   const [accountUploadLimitBytes, setAccountUploadLimitBytes] = useState(20 * 1024 * 1024);
   const [composerPicker, setComposerPicker] = useState<"gif" | "emoji" | null>(null);
+  const [composerAccountMenuOpen, setComposerAccountMenuOpen] = useState(false);
+  const [composerSendingAccountId, setComposerSendingAccountId] = useState<string | null>(null);
+  const [channelLoadedViaAccount, setChannelLoadedViaAccount] = useState<DiscordUser | null>(null);
+  const [altAccountGuilds, setAltAccountGuilds] = useState<{ [userId: string]: DiscordGuild[] }>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("voidcord:alt-guilds-cache") || "{}");
+    } catch {
+      return {};
+    }
+  });
+  const [altGuildJoinModal, setAltGuildJoinModal] = useState<{ guild: DiscordGuild; ownerAccount: SavedDiscordAccount } | null>(null);
+  const [altGuildJoinLoading, setAltGuildJoinLoading] = useState(false);
+  const [altGuildJoinError, setAltGuildJoinError] = useState<string | null>(null);
   const [emojiQuery, setEmojiQuery] = useState("");
   const [gifQuery, setGifQuery] = useState("");
   const [gifUrl, setGifUrl] = useState("");
@@ -2084,23 +2301,62 @@ export default function App() {
     (async () => {
       try {
         const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
-        const accounts = await store.get<SavedDiscordAccount[]>("accounts") || [];
-        setSavedAccounts(accounts);
-        const saved = await store.get<string>("token") || accounts[0]?.token;
-        if (saved) {
+        let diskAccounts = await store.get<SavedDiscordAccount[]>("accounts") || [];
+        const rawSavedToken = await store.get<string>("token");
+
+        // 1. Automatic migration from plaintext JSON to OS Keyring / Credential Vault
+        let needsScrub = false;
+        for (const acc of diskAccounts) {
+          if (acc.token && acc.token.trim().length > 0) {
+            await secureSaveToken(acc.user.id, acc.token);
+            needsScrub = true;
+          }
+        }
+        if (rawSavedToken && rawSavedToken.trim().length > 0) {
+          const targetAcc = diskAccounts.find(a => a.role === "primary") || diskAccounts[0];
+          if (targetAcc) {
+            await secureSaveToken(targetAcc.user.id, rawSavedToken);
+          }
+          await store.set("token", "");
+        }
+        if (needsScrub) {
+          await store.set("accounts", diskAccounts.map(a => ({ ...a, token: "" })));
+        }
+
+        // 2. Load secure tokens into runtime memory
+        const memoryAccounts: SavedDiscordAccount[] = [];
+        for (const acc of diskAccounts) {
+          const secToken = await secureGetToken(acc.user.id);
+          memoryAccounts.push({ ...acc, token: secToken || acc.token || "" });
+        }
+        setSavedAccounts(memoryAccounts);
+
+        // 3. Connect as the PRIMARY account (main session)
+        const primaryAcc = memoryAccounts.find(a => a.role === "primary") || memoryAccounts[0];
+        const secondaryAcc = memoryAccounts.find(a => a.role === "secondary");
+        const readOnlyAcc = memoryAccounts.find(a => a.role === "readonly");
+        
+        // Sync router credentials upfront
+        void tauriInvoke("set_router_accounts", {
+          primary: primaryAcc?.token || null,
+          secondary: secondaryAcc?.token || null,
+          readOnly: readOnlyAcc?.token || null,
+        }).catch(() => {});
+
+        const tokenToConnect = primaryAcc?.token;
+
+        if (tokenToConnect) {
           const cachedUser = await readCachedAppData<DiscordUser>("current-user").catch(() => undefined);
-          if (cachedUser) {
+          if (cachedUser && (!primaryAcc || cachedUser.id === primaryAcc.user.id)) {
             setMe(cachedUser);
             setAuthLoading(false);
-            const migratedAccounts = await persistDiscordAccount(cachedUser, saved).catch(() => accounts);
-            setSavedAccounts(migratedAccounts);
           }
           try {
-            const user = await invoke<DiscordUser>("set_token", { token: saved });
+            const user = await invoke<DiscordUser>("set_token", { token: tokenToConnect });
             setMe(user);
             void writeCachedAppData("current-user", user);
-            const migratedAccounts = await persistDiscordAccount(user, saved);
-            setSavedAccounts(migratedAccounts);
+            const syncedAccounts = await persistDiscordAccount(user, tokenToConnect, primaryAcc?.role || "primary");
+            setSavedAccounts(syncedAccounts);
           } catch {
             if (!cachedUser) throw new Error("No cached user profile");
           }
@@ -2693,6 +2949,27 @@ export default function App() {
       if (Array.isArray(payload?.presences)) {
         applyPresenceUpdates(payload.presences);
       }
+      if (Array.isArray(payload?.threads)) {
+        mergeThreads(payload.threads);
+      }
+    }).then(u => unsubs.push(u));
+
+    listen<any>("discord:thread_list_sync", ({ payload }) => {
+      if (Array.isArray(payload?.threads)) {
+        mergeThreads(payload.threads);
+      }
+    }).then(u => unsubs.push(u));
+
+    listen<any>("discord:thread_create", ({ payload }) => {
+      if (payload?.id) mergeThreads([payload]);
+    }).then(u => unsubs.push(u));
+
+    listen<any>("discord:thread_update", ({ payload }) => {
+      if (payload?.id) mergeThreads([payload]);
+    }).then(u => unsubs.push(u));
+
+    listen<any>("discord:thread_delete", ({ payload }) => {
+      if (payload?.id) removeThread(payload.id);
     }).then(u => unsubs.push(u));
 
     listen<any>("discord:guild_member_add", ({ payload }) => {
@@ -2949,6 +3226,7 @@ export default function App() {
     hasOlderMessagesRef.current = false;
     setOlderMessagesLoading(false);
     setHasOlderMessages(false);
+    setChannelLoadedViaAccount(null);
     setSelectedChannel(channel);
     setForumThreads([]);
     setForumThreadsError("");
@@ -2957,16 +3235,36 @@ export default function App() {
       setMsgLoading(false);
       setMessages([]);
       setCanSend(false);
+      setForumQuery("");
+      setForumTagFilter(null);
       try {
-        if (!channel.guild_id) throw new Error("Forum channel is missing its server ID");
-        const response = await invoke<{ threads?: DiscordChannel[] }>("get_active_guild_threads", { guildId: channel.guild_id });
-        const threads = Array.isArray(response?.threads) ? response.threads : [];
+        const localKnown = activeThreadsRef.current.filter(t => t.parent_id === channel.id);
+        const response = await invoke<{ threads?: DiscordChannel[]; first_messages?: DiscordMessage[] }>(
+          "get_channel_threads",
+          { channelId: channel.id }
+        ).catch(() => ({ threads: [] }));
+
+        const fetched = Array.isArray(response?.threads) ? response.threads : [];
+        const merged = new Map<string, DiscordChannel>();
+        for (const t of localKnown) if (t?.id) merged.set(t.id, t);
+        for (const t of fetched) if (t?.id) merged.set(t.id, { ...(merged.get(t.id) || {}), ...t });
+
+        const allThreads = [...merged.values()]
+          .filter(t => !t.parent_id || t.parent_id === channel.id)
+          .sort((a, b) => (b.last_message_id || b.id).localeCompare(a.last_message_id || a.id));
+
         if (requestId !== channelLoadRequest.current) return;
-        setForumThreads((Array.isArray(threads) ? threads : [])
-          .filter(thread => thread.parent_id === channel.id)
-          .sort((left, right) => (right.last_message_id || right.id).localeCompare(left.last_message_id || left.id)));
+        setForumThreads(allThreads);
+        mergeThreads(allThreads);
       } catch (error) {
-        if (requestId === channelLoadRequest.current) setForumThreadsError(String(error));
+        if (requestId === channelLoadRequest.current) {
+          const fallback = activeThreadsRef.current.filter(t => t.parent_id === channel.id);
+          if (fallback.length > 0) {
+            setForumThreads(fallback);
+          } else {
+            setForumThreadsError(String(error));
+          }
+        }
       } finally {
         if (requestId === channelLoadRequest.current) setForumThreadsLoading(false);
       }
@@ -3159,7 +3457,9 @@ export default function App() {
   };
 
   const jumpToChannel = async (channelId: string) => {
-    let target = channels.find(channel => channel.id === channelId);
+    let target = channels.find(channel => channel.id === channelId)
+      || activeThreads.find(t => t.id === channelId)
+      || forumThreads.find(t => t.id === channelId);
     let targetGuild = target?.guild_id
       ? guilds.find(guild => guild.id === target?.guild_id)
       : selectedGuild;
@@ -3471,6 +3771,31 @@ export default function App() {
     }
   };
 
+  const toggleThreadsDrawer = async () => {
+    if (!selectedChannel) return;
+    const nextOpen = !threadsDrawerOpen;
+    setThreadsDrawerOpen(nextOpen);
+    if (nextOpen) {
+      setChannelThreadsLoading(true);
+      const local = activeThreadsRef.current.filter(t => t.parent_id === selectedChannel.id);
+      setChannelThreadsList(local);
+      try {
+        const response = await invoke<{ threads?: DiscordChannel[] }>(
+          "get_channel_threads",
+          { channelId: selectedChannel.id }
+        );
+        const fetched = Array.isArray(response?.threads) ? response.threads : [];
+        const merged = new Map<string, DiscordChannel>();
+        for (const t of local) if (t?.id) merged.set(t.id, t);
+        for (const t of fetched) if (t?.id) merged.set(t.id, { ...(merged.get(t.id) || {}), ...t });
+        const list = [...merged.values()].sort((a, b) => (b.last_message_id || b.id).localeCompare(a.last_message_id || a.id));
+        setChannelThreadsList(list);
+        mergeThreads(list);
+      } catch {}
+      setChannelThreadsLoading(false);
+    }
+  };
+
   const toggleOwnProfileCard = async () => {
     if (!me) return;
     if (profileCardOpen) {
@@ -3597,9 +3922,10 @@ export default function App() {
     setSending(true);
     try {
       const replyToMessageId = replyToMessage?.channel_id === sendingChannel.id ? replyToMessage.id : null;
+      const asToken = (activeComposerAccount.user.id !== me?.id && activeComposerAccount.token) ? activeComposerAccount.token : null;
       const sent = composerFiles.length
-        ? await invoke<DiscordMessage>("send_message_with_files", { channelId: sendingChannel.id, content, files: composerFiles.map(file => file.uploadId), replyToMessageId })
-        : await invoke<DiscordMessage>("send_message", { channelId: sendingChannel.id, content, replyToMessageId });
+        ? await invoke<DiscordMessage>("send_message_with_files", { channelId: sendingChannel.id, content, files: composerFiles.map(file => file.uploadId), replyToMessageId, asToken })
+        : await invoke<DiscordMessage>("send_message", { channelId: sendingChannel.id, content, replyToMessageId, asToken });
       if (sent && sent.id) {
         if (draftRef.current.trim() === content) {
           setDraft("");
@@ -4261,6 +4587,61 @@ export default function App() {
     return [...guilds].sort((a,b) => { const la=localOrder.get(a.id),lb=localOrder.get(b.id); if(la!==undefined||lb!==undefined){if(la===undefined)return 1;if(lb===undefined)return -1;if(la!==lb)return la-lb;}return (remoteOrder.get(a.id)??(next+(original.get(a.id)||0)))-(remoteOrder.get(b.id)??(next+(original.get(b.id)||0))); });
   }, [guilds, preferences.serverOrder, preferences.cachedServerOrder, preferences.cachedDiscordFolders, discordGuildFolders]);
   const remoteFolderByGuild = useMemo(() => { const map=new Map<string,DiscordGuildFolder>(); for(const folder of (discordGuildFolders?.folders || preferences.cachedDiscordFolders))for(const id of folder.guildIds)map.set(id,folder);return map; },[discordGuildFolders, preferences.cachedDiscordFolders]);
+  const activeComposerAccount = useMemo(() => {
+    if (composerSendingAccountId) {
+      const found = savedAccounts.find(a => a.user.id === composerSendingAccountId);
+      if (found) return found;
+    }
+    const primary = savedAccounts.find(a => a.role === "primary");
+    if (primary) return primary;
+    if (me) return { user: me, token: "", role: "primary" as const };
+    return { user: { id: "unknown", username: "account", discriminator: "0000" } as DiscordUser, token: "", role: "primary" as const };
+  }, [composerSendingAccountId, savedAccounts, me]);
+
+  useEffect(() => {
+    if (!me?.id || savedAccounts.length <= 1) return;
+    const otherAccounts = savedAccounts.filter(a => a.user.id !== me.id && a.token);
+    if (otherAccounts.length === 0) return;
+
+    void (async () => {
+      let changed = false;
+      const nextAltGuilds = { ...altAccountGuilds };
+      for (const alt of otherAccounts) {
+        try {
+          const fetched = await invoke<DiscordGuild[]>("get_guilds", { asToken: alt.token });
+          if (Array.isArray(fetched)) {
+            nextAltGuilds[alt.user.id] = fetched;
+            changed = true;
+          }
+        } catch {}
+      }
+      if (changed) {
+        setAltAccountGuilds(nextAltGuilds);
+        try {
+          localStorage.setItem("voidcord:alt-guilds-cache", JSON.stringify(nextAltGuilds));
+        } catch {}
+      }
+    })();
+  }, [me?.id, savedAccounts]);
+
+  const otherAccountGuilds = useMemo(() => {
+    if (!me?.id) return [];
+    const activeGuildIds = new Set(guilds.map(g => g.id));
+    const seenAltGuildIds = new Set<string>();
+    const list: { guild: DiscordGuild; ownerAccount: SavedDiscordAccount }[] = [];
+    for (const account of savedAccounts) {
+      if (account.user.id === me.id || !account.token) continue;
+      const accountGuilds = altAccountGuilds[account.user.id] || [];
+      for (const g of accountGuilds) {
+        if (!activeGuildIds.has(g.id) && !seenAltGuildIds.has(g.id)) {
+          seenAltGuildIds.add(g.id);
+          list.push({ guild: g, ownerAccount: account });
+        }
+      }
+    }
+    return list;
+  }, [me?.id, guilds, savedAccounts, altAccountGuilds]);
+
   const officialDiscordDm = !!selectedChannel && !selectedChannel.guild_id &&
     !!selectedChannel.recipients?.some(user => user?.bot && user.username?.toLowerCase() === "discord");
   const selectedVoiceChannel = selectedChannel && (
@@ -4288,9 +4669,11 @@ export default function App() {
     window.addEventListener("pointerup", stop, { once: true });
   };
   const selectedProfileBio = memberProfileData?.user?.bio || memberProfileData?.user_profile?.bio || "";
-  const selectedProfileRoleColor = !isDmView && selectedMemberProfile
-    ? getUserRoleColor(selectedMemberProfile.id, guildMembers, guildRoles)
-    : undefined;
+  const selectedProfileRoleColorInfo = !isDmView && selectedMemberProfile
+    ? getUserRoleColorInfo(selectedMemberProfile.id, guildMembers, guildRoles)
+    : {};
+  const selectedProfileRoleColor = selectedProfileRoleColorInfo.hex;
+  const selectedProfileRoleStyle = selectedProfileRoleColorInfo.style;
   const selectedProfileIsFriend = !!selectedMemberProfile
     && friendRelationships.some(relationship => relationship.user.id === selectedMemberProfile.id);
   const selectedProfileIsBlocked = !!selectedMemberProfile
@@ -4405,6 +4788,34 @@ export default function App() {
                 </React.Fragment>
               );
             })}
+
+            {otherAccountGuilds.length > 0 && (
+              <>
+                <div className="rail-sep rail-sep-alt" title="Servers from other accounts" />
+                {otherAccountGuilds.map(({ guild: g, ownerAccount }) => (
+                  <button
+                    key={`alt-${ownerAccount.user.id}-${g.id}`}
+                    type="button"
+                    className="server-icon alt-server-icon"
+                    title={`${g.name}\n(In ${displayName(ownerAccount.user)}'s account — Click to join or switch)`}
+                    onClick={() => {
+                      setAltGuildJoinError(null);
+                      setAltGuildJoinModal({ guild: g, ownerAccount });
+                    }}
+                  >
+                    <div className="alt-server-avatar-wrap">
+                      <GuildIcon guild={g} />
+                      <img
+                        src={avatarUrl(ownerAccount.user, 18)}
+                        alt=""
+                        className="alt-server-owner-badge"
+                        title={`In ${displayName(ownerAccount.user)}'s account`}
+                      />
+                    </div>
+                  </button>
+                ))}
+              </>
+            )}
           </div>
 
           <div className="rail-bottom-tools">
@@ -4503,6 +4914,14 @@ export default function App() {
                 {channelTree.uncategorized.map(c => (
                   <React.Fragment key={c.id}>
                     <ChannelRow channel={c} selected={selectedChannel?.id === c.id} locked={knownLockedChannels.has(c.id)} unread={unreadByChannel[c.id] || 0} onClick={() => selectChannel(c)} onContextMenu={event => openContextMenu(event, { kind: "channel", channel: c })} />
+                          {activeThreads.filter(t => t.parent_id === c.id).map(thread => (
+                            <button key={thread.id} className={`channel-row channel-thread-nested ${selectedChannel?.id === thread.id ? "selected" : ""}`} onClick={() => void selectChannel(thread)} title={thread.name || "Thread"}>
+                              <span className="thread-tree-pipe">↳</span>
+                              <MessageSquare size={13} className="channel-thread-icon" />
+                              <span className="channel-thread-name">{thread.name || "thread"}</span>
+                              {(thread.message_count ?? 0) > 0 && <span className="channel-thread-count">{thread.message_count}</span>}
+                            </button>
+                          ))}
                     {isVoiceChannel(c) && gatewayVoiceStates.filter(state => state.channel_id === c.id).map(state => {
                       const member = guildMembers.find(item => (item?.user?.id || item?.id) === state.user_id);
                       const user = state.member?.user || state.user || member?.user || (state.user_id === me.id ? me : undefined);
@@ -4527,6 +4946,14 @@ export default function App() {
                       {!collapsed && children.map(c => (
                         <React.Fragment key={c.id}>
                           <ChannelRow channel={c} selected={selectedChannel?.id === c.id} locked={knownLockedChannels.has(c.id)} unread={unreadByChannel[c.id] || 0} onClick={() => selectChannel(c)} onContextMenu={event => openContextMenu(event, { kind: "channel", channel: c })} />
+                          {activeThreads.filter(t => t.parent_id === c.id).map(thread => (
+                            <button key={thread.id} className={`channel-row channel-thread-nested ${selectedChannel?.id === thread.id ? "selected" : ""}`} onClick={() => void selectChannel(thread)} title={thread.name || "Thread"}>
+                              <span className="thread-tree-pipe">↳</span>
+                              <MessageSquare size={13} className="channel-thread-icon" />
+                              <span className="channel-thread-name">{thread.name || "thread"}</span>
+                              {(thread.message_count ?? 0) > 0 && <span className="channel-thread-count">{thread.message_count}</span>}
+                            </button>
+                          ))}
                           {isVoiceChannel(c) && gatewayVoiceStates.filter(state => state.channel_id === c.id).map(state => {
                             const member = guildMembers.find(item => (item?.user?.id || item?.id) === state.user_id);
                             const user = state.member?.user || state.user || member?.user || (state.user_id === me.id ? me : undefined);
@@ -4592,7 +5019,22 @@ export default function App() {
                   <div className="profile-card-loading"><Loader2 size={14} className="spinning" /> Loading profile…</div>
                 ) : (
                   <>
-                    <strong>{displayName(profileUser)} <PlatformIndicators platforms={memberPlatforms[profileUser.id] || []} /></strong>
+                    {(() => {
+                      const dns = (profileUser as any).display_name_styles;
+                      const fontClass = displayNameFontClass(dns?.font_id);
+                      const nameColors: number[] | undefined = dns?.colors;
+                      let nameStyle: React.CSSProperties = {};
+                      if (nameColors && nameColors.length >= 2) {
+                        nameStyle = roleColorStyle(nameColors[0], nameColors[1], nameColors[2]);
+                      } else if (nameColors && nameColors.length === 1 && nameColors[0]) {
+                        nameStyle = { color: '#' + nameColors[0].toString(16).padStart(6, '0') };
+                      }
+                      return (
+                        <strong className={fontClass || undefined} style={nameStyle}>
+                          {displayName(profileUser)} <PlatformIndicators platforms={memberPlatforms[profileUser.id] || []} />
+                        </strong>
+                      );
+                    })()}
                     <span className="profile-popover-handle">@{profileUser.username}{formatDiscriminator(profileUser)}</span>
                     {userProfile?.badges?.length > 0 && (
                       <div className="profile-popover-badges">
@@ -5123,16 +5565,45 @@ export default function App() {
         <section className="chat-area">
           <div className="channel-header">
             <div className="header-left">
-              {selectedChannel ? (isVoiceChannel(selectedChannel) ? <Volume2 size={18} /> : <Hash size={18} />) : <Hash size={18} />}
-              <strong
-                className="channel-name"
-                onContextMenu={selectedChannel
-                  ? event => openContextMenu(event, { kind: "channel", channel: selectedChannel })
-                  : undefined}
-              >
-                {selectedChannel ? channelDisplayName(selectedChannel) : "Select a channel"}
-              </strong>
-              {selectedChannel?.topic && (
+              {isThreadChannel(selectedChannel) ? (
+                <div className="thread-header-breadcrumbs">
+                  <MessageSquare size={18} className="thread-header-icon" />
+                  {selectedChannel?.parent_id && (
+                    <>
+                      <button
+                        type="button"
+                        className="thread-header-parent-btn"
+                        onClick={() => {
+                          const parent = channels.find(c => c.id === selectedChannel?.parent_id);
+                          if (parent) void selectChannel(parent);
+                        }}
+                        title="Return to parent channel"
+                      >
+                        #{channels.find(c => c.id === selectedChannel?.parent_id)?.name || "channel"}
+                      </button>
+                      <ChevronRight size={14} className="thread-breadcrumb-separator" />
+                    </>
+                  )}
+                  <strong className="channel-name">{channelDisplayName(selectedChannel)}</strong>
+                  <span className="thread-pill-badge">THREAD</span>
+                  {selectedChannel?.thread_metadata?.archived && (
+                    <span className="thread-pill-badge archived">ARCHIVED</span>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {selectedChannel ? (isVoiceChannel(selectedChannel) ? <Volume2 size={18} /> : isForumChannel(selectedChannel) ? <MessageSquare size={18} /> : <Hash size={18} />) : <Hash size={18} />}
+                  <strong
+                    className="channel-name"
+                    onContextMenu={selectedChannel
+                      ? event => openContextMenu(event, { kind: "channel", channel: selectedChannel })
+                      : undefined}
+                  >
+                    {selectedChannel ? channelDisplayName(selectedChannel) : "Select a channel"}
+                  </strong>
+                </>
+              )}
+              {selectedChannel?.topic && !isThreadChannel(selectedChannel) && (
                 <>
                   <div className="header-divider" />
                   <span className="desc">
@@ -5156,6 +5627,16 @@ export default function App() {
                 </button>
               )}
               <button className="icon-btn" title="Pins"><Pin size={18} /></button>
+              {selectedChannel && !isDmView && (isTextChannel(selectedChannel) || isForumChannel(selectedChannel) || isThreadChannel(selectedChannel)) && (
+                <button
+                  className={`icon-btn ${threadsDrawerOpen ? "active" : ""}`}
+                  title="Threads"
+                  aria-label="Threads"
+                  onClick={() => void toggleThreadsDrawer()}
+                >
+                  <MessageSquare size={18} />
+                </button>
+              )}
               <button className={`icon-btn ${memberOpen ? "active" : ""}`} title="Member list" onClick={() => setMemberOpen(v => !v)}><Sparkles size={18} /></button>
               <button className="icon-btn" title="Deleted message log" aria-label="Deleted message log" onClick={() => void openMessageLogger()}><History size={18} /></button>
               <button className="icon-btn" title="Edited message log" aria-label="Edited message log" onClick={() => void openEditedMessageLogger()}><Edit3 size={17} /></button>
@@ -5297,20 +5778,87 @@ export default function App() {
             {selectedChannel && isForumChannel(selectedChannel) && (
               <section className="forum-browser" aria-label="Forum posts">
                 <header className="forum-browser-header">
-                  <div><h2>Forum posts</h2><p>{selectedChannel.topic || "Browse discussions in this forum"}</p></div>
-                  <span>{forumThreads.length} active</span>
+                  <div>
+                    <h2>Forum posts</h2>
+                    <p>{selectedChannel.topic || "Browse discussions in this forum"}</p>
+                  </div>
+                  <span>{forumThreads.length} posts</span>
                 </header>
+
+                <div className="forum-controls">
+                  <div className="forum-search-bar">
+                    <Search size={15} />
+                    <input
+                      placeholder="Search forum posts…"
+                      value={forumQuery}
+                      onChange={e => setForumQuery(e.target.value)}
+                    />
+                    {forumQuery && <button type="button" onClick={() => setForumQuery("")}><X size={13} /></button>}
+                  </div>
+
+                  <div className="forum-status-filter">
+                    <button type="button" className={forumFilter === "all" ? "active" : ""} onClick={() => setForumFilter("all")}>All</button>
+                    <button type="button" className={forumFilter === "active" ? "active" : ""} onClick={() => setForumFilter("active")}>Active</button>
+                    <button type="button" className={forumFilter === "archived" ? "active" : ""} onClick={() => setForumFilter("archived")}>Archived</button>
+                  </div>
+                </div>
+
+                {selectedChannel.available_tags && selectedChannel.available_tags.length > 0 && (
+                  <div className="forum-tags-bar">
+                    <span className="forum-tags-label">Tags:</span>
+                    {selectedChannel.available_tags.map(tag => (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        className={`forum-tag-chip ${forumTagFilter === tag.id ? "active" : ""}`}
+                        onClick={() => setForumTagFilter(prev => prev === tag.id ? null : tag.id)}
+                      >
+                        {tag.emoji_name ? `${tag.emoji_name} ` : ""}{tag.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {forumThreadsLoading && <div className="forum-browser-state"><Loader2 size={16} className="spinning" /> Loading forum posts…</div>}
                 {!forumThreadsLoading && forumThreadsError && <div className="forum-browser-state forum-browser-error">Could not load forum posts: {forumThreadsError}</div>}
-                {!forumThreadsLoading && !forumThreadsError && forumThreads.length === 0 && <div className="forum-browser-state">No active posts found. Archived posts are not included yet.</div>}
+                {!forumThreadsLoading && !forumThreadsError && filteredForumThreads.length === 0 && (
+                  <div className="forum-browser-state">
+                    {forumQuery || forumTagFilter || forumFilter !== "all"
+                      ? "No forum posts match your filters."
+                      : "No posts found in this forum."}
+                  </div>
+                )}
+
                 <div className="forum-post-list">
-                  {forumThreads.map(thread => (
-                    <button type="button" className="forum-post-card" key={thread.id} onClick={() => void selectChannel(thread)}>
-                      <span className="forum-post-icon"><MessageSquare size={18} /></span>
-                      <span className="forum-post-copy"><strong>{thread.name || "Untitled post"}</strong><small>{thread.message_count ?? 0} replies · {thread.member_count ?? 0} members</small></span>
-                      <ChevronRight size={17} />
-                    </button>
-                  ))}
+                  {filteredForumThreads.map(thread => {
+                    const isArchived = !!thread.thread_metadata?.archived;
+                    const tags = (selectedChannel.available_tags || []).filter(tag => thread.applied_tags?.includes(tag.id));
+                    return (
+                      <button type="button" className={`forum-post-card ${isArchived ? "archived" : ""}`} key={thread.id} onClick={() => void selectChannel(thread)}>
+                        <span className="forum-post-icon"><MessageSquare size={18} /></span>
+                        <div className="forum-post-copy">
+                          <div className="forum-post-title-row">
+                            <strong>{thread.name || "Untitled post"}</strong>
+                            {isArchived && <span className="thread-pill-badge archived">ARCHIVED</span>}
+                          </div>
+                          {tags.length > 0 && (
+                            <div className="forum-post-tags">
+                              {tags.map(t => (
+                                <span key={t.id} className="forum-post-tag-badge">
+                                  {t.emoji_name ? `${t.emoji_name} ` : ""}{t.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          <small>
+                            {thread.message_count ?? 0} {thread.message_count === 1 ? "reply" : "replies"} · {thread.member_count ?? 0} {thread.member_count === 1 ? "member" : "members"}
+                            {thread.last_message_id ? ` · Active ${snowflakeTime(thread.last_message_id)}` : ""}
+                          </small>
+                        </div>
+                        <ChevronRight size={17} />
+                      </button>
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -5473,8 +6021,8 @@ export default function App() {
             )}
             <div className={`composer-box ${editingMessageId ? "editing-message" : ""} ${!canSend || officialDiscordDm || channelAccess === "MISSING_ACCESS" ? "composer-readonly" : ""}`}>
                 {officialDiscordDm && <span className="composer-readonly-hint">Official Discord messages are read-only</span>}
-                {isForumChannel(selectedChannel!) && <span className="composer-readonly-hint">Open a forum post to reply. Creating new posts is not supported yet.</span>}
-                 {!isForumChannel(selectedChannel!) && !officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
+                {isForumChannel(selectedChannel) && <span className="composer-readonly-hint">Open a forum post to reply. Creating new posts is not supported yet.</span>}
+                 {!isForumChannel(selectedChannel) && !officialDiscordDm && !canSend && channelAccess !== "MISSING_ACCESS" && <span className="composer-readonly-hint">You can read here, but sending is disabled</span>}
                 {channelAccess === "MISSING_ACCESS" && <span className="composer-readonly-hint">{messages.length > 0 ? "Locked channel · Viewing offline cached messages (read-only)" : "You don’t have access to this channel"}</span>}
                 {editingMessageId && (
                   <div className="message-editing-indicator">
@@ -5482,6 +6030,139 @@ export default function App() {
                     <button type="button" onClick={() => { setEditingMessageId(null); setDraft(""); }} aria-label="Cancel editing"><X size={13} /></button>
                   </div>
                 )}
+                <div className="composer-account-wrapper">
+                  <button
+                    type="button"
+                    className={`composer-account-btn role-${activeComposerAccount.role || "primary"}`}
+                    onClick={() => setComposerAccountMenuOpen(open => !open)}
+                    title={`Sending as: ${displayName(activeComposerAccount.user)} (${activeComposerAccount.role || "primary"}) - Click to manage accounts`}
+                    aria-label="Account manager"
+                  >
+                    <img src={avatarUrl(activeComposerAccount.user, 26)} alt="" className="composer-account-avatar" />
+                    <span className={`composer-account-badge role-${activeComposerAccount.role || "primary"}`}>
+                      {(activeComposerAccount.role || "primary").slice(0, 1).toUpperCase()}
+                    </span>
+                  </button>
+
+                  {composerAccountMenuOpen && (
+                    <div className="composer-account-popover" onClick={e => e.stopPropagation()}>
+                      <div className="account-popover-header">
+                        <div className="account-popover-title">
+                          <Users size={15} />
+                          <strong>account manager</strong>
+                        </div>
+                        <button type="button" className="icon-btn" onClick={() => setComposerAccountMenuOpen(false)} aria-label="Close account manager">
+                          <X size={14} />
+                        </button>
+                      </div>
+
+                      <div className="account-popover-using-banner">
+                        <span>Using: <strong>{displayName(activeComposerAccount.user)}</strong> ({activeComposerAccount.role || "primary"})</span>
+                      </div>
+
+                      <div className="account-popover-list">
+                        {(savedAccounts.length > 0 ? savedAccounts : (me ? [{ user: me, token: "", role: "primary" as const }] : [])).map(account => {
+                          const isCurrentActive = account.user.id === activeComposerAccount.user.id;
+                          const role = account.role || (account.user.id === me?.id ? "primary" : "secondary");
+                          
+                          let statusText = "ready to use";
+                          let statusClass = "ready";
+                          if (!online || gatewayStatus === "connecting") {
+                            statusText = "not ready - connecting to gateway";
+                            statusClass = "connecting";
+                          } else if (knownLockedChannels.has(selectedChannel?.id || "") || channelAccess === "MISSING_ACCESS") {
+                            if (channelLoadedViaAccount?.id === account.user.id) {
+                              statusText = "ready to use (unlocked this channel)";
+                              statusClass = "ready";
+                            } else if (account.user.id === me?.id) {
+                              statusText = "not usable - unable to view current channel (age-restricted, locked?)";
+                              statusClass = "locked";
+                            }
+                          }
+
+                          return (
+                            <div className={`account-popover-item ${isCurrentActive ? "active" : ""}`} key={account.user.id}>
+                              <div
+                                className="account-popover-item-row"
+                                onClick={() => {
+                                  if (role !== "readonly") {
+                                    setComposerSendingAccountId(account.user.id);
+                                  }
+                                }}
+                              >
+                                <img src={avatarUrl(account.user, 36)} alt="" className="account-popover-avatar" />
+                                <div className="account-popover-item-names">
+                                  <div className="account-popover-name-line">
+                                    <strong>{displayName(account.user)}</strong>
+                                    <span className={`account-role-tag role-${role}`}>({role})</span>
+                                    {isCurrentActive && <span className="account-active-badge">Active</span>}
+                                  </div>
+                                  <span className={`account-popover-status status-${statusClass}`}>
+                                    {statusText}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="account-popover-role-actions">
+                                <span className="role-action-label">Assign:</span>
+                                <button
+                                  type="button"
+                                  className={`role-btn ${role === "primary" ? "active" : ""}`}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    const next = await updateAccountRole(account.user.id, "primary", savedAccounts);
+                                    setSavedAccounts(next);
+                                  }}
+                                  title="Assign as Primary account"
+                                >
+                                  Primary
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`role-btn ${role === "secondary" ? "active" : ""}`}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    const next = await updateAccountRole(account.user.id, "secondary", savedAccounts);
+                                    setSavedAccounts(next);
+                                  }}
+                                  title="Assign as Secondary account"
+                                >
+                                  Secondary
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`role-btn ${role === "readonly" ? "active" : ""}`}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    const next = await updateAccountRole(account.user.id, "readonly", savedAccounts);
+                                    setSavedAccounts(next);
+                                  }}
+                                  title="Assign as ReadOnly account"
+                                >
+                                  ReadOnly
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="account-popover-footer">
+                        <button
+                          type="button"
+                          className="account-popover-manage-btn"
+                          onClick={() => {
+                            setComposerAccountMenuOpen(false);
+                            setAccountSwitcherOpen(true);
+                          }}
+                        >
+                          <Users size={14} />
+                          Switch session / Add account…
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button className="plus-btn" title={`Attach files — ${uploadLimitLabel} account limit`} onClick={() => void chooseComposerFiles()} disabled={!selectedChannel || officialDiscordDm || !canSend}>+</button>
                 {composerFiles.length > 0 && (
                   <div className="composer-attachments" aria-label={`Attachments to send, up to ${uploadLimitLabel}`}>
@@ -5737,7 +6418,49 @@ export default function App() {
               </button>
             </form>
           </aside>
-        ) : memberOpen && !showingDirectory && (
+        ) : (
+          <>
+            {threadsDrawerOpen && selectedChannel && (
+              <aside className="threads-drawer" aria-label="Channel threads">
+                <div className="threads-drawer-header">
+                  <div className="threads-drawer-title">
+                    <MessageSquare size={16} />
+                    <strong>Threads in #{selectedChannel.name || "channel"}</strong>
+                  </div>
+                  <button type="button" className="threads-drawer-close" onClick={() => setThreadsDrawerOpen(false)} aria-label="Close threads drawer">
+                    <X size={15} />
+                  </button>
+                </div>
+                {channelThreadsLoading && (
+                  <div className="threads-drawer-state"><Loader2 size={16} className="spinning" /> Loading threads…</div>
+                )}
+                {!channelThreadsLoading && channelThreadsList.length === 0 && (
+                  <div className="threads-drawer-state">No threads found in this channel.</div>
+                )}
+                <div className="threads-drawer-list">
+                  {channelThreadsList.map(thread => (
+                    <button
+                      key={thread.id}
+                      type="button"
+                      className="threads-drawer-item"
+                      onClick={() => {
+                        setThreadsDrawerOpen(false);
+                        void selectChannel(thread);
+                      }}
+                    >
+                      <div className="threads-drawer-item-header">
+                        <strong>{thread.name || "Thread"}</strong>
+                        {thread.thread_metadata?.archived && <span className="thread-pill-badge archived">ARCHIVED</span>}
+                      </div>
+                      <small>
+                        {thread.message_count ?? 0} {thread.message_count === 1 ? "reply" : "replies"} · {thread.member_count ?? 0} {thread.member_count === 1 ? "member" : "members"}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              </aside>
+            )}
+            {memberOpen && !showingDirectory && (
           <aside className="member-panel">
             <div className="member-header">
               {isDmView && selectedChannel?.type === CHANNEL_TYPE_DM
@@ -5808,9 +6531,11 @@ export default function App() {
                     const name = m.nick || userObj.global_name || userObj.username;
                     const avatarSrc = avatarUrl(userObj, 32);
                     const userStatus = memberPresences[userObj.id] || "offline";
-                    const userRoleColor = !isDmView
-                      ? getUserRoleColor(userObj.id, guildMembers, guildRoles)
-                      : undefined;
+                    const userRoleColorInfo = !isDmView
+                      ? getUserRoleColorInfo(userObj.id, guildMembers, guildRoles)
+                      : {};
+                    const userRoleColor = userRoleColorInfo.hex;
+                    const userRoleStyle = userRoleColorInfo.style;
 
                     return (
                       <div key={userObj.id} className="member-item" onContextMenu={event => openContextMenu(event, { kind: "user", user: userObj, source: "member", guildId: selectedGuild?.id })} onClick={() => handleOpenMemberProfile(userObj)} style={{ cursor: "pointer" }}>
@@ -5820,7 +6545,7 @@ export default function App() {
                           <span className={`status-dot status-${userStatus}`} />
                         </div>
                         <div className="member-info">
-                          <strong style={{ color: userRoleColor || undefined }}>{name}</strong>
+                          <strong style={userRoleStyle || { color: userRoleColor || undefined }}>{name}</strong>
                           {formatDiscriminator(userObj) && <span className="author-discriminator" style={{ marginLeft: 3 }}>{formatDiscriminator(userObj)}</span>}
                           <BotTag user={userObj} style={{ fontSize: 9, marginLeft: 4 }} />
                           <small className="member-subline">{userObj.username}{formatDiscriminator(userObj)}<PlatformIndicators platforms={memberPlatforms[userObj.id] || []} /></small>
@@ -5832,6 +6557,8 @@ export default function App() {
               ))}
             </div>}
           </aside>
+            )}
+          </>
         )}
       </section>
 
@@ -5853,9 +6580,21 @@ export default function App() {
               style={{
                 background: bannerUrl(memberProfileData?.user || selectedMemberProfile, 512)
                   ? `url(${bannerUrl(memberProfileData?.user || selectedMemberProfile, 512)}) center/cover no-repeat`
-                  : "linear-gradient(135deg, #2b3040 0%, #1a1e2b 100%)"
+                  : "linear-gradient(135deg, #2b3040 0%, #1a1e2b 100%)",
+                position: 'relative',
               }}
             >
+              {(() => {
+                const effUser = (memberProfileData?.user || selectedMemberProfile) as any;
+                const effId = effUser?.profile_effect?.id || effUser?.profile_effect_id;
+                if (!effId) return null;
+                const effUrl = `https://cdn.discordapp.com/profile-effects/assets/${effId}/intro.png`;
+                return (
+                  <div className="profile-effect-overlay">
+                    <img src={effUrl} alt="" aria-hidden="true" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                  </div>
+                );
+              })()}
               <div className="profile-banner-tag">VoidCord Profile</div>
             </div>
 
@@ -5872,7 +6611,18 @@ export default function App() {
             {fullProfileOpen ? (
               <div className="profile-full-body">
                 <button className="profile-back-button" onClick={() => setFullProfileOpen(false)}>← Back to profile card</button>
-                <h2 style={{ color: selectedProfileRoleColor }}>{displayName(selectedMemberProfile)}<BotTag user={selectedMemberProfile} /></h2>
+                {(() => {
+                  const dns = ((memberProfileData?.user || selectedMemberProfile) as any)?.display_name_styles;
+                  const fontClass = displayNameFontClass(dns?.font_id);
+                  const nameColors: number[] | undefined = dns?.colors;
+                  let nameStyle: React.CSSProperties = selectedProfileRoleStyle || { color: selectedProfileRoleColor };
+                  if (nameColors && nameColors.length >= 2) {
+                    nameStyle = roleColorStyle(nameColors[0], nameColors[1], nameColors[2]);
+                  } else if (nameColors && nameColors.length === 1 && nameColors[0] && !selectedProfileRoleColor) {
+                    nameStyle = { color: '#' + nameColors[0].toString(16).padStart(6, '0') };
+                  }
+                  return <h2 className={fontClass || undefined} style={nameStyle}>{displayName(selectedMemberProfile)}<BotTag user={selectedMemberProfile} /></h2>;
+                })()}
                 <span className="profile-handle">@{selectedMemberProfile.username}{formatDiscriminator(selectedMemberProfile)}</span>
                 {memberProfileData?.user_profile?.pronouns && <span className="profile-pronouns">{memberProfileData.user_profile.pronouns}</span>}
                 <h3>About me</h3>
@@ -5908,7 +6658,18 @@ export default function App() {
               ) : (
                 <>
                   <div className="profile-identity">
-                    <h3 className="profile-display-name" style={{ color: selectedProfileRoleColor }}>{displayName(selectedMemberProfile)}<BotTag user={selectedMemberProfile} /></h3>
+                    {(() => {
+                      const dns = ((memberProfileData?.user || selectedMemberProfile) as any)?.display_name_styles;
+                      const fontClass = displayNameFontClass(dns?.font_id);
+                      const nameColors: number[] | undefined = dns?.colors;
+                      let nameStyle: React.CSSProperties = selectedProfileRoleStyle || { color: selectedProfileRoleColor };
+                      if (nameColors && nameColors.length >= 2) {
+                        nameStyle = roleColorStyle(nameColors[0], nameColors[1], nameColors[2]);
+                      } else if (nameColors && nameColors.length === 1 && nameColors[0] && !selectedProfileRoleColor) {
+                        nameStyle = { color: '#' + nameColors[0].toString(16).padStart(6, '0') };
+                      }
+                      return <h3 className={["profile-display-name", fontClass].filter(Boolean).join(" ")} style={nameStyle}>{displayName(selectedMemberProfile)}<BotTag user={selectedMemberProfile} /></h3>;
+                    })()}
                     <div className="profile-handle-row">
                       <span className="profile-handle">{selectedMemberProfile.username}{formatDiscriminator(selectedMemberProfile)}</span>
                       {memberProfileData?.user_profile?.pronouns && (
@@ -6279,6 +7040,112 @@ export default function App() {
               </div>
             )}
             <div className="feature-modal-actions"><button type="button" onClick={() => setSettingsOpen(false)}>Done</button></div>
+          </section>
+        </div>
+      )}
+
+      {altGuildJoinModal && (
+        <div className="feature-modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget && !altGuildJoinLoading) setAltGuildJoinModal(null); }}>
+          <section className="feature-modal alt-join-modal" role="dialog" aria-modal="true" aria-labelledby="alt-join-title">
+            <header className="feature-modal-header">
+              <div className="alt-join-header-info">
+                <GuildIcon guild={altGuildJoinModal.guild} />
+                <div>
+                  <h2 id="alt-join-title">{altGuildJoinModal.guild.name}</h2>
+                  <p className="alt-join-subtitle">
+                    Server from <strong>{displayName(altGuildJoinModal.ownerAccount.user)}</strong>'s account
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setAltGuildJoinModal(null)}
+                disabled={altGuildJoinLoading}
+                aria-label="Close"
+              >
+                <X size={17} />
+              </button>
+            </header>
+
+            <div className="alt-join-warning-banner">
+              <AlertTriangle size={20} className="alt-join-warning-icon" />
+              <div className="alt-join-warning-text">
+                <strong>Joining is public!</strong>
+                <span>
+                  Other server members will see <strong>{displayName(me || { id: "", username: "you", discriminator: "0000" } as DiscordUser)}</strong> join this server.
+                </span>
+              </div>
+            </div>
+
+            {altGuildJoinError && (
+              <div className="feature-field-error" style={{ margin: "10px 16px" }}>
+                {altGuildJoinError}
+              </div>
+            )}
+
+            <div className="alt-join-modal-actions">
+              <button
+                type="button"
+                className="alt-join-primary-btn"
+                disabled={altGuildJoinLoading}
+                onClick={async () => {
+                  setAltGuildJoinLoading(true);
+                  setAltGuildJoinError(null);
+                  try {
+                    const inviteCode = await invoke<string>("get_or_create_guild_invite", {
+                      guildId: altGuildJoinModal.guild.id,
+                      asToken: altGuildJoinModal.ownerAccount.token,
+                    });
+                    await invoke<any>("join_guild_invite", { inviteCode });
+                    notify(`Successfully joined ${altGuildJoinModal.guild.name}!`);
+                    const updatedGuilds = await invoke<DiscordGuild[]>("get_guilds", { asToken: null });
+                    if (Array.isArray(updatedGuilds)) {
+                      setGuilds(updatedGuilds);
+                    }
+                    const target = updatedGuilds.find(g => g.id === altGuildJoinModal.guild.id) || altGuildJoinModal.guild;
+                    setAltGuildJoinModal(null);
+                    setIsDmView(false);
+                    void selectGuild(target);
+                  } catch (err) {
+                    setAltGuildJoinError(String(err));
+                  } finally {
+                    setAltGuildJoinLoading(false);
+                  }
+                }}
+              >
+                {altGuildJoinLoading ? "Joining server…" : `Auto-Invite & Join as ${displayName(me || { id: "", username: "you", discriminator: "0000" } as DiscordUser)}`}
+              </button>
+
+              <button
+                type="button"
+                className="alt-join-switch-btn"
+                disabled={altGuildJoinLoading}
+                onClick={async () => {
+                  const targetToken = altGuildJoinModal.ownerAccount.token;
+                  setAltGuildJoinModal(null);
+                  if (targetToken) {
+                    try {
+                      const user = await invoke<DiscordUser>("set_token", { token: targetToken });
+                      handleAccountConnected(user, targetToken, savedAccounts);
+                    } catch (err) {
+                      notify(`Could not switch session: ${err}`);
+                    }
+                  }
+                }}
+              >
+                Switch to {displayName(altGuildJoinModal.ownerAccount.user)}'s session
+              </button>
+
+              <button
+                type="button"
+                className="alt-join-cancel-btn"
+                disabled={altGuildJoinLoading}
+                onClick={() => setAltGuildJoinModal(null)}
+              >
+                Cancel
+              </button>
+            </div>
           </section>
         </div>
       )}
@@ -6722,7 +7589,7 @@ function ChannelRow({
       onContextMenu={onContextMenu}
       title={locked ? "Permission check: this channel is hidden for the current account" : channel.name}
     >
-      {isVoice ? <Volume2 size={16} /> : locked ? <LockKeyhole size={15} /> : <Hash size={16} />}
+      {isVoice ? <Volume2 size={16} /> : isForumChannel(channel) ? <MessageSquare size={16} /> : locked ? <LockKeyhole size={15} /> : <Hash size={16} />}
       <span style={{ flex: 1, textAlign: "left" }}>{channel.name}</span>
       {locked && <span className="channel-lock-label">LOCKED</span>}
       {!!unread && <span className="channel-unread-count">{unread > 99 ? "99+" : unread}</span>}
@@ -7039,6 +7906,24 @@ function MessageContent({
         ?.map(a => (
           <a key={a.id} href={a.url} target="_blank" rel="noopener noreferrer" className="msg-file-link">📎 {a.filename}</a>
         ))}
+
+      {m.thread && (
+        <div className="message-thread-card" role="button" tabIndex={0} onClick={() => onChannelClick?.(m.thread!.id)}>
+          <div className="message-thread-spine" />
+          <div className="message-thread-body">
+            <div className="message-thread-header">
+              <MessageSquare size={14} className="message-thread-icon" />
+              <strong className="message-thread-name">{m.thread.name || "Thread"}</strong>
+              {m.thread.thread_metadata?.archived && <span className="thread-pill-badge archived">ARCHIVED</span>}
+            </div>
+            <div className="message-thread-footer">
+              <span>{m.thread.message_count ?? 0} {m.thread.message_count === 1 ? "reply" : "replies"}</span>
+              <span className="thread-footer-bullet">•</span>
+              <span className="thread-footer-link">Open thread ➔</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {m.components && m.components.length > 0 && (
         <DiscordComponents

@@ -1,3 +1,5 @@
+import React from 'react';
+
 // Discord API types matching v10 payloads
 
 export interface DiscordAvatarDecoration {
@@ -21,6 +23,34 @@ export interface DiscordPrimaryGuild {
   badge?: string;
 }
 
+export interface DiscordRoleColors {
+  primary_color?: number | null;
+  secondary_color?: number | null;
+  tertiary_color?: number | null;
+}
+
+export interface DiscordRole {
+  id: string;
+  name: string;
+  color: number;
+  colors?: DiscordRoleColors | null;
+  hoist?: boolean;
+  icon?: string | null;
+  unicode_emoji?: string | null;
+  position: number;
+  permissions: string;
+  managed?: boolean;
+  mentionable?: boolean;
+  tags?: {
+    bot_id?: string;
+    integration_id?: string;
+    premium_subscriber?: null;
+    subscription_listing_id?: string;
+    available_for_purchase?: null;
+    guild_connections?: null;
+  } | null;
+}
+
 export interface DiscordUser {
   id: string;
   username: string;
@@ -39,6 +69,12 @@ export interface DiscordUser {
   collectibles?: DiscordCollectibles | null;
   primary_guild?: DiscordPrimaryGuild | null;
   profile_effect_id?: string | null;
+  profile_effect?: { id: string; expires_at?: number | null } | null;
+  display_name_styles?: {
+    colors?: number[];
+    effect_id?: number;
+    font_id?: number;
+  } | null;
 }
 
 export interface DiscordRelationship {
@@ -76,6 +112,20 @@ export interface DiscordChannel {
   permission_overwrites?: { id: string; type: number; allow: string; deny: string }[];
   recipients?: DiscordUser[];
   icon?: string | null;
+  owner_id?: string;
+  applied_tags?: string[];
+  available_tags?: Array<{ id: string; name: string; moderated?: boolean; emoji_id?: string | null; emoji_name?: string | null }>;
+  default_thread_rate_limit_per_user?: number;
+  default_sort_order?: number | null;
+  default_forum_layout?: number;
+  thread_metadata?: {
+    archived: boolean;
+    auto_archive_duration: number;
+    archive_timestamp: string;
+    locked: boolean;
+    invitable?: boolean;
+    create_timestamp?: string | null;
+  };
 }
 
 export interface DiscordAttachment {
@@ -190,6 +240,7 @@ export interface DiscordMessage {
   deleted_at?: number;
   mentions?: DiscordUser[];
   mention_roles?: string[];
+  thread?: DiscordChannel;
 }
 
 // ── Message Components (buttons, selects) ──────────────────────────────────
@@ -377,6 +428,49 @@ export function primaryGuildBadgeUrl(guildId: string | undefined, badgeHash: str
   return `https://cdn.discordapp.com/guild-tag-badges/${guildId}/${badgeHash}.png`;
 }
 
+// Display-name font helper
+// font_id: 3=Cherry Bomb One (Sakura), 4=Chicle (Jellybean); others=default
+export function displayNameFontClass(fontId?: number | null): string {
+  if (fontId === 3) return 'dn-font-3';
+  if (fontId === 4) return 'dn-font-4';
+  return '';
+}
+
+// Role gradient style helper
+export function roleColorStyle(
+  primaryColor?: number | null,
+  secondaryColor?: number | null,
+  tertiaryColor?: number | null
+): React.CSSProperties {
+  const toHex = (n: number) => '#' + n.toString(16).padStart(6, '0');
+  if (secondaryColor != null && tertiaryColor != null) {
+    return {
+      background: `linear-gradient(90deg, ${toHex(primaryColor ?? 0)}, ${toHex(secondaryColor)}, ${toHex(tertiaryColor)})`,
+      WebkitBackgroundClip: 'text',
+      WebkitTextFillColor: 'transparent',
+      backgroundClip: 'text',
+    };
+  }
+  if (secondaryColor != null) {
+    return {
+      background: `linear-gradient(90deg, ${toHex(primaryColor ?? 0)}, ${toHex(secondaryColor)})`,
+      WebkitBackgroundClip: 'text',
+      WebkitTextFillColor: 'transparent',
+      backgroundClip: 'text',
+    };
+  }
+  if (primaryColor != null && primaryColor !== 0) {
+    return { color: toHex(primaryColor) };
+  }
+  return {};
+}
+
+// Profile effect CDN URL
+export function profileEffectUrl(effectId: string): string {
+  return `https://cdn.discordapp.com/profile-effects/assets/${effectId}/intro.png`;
+}
+
+// ─── Channel type guards ─────────────────────────────────────────────────────
 // Channel type guards
 export const CHANNEL_TYPE_TEXT         = 0;
 export const CHANNEL_TYPE_DM           = 1;

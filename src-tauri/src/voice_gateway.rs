@@ -71,8 +71,11 @@ pub struct VoiceSession {
     audio: AudioIo,
 }
 
+#[allow(dead_code)]
 struct AudioIo {
+    #[allow(dead_code)]
     input: Option<Stream>,
+    #[allow(dead_code)]
     output: Stream,
     capture: Option<mpsc::Receiver<Vec<f32>>>,
     playback: Arc<Mutex<VecDeque<i16>>>,

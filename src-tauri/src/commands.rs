@@ -96,7 +96,7 @@ pub async fn set_token(
     rebuild_router(&state, &token).await;
     
     let me = match state.router
-        .rest(AccountIdentity::ReadOnly, Method::GET, "users/@me", None)
+        .rest(AccountIdentity::Primary, Method::GET, "users/@me", None)
         .await
     {
         Ok(user) => user,
@@ -143,7 +143,7 @@ pub async fn set_token(
 pub async fn get_current_user(state: State<'_, AppState>) -> Result<Value, String> {
     state
         .router
-        .rest(AccountIdentity::ReadOnly, Method::GET, "users/@me", None)
+        .rest(AccountIdentity::Primary, Method::GET, "users/@me", None)
         .await
         .map_err(map_err)
 }
@@ -152,7 +152,7 @@ pub async fn get_current_user(state: State<'_, AppState>) -> Result<Value, Strin
 #[tauri::command]
 pub async fn get_notification_center_items(state: State<'_, AppState>) -> Result<Value, String> {
     state.router.rest(
-        AccountIdentity::ReadOnly,
+        AccountIdentity::Primary,
         Method::GET,
         "users/@me/notification-center/items?limit=50&with_mentions=true",
         None,
@@ -201,24 +201,38 @@ pub async fn get_content_inventory(
     }
     state
         .router
-        .rest(AccountIdentity::ReadOnly, Method::GET, &path, None)
+        .rest(AccountIdentity::Primary, Method::GET, &path, None)
         .await
         .map_err(map_err)
 }
 
 /// Fetch all guilds the current user is a member of.
 #[tauri::command]
-pub async fn get_guilds(state: State<'_, AppState>) -> Result<Value, String> {
-    state
-        .router
-        .rest(
-            AccountIdentity::ReadOnly,
-            Method::GET,
-            "users/@me/guilds",
-            None,
-        )
-        .await
-        .map_err(map_err)
+pub async fn get_guilds(as_token: Option<String>, state: State<'_, AppState>) -> Result<Value, String> {
+    if let Some(token) = as_token.as_deref() {
+        state
+            .router
+            .rest_with_auth(
+                Some(token),
+                AccountIdentity::Primary,
+                Method::GET,
+                "users/@me/guilds",
+                None,
+            )
+            .await
+            .map_err(map_err)
+    } else {
+        state
+            .router
+            .rest(
+                AccountIdentity::Primary,
+                Method::GET,
+                "users/@me/guilds",
+                None,
+            )
+            .await
+            .map_err(map_err)
+    }
 }
 
 #[tauri::command]
@@ -292,21 +306,78 @@ pub async fn get_channels(
         .map_err(map_err)
 }
 
-/// Fetch active threads across a guild; the frontend filters them by forum parent channel.
+/// Fetch threads for a channel (forums and text channels).
+/// Uses user-facing /channels/{channel_id}/threads/search, falling back to /channels/{channel_id}/threads/archived/public.
+#[tauri::command]
+pub async fn get_channel_threads(
+    channel_id: String,
+    archived: Option<bool>,
+    query: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if channel_id.parse::<u64>().is_err() {
+        return Err("A valid channel ID is required".to_owned());
+    }
+
+    let mut search_endpoint = format!("channels/{channel_id}/threads/search?sort_by=last_message_time&sort_order=desc&limit=50");
+    if let Some(archived_flag) = archived {
+        search_endpoint.push_str(&format!("&archived={archived_flag}"));
+    }
+    if let Some(ref q) = query {
+        let trimmed = q.trim();
+        if !trimmed.is_empty() {
+            let encoded: String = url::form_urlencoded::byte_serialize(trimmed.as_bytes()).collect();
+            search_endpoint.push_str(&format!("&name={encoded}"));
+        }
+    }
+
+    let search_result = state.router.rest(
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &search_endpoint,
+        None,
+    ).await;
+
+    match search_result {
+        Ok(val) => {
+            if val.get("threads").and_then(Value::as_array).is_some() {
+                return Ok(val);
+            }
+            // If 202 Index not yet available, try archived/public endpoint
+            let archived_result = state.router.rest(
+                AccountIdentity::ReadOnly,
+                Method::GET,
+                &format!("channels/{channel_id}/threads/archived/public"),
+                None,
+            ).await;
+            if let Ok(archived_val) = archived_result {
+                return Ok(archived_val);
+            }
+            Ok(val)
+        }
+        Err(_) => {
+            // Fallback to archived/public endpoint
+            state.router.rest(
+                AccountIdentity::ReadOnly,
+                Method::GET,
+                &format!("channels/{channel_id}/threads/archived/public"),
+                None,
+            ).await.map_err(map_err)
+        }
+    }
+}
+
+/// Legacy command kept for safety: Discord GET guilds/{guild_id}/threads/active is bot-only (code 20002).
+/// Returns an empty list so user accounts do not receive HTTP 403 Forbidden.
 #[tauri::command]
 pub async fn get_active_guild_threads(
     guild_id: String,
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
 ) -> Result<Value, String> {
     if guild_id.parse::<u64>().is_err() {
         return Err("A valid server ID is required".to_owned());
     }
-    state.router.rest(
-        AccountIdentity::ReadOnly,
-        Method::GET,
-        &format!("guilds/{guild_id}/threads/active"),
-        None,
-    ).await.map_err(map_err)
+    Ok(serde_json::json!({ "threads": [], "members": [] }))
 }
 
 /// Re-fetch one message so stale cached attachment URLs can be refreshed.
@@ -337,6 +408,7 @@ pub async fn get_message(
 pub async fn get_messages(
     channel_id: String,
     before: Option<String>,
+    as_token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let path = if let Some(b) = before {
@@ -346,7 +418,7 @@ pub async fn get_messages(
     };
     match state
         .router
-        .rest(AccountIdentity::ReadOnly, Method::GET, &path, None)
+        .rest_with_auth(as_token.as_deref(), AccountIdentity::ReadOnly, Method::GET, &path, None)
         .await
     {
         Ok(mut msgs) => {
@@ -446,6 +518,7 @@ pub async fn send_message(
     channel_id: String,
     content: String,
     reply_to_message_id: Option<String>,
+    as_token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let mut payload = json!({ "content": content });
@@ -459,7 +532,8 @@ pub async fn send_message(
             "fail_if_not_exists": false
         });
     }
-    state.router.rest(
+    state.router.rest_with_auth(
+        as_token.as_deref(),
         AccountIdentity::Primary,
         Method::POST,
         &format!("channels/{channel_id}/messages"),
@@ -518,6 +592,7 @@ pub async fn send_message_with_files(
     content: String,
     files: Vec<String>,
     reply_to_message_id: Option<String>,
+    as_token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     if files.len() > 10 { return Err("You can attach up to 10 files".to_owned()); }
@@ -535,7 +610,7 @@ pub async fn send_message_with_files(
         }
         paths
     };
-    state.router.send_message_with_files(AccountIdentity::Primary, &channel_id, &content, paths, reply_to_message_id.as_deref()).await.map_err(map_err)
+    state.router.send_message_with_files(as_token.as_deref(), AccountIdentity::Primary, &channel_id, &content, paths, reply_to_message_id.as_deref()).await.map_err(map_err)
 }
 
 /// List global application commands for an application.
@@ -1061,7 +1136,7 @@ pub async fn get_dm_channels(state: State<'_, AppState>) -> Result<Value, String
     let mut channels = state
         .router
         .rest(
-            AccountIdentity::ReadOnly,
+            AccountIdentity::Primary,
             Method::GET,
             "users/@me/channels",
             None,
@@ -1093,7 +1168,7 @@ pub async fn get_relationships(state: State<'_, AppState>) -> Result<Value, Stri
     state
         .router
         .rest(
-            AccountIdentity::ReadOnly,
+            AccountIdentity::Primary,
             Method::GET,
             "users/@me/relationships",
             None,
@@ -1221,7 +1296,7 @@ pub async fn get_current_user_settings(state: State<'_, AppState>) -> Result<Val
     state
         .router
         .rest(
-            AccountIdentity::ReadOnly,
+            AccountIdentity::Primary,
             Method::GET,
             "users/@me/settings",
             None,
@@ -1233,7 +1308,7 @@ pub async fn get_current_user_settings(state: State<'_, AppState>) -> Result<Val
 /// Fetch the current protobuf settings used to mirror Discord's guild folder layout.
 #[tauri::command]
 pub async fn get_guild_folder_settings(state: State<'_, AppState>) -> Result<Value, String> {
-    state.router.rest(AccountIdentity::ReadOnly, Method::GET, "users/@me/settings-proto/1", None).await.map_err(map_err)
+    state.router.rest(AccountIdentity::Primary, Method::GET, "users/@me/settings-proto/1", None).await.map_err(map_err)
 }
 
 /// Send an observed settings-proto/1 delta. The protobuf field payload remains
@@ -1264,7 +1339,7 @@ pub async fn get_message_requests(state: State<'_, AppState>) -> Result<Value, S
     let channels = state
         .router
         .rest(
-            AccountIdentity::ReadOnly,
+            AccountIdentity::Primary,
             Method::GET,
             "users/@me/channels",
             None,
@@ -1422,7 +1497,7 @@ pub async fn get_current_guild_member(
     state
         .router
         .rest(
-            AccountIdentity::ReadOnly,
+            AccountIdentity::Primary,
             Method::GET,
             &format!("users/@me/guilds/{guild_id}/member"),
             None,
@@ -1432,6 +1507,7 @@ pub async fn get_current_guild_member(
 }
 use serde::{Deserialize, Serialize};
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DiscordBadge {
     pub id: String,
@@ -1440,6 +1516,7 @@ pub struct DiscordBadge {
     pub link: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UserProfileResponse {
     pub user: Value,
@@ -1599,7 +1676,7 @@ pub async fn start_gateway(
             );
             let app2 = app.clone();
             let result = router
-                .listen_gateway(AccountIdentity::ReadOnly, move |event: serde_json::Value| {
+                .listen_gateway(AccountIdentity::Primary, move |event: serde_json::Value| {
                     let t = event.get("t").and_then(Value::as_str).unwrap_or("").to_owned();
                     let d = event.get("d").cloned().unwrap_or(Value::Null);
                     if !t.is_empty() {
@@ -1678,6 +1755,24 @@ pub async fn start_gateway(
                         }
                         "CHANNEL_DELETE" => {
                             let _ = app2.emit("discord:channel_delete", d);
+                        }
+                        "THREAD_CREATE" => {
+                            let _ = app2.emit("discord:thread_create", d);
+                        }
+                        "THREAD_UPDATE" => {
+                            let _ = app2.emit("discord:thread_update", d);
+                        }
+                        "THREAD_DELETE" => {
+                            let _ = app2.emit("discord:thread_delete", d);
+                        }
+                        "THREAD_LIST_SYNC" => {
+                            let _ = app2.emit("discord:thread_list_sync", d);
+                        }
+                        "THREAD_MEMBER_UPDATE" => {
+                            let _ = app2.emit("discord:thread_member_update", d);
+                        }
+                        "THREAD_MEMBERS_UPDATE" => {
+                            let _ = app2.emit("discord:thread_members_update", d);
                         }
                         "PRESENCE_UPDATE" => {
                             let _ = app2.emit("discord:presence_update", d);
@@ -1943,4 +2038,126 @@ pub async fn pick_vcc_file(app: AppHandle) -> Result<String, String> {
         }
         None => Err("Import cancelled by user".to_string()),
     }
+}
+/// Update the token router with Primary, Secondary, and ReadOnly identities.
+#[tauri::command]
+pub async fn set_router_accounts(
+    primary: Option<String>,
+    secondary: Option<String>,
+    read_only: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.router.update_tokens(TokenManager::new(primary, secondary, read_only)).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn save_secure_token(account_id: String, token: String) -> Result<(), String> {
+    let key = format!("discord_token_{account_id}");
+    let entry = keyring::Entry::new("voidcord", &key).map_err(|e| e.to_string())?;
+    entry.set_password(&token).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_secure_token(account_id: String) -> Result<Option<String>, String> {
+    let key = format!("discord_token_{account_id}");
+    let entry = keyring::Entry::new("voidcord", &key).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(pw) => Ok(Some(pw)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn delete_secure_token(account_id: String) -> Result<(), String> {
+    let key = format!("discord_token_{account_id}");
+    let entry = keyring::Entry::new("voidcord", &key).map_err(|e| e.to_string())?;
+    let _ = entry.delete_credential();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_or_create_guild_invite(
+    guild_id: String,
+    as_token: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let token_ref = as_token.as_deref();
+
+    // 1. Try GET /guilds/{guild_id} to check for vanity url
+    if let Ok(guild_val) = state.router.rest_with_auth(
+        token_ref,
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("guilds/{guild_id}"),
+        None,
+    ).await {
+        if let Some(vanity) = guild_val.get("vanity_url_code").and_then(|v| v.as_str()) {
+            if !vanity.is_empty() {
+                return Ok(vanity.to_owned());
+            }
+        }
+    }
+
+    // 2. Try GET /guilds/{guild_id}/channels to find a text or announcement channel to invite to
+    let channels_val = state.router.rest_with_auth(
+        token_ref,
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("guilds/{guild_id}/channels"),
+        None,
+    ).await.map_err(map_err)?;
+
+    if let Some(channels) = channels_val.as_array() {
+        for channel in channels {
+            let channel_type = channel.get("type").and_then(|t| t.as_i64()).unwrap_or(-1);
+            if channel_type == 0 || channel_type == 2 || channel_type == 5 {
+                if let Some(cid) = channel.get("id").and_then(|id| id.as_str()) {
+                    let invite_res = state.router.rest_with_auth(
+                        token_ref,
+                        AccountIdentity::Primary,
+                        Method::POST,
+                        &format!("channels/{cid}/invites"),
+                        Some(json!({
+                            "max_age": 86400,
+                            "max_uses": 0,
+                            "temporary": false,
+                            "unique": false
+                        })),
+                    ).await;
+
+                    if let Ok(inv_val) = invite_res {
+                        if let Some(code) = inv_val.get("code").and_then(|c| c.as_str()) {
+                            if !code.is_empty() {
+                                return Ok(code.to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: try GET /guilds/{guild_id}/invites
+    if let Ok(invites_val) = state.router.rest_with_auth(
+        token_ref,
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("guilds/{guild_id}/invites"),
+        None,
+    ).await {
+        if let Some(invites_arr) = invites_val.as_array() {
+            for inv in invites_arr {
+                if let Some(code) = inv.get("code").and_then(|c| c.as_str()) {
+                    if !code.is_empty() {
+                        return Ok(code.to_owned());
+                    }
+                }
+            }
+        }
+    }
+
+    Err("Could not create or find an invite for this server with the selected account. The account may not have permission to invite members.".to_owned())
 }

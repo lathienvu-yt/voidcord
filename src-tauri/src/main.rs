@@ -266,6 +266,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::set_token,
+            commands::set_router_accounts,
             commands::get_current_user,
             commands::get_content_inventory,
             commands::get_guilds,
@@ -289,6 +290,7 @@ fn main() {
             commands::get_user_profile,
             commands::get_channels,
             commands::get_active_guild_threads,
+            commands::get_channel_threads,
             commands::get_messages,
             commands::get_message,
             commands::get_notification_center_items,
@@ -330,6 +332,10 @@ fn main() {
             commands::start_screen_share,
             commands::stop_screen_share,
             commands::export_vcc_file,
+            commands::save_secure_token,
+            commands::get_secure_token,
+            commands::delete_secure_token,
+            commands::get_or_create_guild_invite,
             commands::pick_vcc_file,
         ])
         .run(tauri::generate_context!())
