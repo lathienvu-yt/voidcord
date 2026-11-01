@@ -225,19 +225,36 @@ impl Default for DiscordRouter {
 
 impl DiscordRouter {
     pub fn new(tokens: TokenManager) -> Self {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
         use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, USER_AGENT};
 
         let mut headers = HeaderMap::new();
 
-        // Identify the actual application instead of impersonating a Chrome
-        // browser build. These defaults apply consistently to every REST call.
+        // Report VoidCord truthfully. Do not copy Discord's browser build
+        // number, launch IDs, session IDs, or installation fingerprint.
+        let user_agent = concat!("VoidCord/", env!("CARGO_PKG_VERSION"), " (Discord API client)");
+        let super_properties = serde_json::json!({
+            "os": std::env::consts::OS,
+            "browser": "VoidCord",
+            "device": "VoidCord Desktop",
+            "system_locale": "en-US",
+            "has_client_mods": false,
+            "browser_user_agent": user_agent,
+            "browser_version": env!("CARGO_PKG_VERSION"),
+            "release_channel": "stable"
+        });
+        let super_properties_b64 = STANDARD.encode(super_properties.to_string());
+
         headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
         headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
-        headers.insert(USER_AGENT, HeaderValue::from_static(
-            concat!("VoidCord/", env!("CARGO_PKG_VERSION"), " (Discord API client)")
-        ));
+        headers.insert(USER_AGENT, HeaderValue::from_static(user_agent));
         headers.insert("x-discord-locale", HeaderValue::from_static("en-US"));
         headers.insert("x-discord-timezone", HeaderValue::from_static("Asia/Bangkok"));
+        if let Ok(value) = HeaderValue::from_str(&super_properties_b64) {
+            headers.insert("x-super-properties", value);
+        } else {
+            log::error!("Could not encode X-Super-Properties header; omitting it");
+        }
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
