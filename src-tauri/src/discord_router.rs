@@ -19,6 +19,8 @@ const DISCORD_GATEWAY: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 const GATEWAY_RESUME_WINDOW: Duration = Duration::from_secs(10 * 60);
 static CAPTCHA_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
+const CHROME_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.129 Safari/537.36";
+
 fn redact_sensitive_query(path: &str) -> String {
     let Some((route, query)) = path.split_once('?') else {
         return path.to_owned();
@@ -118,7 +120,6 @@ impl std::fmt::Debug for SecretToken {
 }
 
 impl TokenManager {
-    /// Construct with tokens obtained through a supported OAuth flow.
     pub fn new(
         primary_token: Option<String>,
         secondary_token: Option<String>,
@@ -131,10 +132,6 @@ impl TokenManager {
         }
     }
 
-    /// Return candidate tokens in priority order for fault tolerance and smart selecting:
-    /// - Primary: Primary token first, fallback to Secondary
-    /// - Secondary: Secondary token first, fallback to Primary
-    /// - ReadOnly: ReadOnly token first; if none, fall back to Secondary, then Primary!
     pub(crate) fn candidate_tokens(&self, identity: AccountIdentity) -> Vec<SecretToken> {
         let mut list = Vec::new();
         match identity {
@@ -161,7 +158,6 @@ impl TokenManager {
     }
 }
 
-/// The account identity is selected by the caller for each request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountIdentity {
     Primary,
@@ -169,7 +165,6 @@ pub enum AccountIdentity {
     ReadOnly,
 }
 
-/// Permission and HTTP errors are returned to the caller without identity fallback.
 #[derive(Debug, thiserror::Error)]
 pub enum DiscordError {
     #[error("No credential configured for {0:?} identity")]
@@ -207,7 +202,6 @@ struct GatewaySession {
     resumable: bool,
 }
 
-/// A small, clonable router to share between Tauri commands and gateway tasks.
 #[derive(Clone)]
 pub struct DiscordRouter {
     client: reqwest::Client,
@@ -228,11 +222,7 @@ impl DiscordRouter {
         use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 
         let mut headers = HeaderMap::new();
-        // Match the Chrome property you use in your gateway loop!
-        headers.insert(
-            USER_AGENT, 
-            HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
-        );
+        headers.insert(USER_AGENT, HeaderValue::from_static(CHROME_USER_AGENT));
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
@@ -248,7 +238,6 @@ impl DiscordRouter {
         }
     }
 
-    /// Replace the active account credentials after an OAuth flow completes.
     pub async fn update_tokens(&self, tokens: TokenManager) {
         *self.tokens.write().await = tokens;
     }
@@ -265,7 +254,6 @@ impl DiscordRouter {
         Ok(())
     }
 
-    /// Issue one REST request using exactly the identity selected by the caller.
     pub async fn rest(
         &self,
         identity: AccountIdentity,
@@ -295,7 +283,6 @@ impl DiscordRouter {
         self.perform_rest(custom_token, identity, method, path.to_owned(), body, None).await
     }
 
-    /// Upload attachments and send a message with the explicitly selected account.
     pub async fn send_message_with_files(
         &self,
         custom_token: Option<&str>,
@@ -318,8 +305,6 @@ impl DiscordRouter {
             tokens.get(identity)?.0.clone()
         };
         let token = SecretToken(token_string);
-        // Ask Discord for the current identity's tier. The backend repeats this
-        // check at send time; UI supplied tier values are never trusted.
         let upload_check_started = std::time::Instant::now();
         log::debug!("Discord upload tier request: GET /users/@me (identity={identity:?})");
         let account_response = self.client.get(format!("{DISCORD_API}/users/@me"))
@@ -480,7 +465,6 @@ impl DiscordRouter {
             };
 
             let status = response.status();
-            // If response is unauthorized or forbidden and we have another candidate credential, retry with fallback!
             if (status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN) && idx + 1 < candidate_count {
                 log::warn!("Discord REST {} {} [identity={:?}] received status {}, retrying with fallback credential...", method, log_path, identity, status);
                 continue;
@@ -564,8 +548,6 @@ impl DiscordRouter {
         }
     }
 
-    /// Open a gateway connection as a specifically selected authorized account.
-    /// Retain session state between calls so the caller's retry loop can Resume.
     pub async fn listen_gateway<F>(
         &self,
         identity: AccountIdentity,
@@ -596,8 +578,6 @@ impl DiscordRouter {
         };
         *self.gateway_sender.write().await = None;
 
-        // Do not repeatedly attempt WebSocket connects while offline. Any HTTP
-        // response from Discord (including an error status) proves reachability.
         loop {
             let reachability_started = std::time::Instant::now();
             match self.client
@@ -716,7 +696,6 @@ impl DiscordRouter {
                         return Err(DiscordError::WebSocketClosed);
                     };
 
-                    // Prevent freezing or crashing on malformed frames
                     let ws_msg = match message_result {
                         Ok(m) => m,
                         Err(e) => {
@@ -777,7 +756,10 @@ impl DiscordRouter {
                                                     "browser": "Chrome",
                                                     "device": "",
                                                     "system_locale": "en-US",
-                                                    "client_version": "1.0.9000",
+                                                    "browser_user_agent": CHROME_USER_AGENT,
+                                                    "browser_version": "130.0.0.0",
+                                                    "client_build_number": 339023,
+                                                    "client_version": "1.0.9167",
                                                     "release_channel": "stable"
                                                 }
                                             }
@@ -798,7 +780,6 @@ impl DiscordRouter {
                                 let payload = serde_json::json!({"op": 1, "d": sequence});
                                 let _ = socket.send(WsMessage::Text(payload.to_string())).await;
                             } else if op == Some(7) {
-                                // Discord explicitly asks us to reconnect and resume.
                                 log::warn!("GATEWAY server requested reconnect (op=7)");
                                 return Err(DiscordError::WebSocketClosed);
                             } else if op == Some(9) {
@@ -826,7 +807,7 @@ impl DiscordRouter {
                                     session.sequence = sequence;
                                     session.disconnected_at = None;
                                     session.resumable = session.session_id.is_some() && session.resume_gateway_url.is_some();
-                                } // Release gateway_session before awaiting gateway_sender.
+                                }
                                 let wait_started = std::time::Instant::now();
                                 let mut sender = self.gateway_sender.write().await;
                                 let waited = wait_started.elapsed();
@@ -845,7 +826,7 @@ impl DiscordRouter {
                                     session.sequence = sequence;
                                     session.disconnected_at = None;
                                     session.resumable = true;
-                                } // Release gateway_session before awaiting gateway_sender.
+                                }
                                 let wait_started = std::time::Instant::now();
                                 let mut sender = self.gateway_sender.write().await;
                                 let waited = wait_started.elapsed();
@@ -885,8 +866,6 @@ impl DiscordRouter {
     }
 }
 
-/// UI-neutral request intents map all message/reaction writes to the primary
-/// identity and browsing/event listening to the read-only identity.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestIntent {
@@ -907,7 +886,6 @@ impl RequestIntent {
     }
 }
 
-/// Optional local routing policy for communities.
 #[allow(dead_code)]
 #[derive(Default, Clone)]
 pub struct CommunityAccountPreferences {
@@ -925,7 +903,6 @@ impl CommunityAccountPreferences {
     }
 }
 
-/// Settings can be persisted without ever serializing tokens.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SafeAccountSettings {
