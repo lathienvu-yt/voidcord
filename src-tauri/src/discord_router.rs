@@ -219,11 +219,33 @@ impl Default for DiscordRouter {
 
 impl DiscordRouter {
     pub fn new(tokens: TokenManager) -> Self {
-        use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, USER_AGENT};
 
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static(CHROME_USER_AGENT));
-
+        let super_properties = serde_json::json!({
+            "os": "Windows",
+            "browser": "Chrome",
+            "device": "",
+            "system_locale": "en-US",
+            "browser_user_agent": CHROME_USER_AGENT,
+            "browser_version": "150.0.0.0",
+            "os_version": "10",
+            "referrer": "",
+            "referring_domain": "",
+            "referrer_current": "",
+            "referring_domain_current": "",
+            "release_channel": "stable",
+            "client_build_number": 657850,
+            "client_event_source": null
+        });
+        headers.insert("x-debug-options", HeaderValue::from_static("bugReporterEnabled"));
+        headers.insert("x-discord-locale", HeaderValue::from_static("en-US"));
+        headers.insert("x-discord-timezone", HeaderValue::from_static("Asia/Bangkok"));
+        headers.insert("x-installation-id", HeaderValue::from_static("1532615797866762300.achuwSGSlURqLOSPpJN0J5xZZMc"));
+        let super_properties_b64 = STANDARD.encode(super_properties.to_string());
+        headers.insert("x-super-properties", HeaderValue::from_str(&super_properties_b64).unwrap());
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .build()
