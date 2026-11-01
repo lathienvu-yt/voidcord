@@ -2084,24 +2084,50 @@ pub async fn get_or_create_guild_invite(
     as_token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    if guild_id.parse::<u64>().is_err() {
+        return Err("A valid server ID is required".to_owned());
+    }
+
     let token_ref = as_token.as_deref();
 
-    // 1. Try GET /guilds/{guild_id} to check for vanity url
-    if let Ok(guild_val) = state.router.rest_with_auth(
+    // Reuse a vanity URL when the guild has one.
+    let guild_val = state.router.rest_with_auth(
         token_ref,
         AccountIdentity::ReadOnly,
         Method::GET,
         &format!("guilds/{guild_id}"),
         None,
+    ).await.ok();
+
+    if let Some(vanity) = guild_val
+        .as_ref()
+        .and_then(|guild| guild.get("vanity_url_code"))
+        .and_then(Value::as_str)
+        .filter(|code| !code.is_empty())
+    {
+        return Ok(vanity.to_owned());
+    }
+
+    // Reuse an existing invite before creating anything.
+    if let Ok(invites_val) = state.router.rest_with_auth(
+        token_ref,
+        AccountIdentity::ReadOnly,
+        Method::GET,
+        &format!("guilds/{guild_id}/invites"),
+        None,
     ).await {
-        if let Some(vanity) = guild_val.get("vanity_url_code").and_then(|v| v.as_str()) {
-            if !vanity.is_empty() {
-                return Ok(vanity.to_owned());
-            }
+        if let Some(code) = invites_val
+            .as_array()
+            .and_then(|invites| invites.iter().find_map(|invite| {
+                invite.get("code").and_then(Value::as_str).filter(|code| !code.is_empty())
+            }))
+        {
+            return Ok(code.to_owned());
         }
     }
 
-    // 2. Try GET /guilds/{guild_id}/channels to find a text or announcement channel to invite to
+    // Select exactly one eligible channel. Never POST to a second channel
+    // if this channel rejects invite creation.
     let channels_val = state.router.rest_with_auth(
         token_ref,
         AccountIdentity::ReadOnly,
@@ -2110,54 +2136,52 @@ pub async fn get_or_create_guild_invite(
         None,
     ).await.map_err(map_err)?;
 
-    if let Some(channels) = channels_val.as_array() {
-        for channel in channels {
-            let channel_type = channel.get("type").and_then(|t| t.as_i64()).unwrap_or(-1);
-            if channel_type == 0 || channel_type == 2 || channel_type == 5 {
-                if let Some(cid) = channel.get("id").and_then(|id| id.as_str()) {
-                    let invite_res = state.router.rest_with_auth(
-                        token_ref,
-                        AccountIdentity::Primary,
-                        Method::POST,
-                        &format!("channels/{cid}/invites"),
-                        Some(json!({
-                            "max_age": 86400,
-                            "max_uses": 0,
-                            "temporary": false,
-                            "unique": false
-                        })),
-                    ).await;
+    let channels = channels_val
+        .as_array()
+        .ok_or_else(|| "Discord returned an invalid channel list".to_owned())?;
 
-                    if let Ok(inv_val) = invite_res {
-                        if let Some(code) = inv_val.get("code").and_then(|c| c.as_str()) {
-                            if !code.is_empty() {
-                                return Ok(code.to_owned());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let preferred_channel_id = guild_val
+        .as_ref()
+        .and_then(|guild| guild.get("system_channel_id"))
+        .and_then(Value::as_str);
 
-    // 3. Fallback: try GET /guilds/{guild_id}/invites
-    if let Ok(invites_val) = state.router.rest_with_auth(
+    let eligible = |channel: &&Value| {
+        matches!(
+            channel.get("type").and_then(Value::as_i64),
+            Some(0 | 5)
+        ) && channel.get("id").and_then(Value::as_str).is_some()
+    };
+
+    let selected_channel = preferred_channel_id
+        .and_then(|preferred| channels.iter().find(|channel| {
+            eligible(&channel) && channel.get("id").and_then(Value::as_str) == Some(preferred)
+        }))
+        .or_else(|| channels.iter().find(eligible))
+        .ok_or_else(|| "No eligible text or announcement channel is available for invite creation".to_owned())?;
+
+    let channel_id = selected_channel
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Selected channel has no valid ID".to_owned())?;
+
+    // Exactly one invite-creation request per invocation. Any error is returned
+    // to the caller; there is deliberately no retry or channel-scanning fallback.
+    let invite = state.router.rest_with_auth(
         token_ref,
-        AccountIdentity::ReadOnly,
-        Method::GET,
-        &format!("guilds/{guild_id}/invites"),
-        None,
-    ).await {
-        if let Some(invites_arr) = invites_val.as_array() {
-            for inv in invites_arr {
-                if let Some(code) = inv.get("code").and_then(|c| c.as_str()) {
-                    if !code.is_empty() {
-                        return Ok(code.to_owned());
-                    }
-                }
-            }
-        }
-    }
+        AccountIdentity::Primary,
+        Method::POST,
+        &format!("channels/{channel_id}/invites"),
+        Some(json!({
+            "max_age": 86400,
+            "max_uses": 0,
+            "temporary": false,
+            "unique": false
+        })),
+    ).await.map_err(map_err)?;
 
-    Err("Could not create or find an invite for this server with the selected account. The account may not have permission to invite members.".to_owned())
+    invite.get("code")
+        .and_then(Value::as_str)
+        .filter(|code| !code.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| "Discord created no invite code in its response".to_owned())
 }
