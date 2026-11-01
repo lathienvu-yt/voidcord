@@ -2154,7 +2154,7 @@ pub async fn get_or_create_guild_invite(
 
     let selected_channel = preferred_channel_id
         .and_then(|preferred| channels.iter().find(|channel| {
-            eligible(&channel) && channel.get("id").and_then(Value::as_str) == Some(preferred)
+            eligible(channel) && channel.get("id").and_then(Value::as_str) == Some(preferred)
         }))
         .or_else(|| channels.iter().find(eligible))
         .ok_or_else(|| "No eligible text or announcement channel is available for invite creation".to_owned())?;
