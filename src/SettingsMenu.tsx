@@ -678,7 +678,7 @@ function CachePanel() {
     <>
       <h2>Cache & Storage (.vcc)</h2>
       <div className="proto-cache-description">
-        <p>VoidCord saves channels, messages, commands, and deleted/edited logs locally in IndexedDB so you can read them offline. You can export this cache as a <code>.vcc</code> (VoidCord Cache) file to share with others or backup your history.</p>
+        <p>VoidCord saves channels, messages, commands, and deleted/edited logs locally in RocksDB so you can read them offline. Existing IndexedDB cache data is copied into RocksDB once and kept as a recovery copy. You can export this cache as a <code>.vcc</code> (VoidCord Cache) file to share with others or back up your history.</p>
       </div>
 
       <div className="proto-cache-stats-grid">

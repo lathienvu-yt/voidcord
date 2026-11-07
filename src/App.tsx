@@ -8,7 +8,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
   Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
-  Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
+  Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Star, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut
 } from "lucide-react";
 
@@ -30,6 +30,10 @@ import {
   writeCachedDraft, writeCachedMessages, writeDeletedChannel, writeDeletedMessage, DeletedChannelLog,
   DeletedMessageLog, EditedMessageLog, writeEditedMessage, readCachedCommands, writeCachedCommands,
 } from "./offlineCache";
+import { ReviewModal } from "./plugins/reviewDB/ReviewModal";
+import { ReviewType } from "./plugins/reviewDB/entities";
+import { getStoredReviewDbToken, setStoredReviewDbToken } from "./plugins/reviewDB/reviewDbApi";
+import { PluginHub } from "./plugins/PluginHub";
 import "./style.css";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -72,6 +76,26 @@ type VoiceHandshake = {
   token?: string;
   connecting: boolean;
 };
+type SafetyClassification = {
+  id: string;
+  classification_type?: number;
+  description?: string;
+  actions?: Array<{ action_type?: number; descriptions?: string[] }>;
+  max_expiration_time?: string | null;
+  appeal_status?: { status?: number } | null;
+  guild_metadata?: { name?: string };
+};
+type SafetyHubData = {
+  classifications?: SafetyClassification[];
+  guild_classifications?: SafetyClassification[];
+  account_standing?: { state?: number };
+  is_appeal_eligible?: boolean;
+  is_dsa_eligible?: boolean;
+};
+type ReportReason = { reason: number; label: string; description?: string };
+type ReportTarget =
+  | { kind: "user"; userId: string }
+  | { kind: "message"; channelId: string; messageId: string };
 type AudioDevice = { id: string; name: string };
 type AudioDeviceList = { inputs: AudioDevice[]; outputs: AudioDevice[] };
 
@@ -280,32 +304,41 @@ function hasGuildPermission(
 
 interface RoleColorInfo { hex?: string; style?: React.CSSProperties; }
 
+function getRoleColorFromRoleIds(roleIds: string[] | undefined, guildRoles: unknown[]): RoleColorInfo {
+  if (!roleIds || roleIds.length === 0) return {};
+  const roleIdSet = new Set(roleIds);
+  let highest: { color?: number; colors?: { primary_color?: number | null; secondary_color?: number | null; tertiary_color?: number | null } | null; position?: number } | null = null;
+  for (const entry of guildRoles) {
+    if (!entry || typeof entry !== "object") continue;
+    const r = entry as { id?: string; color?: number; colors?: any; position?: number };
+    if (typeof r.id === "string" && roleIdSet.has(r.id) && typeof r.color === "number" && r.color > 0) {
+      if (!highest || (r.position ?? 0) > (highest.position ?? 0)) {
+        highest = r;
+      }
+    }
+  }
+  if (!highest) return {};
+  const rc = highest.colors;
+  const primary = rc?.primary_color ?? highest.color;
+  const secondary = rc?.secondary_color ?? null;
+  const tertiary = rc?.tertiary_color ?? null;
+  const style = roleColorStyle(primary, secondary, tertiary);
+  const hasGradient = secondary != null;
+  return { hex: hasGradient ? undefined : roleColorToHex(highest.color!), style };
+}
+
 function getUserRoleColorInfo(authorId: string, guildMembers: unknown[], guildRoles: unknown[], roleIdsFromMessage?: string[]): RoleColorInfo {
+  if (roleIdsFromMessage && roleIdsFromMessage.length > 0) {
+    return getRoleColorFromRoleIds(roleIdsFromMessage, guildRoles);
+  }
   const member = guildMembers.find((entry): entry is { user?: { id?: string }; id?: string; roles?: unknown } =>
     !!entry && typeof entry === "object"
       && ((entry as { user?: { id?: string } }).user?.id === authorId || (entry as { id?: string }).id === authorId)
   );
   const memberRoleIds = Array.isArray(member?.roles)
     ? member.roles.filter((roleId): roleId is string => typeof roleId === "string")
-    : roleIdsFromMessage || [];
-  if (memberRoleIds.length === 0) return {};
-
-  const roles = guildRoles.filter((entry): entry is { id: string; color?: number; colors?: { primary_color?: number | null; secondary_color?: number | null; tertiary_color?: number | null } | null; position?: number } =>
-    !!entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string"
-  );
-  const roleIds = new Set(memberRoleIds);
-  const highestColoredRole = roles
-    .filter(role => roleIds.has(role.id) && typeof role.color === "number" && role.color > 0)
-    .sort((a, b) => (b.position ?? 0) - (a.position ?? 0))[0];
-  if (!highestColoredRole) return {};
-
-  const rc = highestColoredRole.colors;
-  const primary = rc?.primary_color ?? highestColoredRole.color;
-  const secondary = rc?.secondary_color ?? null;
-  const tertiary = rc?.tertiary_color ?? null;
-  const style = roleColorStyle(primary, secondary, tertiary);
-  const hasGradient = secondary != null;
-  return { hex: hasGradient ? undefined : roleColorToHex(highestColoredRole.color), style };
+    : [];
+  return getRoleColorFromRoleIds(memberRoleIds, guildRoles);
 }
 
 function getUserRoleColor(authorId: string, guildMembers: unknown[], guildRoles: unknown[], roleIdsFromMessage?: string[]): string | undefined {
@@ -485,6 +518,9 @@ type CaptchaChallenge = { request_id: string; service: string; site_key: string 
 type CaptchaPromptState = { challenge: CaptchaChallenge; onSolve: (captchaKey: string) => void; onCancel: () => void };
 type AppPreferences = {
   accent: "blurple" | "violet" | "emerald";
+  customThemeCss: string;
+  customThemeName: string;
+  customThemeEnabled: boolean;
   compactMessages: boolean;
   reduceMotion: boolean;
   autoplayVideos: boolean;
@@ -498,6 +534,7 @@ type AppPreferences = {
   cachedDiscordFolders: DiscordGuildFolder[];
 };
 
+const MAX_CUSTOM_THEME_BYTES = 512 * 1024;
 const CAPTCHA_ERROR_PREFIX = "VOIDCORD_CAPTCHA:";
 
 function parseCaptchaChallenge(error: unknown): CaptchaChallenge | null {
@@ -575,11 +612,18 @@ function loadHCaptchaScript(): Promise<void> {
 }
 
 function readPreferences(): AppPreferences {
-  const defaults: AppPreferences = { accent: "blurple", compactMessages: false, reduceMotion: false, autoplayVideos: false, showSystemNotifications: true, systemNotificationDuration: 4200, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {}, cachedServerOrder: [], cachedDiscordFolders: [] };
+  const defaults: AppPreferences = { accent: "blurple", customThemeCss: "", customThemeName: "", customThemeEnabled: false, compactMessages: false, reduceMotion: false, autoplayVideos: false, showSystemNotifications: true, systemNotificationDuration: 4200, channelSidebarWidth: 228, chatFontScale: 100, serverOrder: [], serverFolders: {}, cachedServerOrder: [], cachedDiscordFolders: [] };
   try {
     const saved = JSON.parse(localStorage.getItem("voidcord:preferences") || "{}");
+    const customThemeCss = typeof saved.customThemeCss === "string"
+      && new Blob([saved.customThemeCss]).size <= MAX_CUSTOM_THEME_BYTES
+      ? saved.customThemeCss
+      : "";
     return {
       accent: ["blurple", "violet", "emerald"].includes(saved.accent) ? saved.accent : defaults.accent,
+      customThemeCss,
+      customThemeName: customThemeCss && typeof saved.customThemeName === "string" ? saved.customThemeName.slice(0, 100) : "",
+      customThemeEnabled: !!customThemeCss && saved.customThemeEnabled === true,
       compactMessages: typeof saved.compactMessages === "boolean" ? saved.compactMessages : defaults.compactMessages,
       reduceMotion: typeof saved.reduceMotion === "boolean" ? saved.reduceMotion : defaults.reduceMotion,
       autoplayVideos: typeof saved.autoplayVideos === "boolean" ? saved.autoplayVideos : defaults.autoplayVideos,
@@ -594,6 +638,123 @@ function readPreferences(): AppPreferences {
     };
   } catch {
     return defaults;
+  }
+}
+
+type GameProcessMapping = { processName: string; displayName: string };
+type CustomRpcButton = { label: string; url: string };
+type CustomRpcConfig = {
+  applicationId: string;
+  name: string;
+  activityType: number;
+  streamUrl: string;
+  details: string;
+  state: string;
+  largeImage: string;
+  largeText: string;
+  smallImage: string;
+  smallText: string;
+  startTimestamp: number | null;
+  endTimestamp: number | null;
+  partySize: number | null;
+  partyMax: number | null;
+  buttons: CustomRpcButton[];
+};
+
+const DEFAULT_CUSTOM_RPC_CONFIG: CustomRpcConfig = {
+  applicationId: "",
+  name: "My Game",
+  activityType: 0,
+  streamUrl: "",
+  details: "",
+  state: "",
+  largeImage: "",
+  largeText: "",
+  smallImage: "",
+  smallText: "",
+  startTimestamp: null,
+  endTimestamp: null,
+  partySize: null,
+  partyMax: null,
+  buttons: [],
+};
+
+function readCustomRpcConfig(): CustomRpcConfig {
+  try {
+    const saved = JSON.parse(localStorage.getItem("voidcord:custom-rpc") || "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return DEFAULT_CUSTOM_RPC_CONFIG;
+    const numberOrNull = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null;
+    return {
+      applicationId: typeof saved.applicationId === "string" ? saved.applicationId : "",
+      name: typeof saved.name === "string" ? saved.name : DEFAULT_CUSTOM_RPC_CONFIG.name,
+      activityType: [0, 1, 2, 3, 5].includes(saved.activityType) ? saved.activityType : 0,
+      streamUrl: typeof saved.streamUrl === "string" ? saved.streamUrl : "",
+      details: typeof saved.details === "string" ? saved.details : "",
+      state: typeof saved.state === "string" ? saved.state : "",
+      largeImage: typeof saved.largeImage === "string" ? saved.largeImage : "",
+      largeText: typeof saved.largeText === "string" ? saved.largeText : "",
+      smallImage: typeof saved.smallImage === "string" ? saved.smallImage : "",
+      smallText: typeof saved.smallText === "string" ? saved.smallText : "",
+      startTimestamp: numberOrNull(saved.startTimestamp),
+      endTimestamp: numberOrNull(saved.endTimestamp),
+      partySize: numberOrNull(saved.partySize),
+      partyMax: numberOrNull(saved.partyMax),
+      buttons: Array.isArray(saved.buttons)
+        ? saved.buttons.filter(isCustomRpcButton).slice(0, 2)
+        : [],
+    };
+  } catch {
+    return DEFAULT_CUSTOM_RPC_CONFIG;
+  }
+}
+
+function isCustomRpcButton(value: unknown): value is CustomRpcButton {
+  return !!value && typeof value === "object"
+    && "label" in value && typeof value.label === "string"
+    && "url" in value && typeof value.url === "string";
+}
+
+function timestampToLocalInput(timestamp: number | null): string {
+  if (timestamp === null) return "";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function customRpcCommandPayload(config: CustomRpcConfig) {
+  return {
+    applicationId: config.applicationId,
+    name: config.name,
+    activityType: config.activityType,
+    streamUrl: config.streamUrl,
+    details: config.details,
+    state: config.state,
+    largeImage: config.largeImage,
+    largeText: config.largeText,
+    smallImage: config.smallImage,
+    smallText: config.smallText,
+    startTimestamp: config.startTimestamp,
+    endTimestamp: config.endTimestamp,
+    partySize: config.partySize,
+    partyMax: config.partyMax,
+    buttons: config.buttons.filter(button => button.label.trim() || button.url.trim()),
+  };
+}
+
+function readGameProcessMappings(): GameProcessMapping[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem("voidcord:game-process-mappings") || "[]");
+    if (!Array.isArray(saved)) return [];
+    return saved.filter((mapping): mapping is GameProcessMapping =>
+      !!mapping
+      && typeof mapping.processName === "string"
+      && typeof mapping.displayName === "string"
+      && mapping.processName.trim().length > 0
+      && mapping.displayName.trim().length > 0
+    ).slice(0, 100);
+  } catch {
+    return [];
   }
 }
 
@@ -681,6 +842,268 @@ function PlatformIndicators({ platforms }: { platforms: UserPlatform[] }) {
 
 export type AccountRole = "primary" | "secondary" | "readonly";
 export type SavedDiscordAccount = { user: DiscordUser; token: string; role?: AccountRole };
+
+type CachedProfileEntry = { profile: any; cachedAt: number };
+const PROFILE_CACHE_KEY = "profile_cache";
+const MAX_CACHED_PROFILES = 100;
+let profileCacheWriteQueue: Promise<void> = Promise.resolve();
+
+async function readStoredProfile(userId: string): Promise<any | undefined> {
+  try {
+    const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
+    const profiles = await store.get<Record<string, CachedProfileEntry>>(PROFILE_CACHE_KEY) || {};
+    return profiles[userId]?.profile;
+  } catch (error) {
+    console.warn("Could not read the saved profile cache", error);
+    return undefined;
+  }
+}
+
+async function writeStoredProfile(userId: string, profile: any): Promise<void> {
+  const write = profileCacheWriteQueue.then(async () => {
+    const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
+    const profiles = await store.get<Record<string, CachedProfileEntry>>(PROFILE_CACHE_KEY) || {};
+    const next = { ...profiles, [userId]: { profile, cachedAt: Date.now() } };
+    const limited = Object.fromEntries(
+      Object.entries(next)
+        .sort(([, a], [, b]) => b.cachedAt - a.cachedAt)
+        .slice(0, MAX_CACHED_PROFILES)
+    );
+    await store.set(PROFILE_CACHE_KEY, limited);
+  });
+  profileCacheWriteQueue = write.catch(error => {
+    console.warn("Could not save the profile cache", error);
+  });
+  await profileCacheWriteQueue;
+}
+
+async function loadUserProfile(
+  userId: string,
+  accounts: ReturnType<typeof getAccountReadCredentials>,
+  onCached?: (profile: any) => void,
+): Promise<any> {
+  const cached = await readStoredProfile(userId);
+  if (cached) onCached?.(cached);
+  try {
+    const profile = await tauriInvoke<any>("get_user_profile", { userId, accounts });
+    if (profile) await writeStoredProfile(userId, profile);
+    return profile;
+  } catch (error) {
+    if (cached) return cached;
+    throw error;
+  }
+}
+
+function getAccountReadCredentials(accounts: SavedDiscordAccount[]) {
+  const roleOrder: Record<AccountRole, number> = { primary: 0, secondary: 1, readonly: 2 };
+  return accounts
+    .filter(account => account.token && account.user?.id && !account.user.bot)
+    .sort((a, b) => roleOrder[a.role || "secondary"] - roleOrder[b.role || "secondary"])
+    .map(account => ({ accountId: account.user.id, token: account.token }));
+}
+
+const GAME_WIDGET_TYPE_LABELS: Record<string, string> = {
+  favorite_games: "Favorite game",
+  current_games: "Games in rotation",
+  played_games: "Games I like",
+  want_to_play_games: "Want to play",
+  application: "Game details",
+};
+
+const GAME_WIDGET_TAG_LABELS: Record<string, string> = {
+  noob: "Noob",
+  learning_the_ropes: "Learning the ropes",
+  casual: "Casual",
+  getting_good: "Getting good",
+  intermediate: "Intermediate",
+  expert: "Expert",
+  better_than_you: "Better than you",
+  obsessed: "Obsessed",
+  love_it: "Love it",
+  kind_of_love_it: "Kind of love it",
+  kind_of_hate_it: "Kind of hate it",
+  rage_quitting: "Rage quitting",
+  like_it: "Like it",
+  frustrated: "Frustrated",
+  too_easy: "Too easy",
+  looking_for_group: "Looking for group",
+  open_to_play: "Open to play",
+  looking_for_tips: "Looking for tips",
+  open_to_teach: "Open to teach",
+  looking_to_discuss: "Looking to discuss",
+};
+
+function getDisplayNameStyleProps(
+  user: Partial<DiscordUser> | null | undefined,
+  fallbackStyle: React.CSSProperties = {},
+): { className: string; style: React.CSSProperties } {
+  const displayStyle = user?.display_name_styles;
+  const fontClass = displayNameFontClass(displayStyle?.font_id);
+  const colors = (displayStyle?.colors || []).filter(
+    color => Number.isInteger(color) && color >= 0 && color <= 0xffffff,
+  );
+  const rawEffect = displayStyle?.effect_id;
+  const knownEffect = [1, 2, 3, 4, 5, 6, 7, 8].includes(rawEffect || 0);
+  const effectId = knownEffect ? rawEffect! : 1;
+  const useStyleEffect = colors.length > 0;
+  const color = (value: number) => `#${value.toString(16).padStart(6, "0")}`;
+  const style = {
+    ...(useStyleEffect ? {} : fallbackStyle),
+  } as React.CSSProperties & Record<`--dn-${string}`, string>;
+
+  if (useStyleEffect) {
+    const stops = colors.length > 1 ? colors : [colors[0], colors[0]];
+    style["--dn-color"] = color(colors[0]);
+    style["--dn-gradient"] = `linear-gradient(90deg, ${stops.map(color).join(", ")})`;
+  }
+
+  return {
+    className: [
+      fontClass,
+      useStyleEffect ? `dn-effect-${effectId}` : "",
+    ].filter(Boolean).join(" "),
+    style,
+  };
+}
+
+function StyledDisplayName({
+  user,
+  children,
+  className,
+  fallbackStyle,
+}: {
+  user: DiscordUser;
+  children?: React.ReactNode;
+  className?: string;
+  fallbackStyle?: React.CSSProperties;
+}) {
+  const nameStyle = getDisplayNameStyleProps(user, fallbackStyle);
+  return (
+    <span className={[className, nameStyle.className].filter(Boolean).join(" ")} style={nameStyle.style}>
+      {children ?? displayName(user)}
+    </span>
+  );
+}
+
+function ProfileGameWidgets({
+  widgets,
+  resolveApplication,
+}: {
+  widgets?: any[] | null;
+  resolveApplication: (applicationId: string) => Promise<{ name?: string; icon?: string | null }>;
+}) {
+  const [activeTab, setActiveTab] = useState<"board" | "activity" | "wishlist">("board");
+  const [applications, setApplications] = useState<Record<string, { name?: string; icon?: string | null }>>({});
+  const visibleWidgets = Array.isArray(widgets)
+    ? widgets.filter(widget => widget?.data && typeof widget.data.type === "string")
+    : [];
+  const applicationIds = [...new Set(visibleWidgets.flatMap(widget => {
+    const data = widget.data;
+    const games = Array.isArray(data.games) ? data.games : [];
+    return [
+      ...games.filter((game: any) => typeof game?.name !== "string" || !game.name.trim()).map((game: any) => game?.game_id),
+      ...(data.type === "application" && (typeof data.name !== "string" || !data.name.trim()) ? [data.application_id] : []),
+    ].filter((id): id is string => typeof id === "string" && /^\d+$/.test(id));
+  }))];
+
+  useEffect(() => {
+    let active = true;
+    const unresolved = applicationIds.filter(id => !applications[id]);
+    if (unresolved.length === 0) return;
+
+    void Promise.all(unresolved.map(async applicationId => {
+      try {
+        const application = await resolveApplication(applicationId);
+        return [applicationId, application] as const;
+      } catch (error) {
+        console.warn(`Could not resolve profile game ${applicationId}`, error);
+        return null;
+      }
+    })).then(results => {
+      if (!active) return;
+      const resolved = Object.fromEntries(results.filter((result): result is readonly [string, { name?: string; icon?: string | null }] => result !== null));
+      if (Object.keys(resolved).length > 0) {
+        setApplications(current => ({ ...current, ...resolved }));
+      }
+    });
+
+    return () => { active = false; };
+  }, [applicationIds.join(","), applications, resolveApplication]);
+
+  const tabTypes: Record<typeof activeTab, string[] | null> = {
+    board: null,
+    activity: ["current_games", "played_games", "favorite_games"],
+    wishlist: ["want_to_play_games"],
+  };
+  const filteredWidgets = tabTypes[activeTab]
+    ? visibleWidgets.filter(widget => tabTypes[activeTab]?.includes(widget.data.type))
+    : visibleWidgets;
+  return (
+    <section className="profile-game-widgets" aria-label="Game widgets">
+      <header className="profile-game-widgets-header">
+        <h3>Games</h3>
+        <div className="profile-widget-tabs" role="tablist" aria-label="Game widget categories">
+          {(["board", "activity", "wishlist"] as const).map(tab => (
+            <button type="button" role="tab" aria-selected={activeTab === tab} className={activeTab === tab ? "active" : ""} onClick={() => setActiveTab(tab)} key={tab}>
+              {tab === "board" ? "Board" : tab === "activity" ? "Activity" : "Wishlist"}
+            </button>
+          ))}
+        </div>
+      </header>
+      {filteredWidgets.length === 0
+        ? <div className="profile-widget-empty-state">{visibleWidgets.length === 0 ? "No games listed on this profile." : `No games in ${activeTab}.`}</div>
+        : filteredWidgets.map((widget, widgetIndex) => {
+        const data = widget.data;
+        const games = Array.isArray(data.games) ? data.games : [];
+        const applicationGame = data.type === "application" && data.application_id
+          ? [{ game_id: data.application_id }]
+          : [];
+        const entries = games.length > 0 ? games : applicationGame;
+        return (
+          <div className="profile-game-widget" key={widget.id || `${data.type}-${widgetIndex}`}>
+            <div className="profile-game-widget-title"><Gamepad2 size={15} />{GAME_WIDGET_TYPE_LABELS[data.type] || data.type.replaceAll("_", " ")}</div>
+            {entries.length === 0
+              ? <div className="profile-game-widget-empty">No games listed</div>
+              : entries.map((game: any, gameIndex: number) => {
+                if (!game || typeof game !== "object") return null;
+                const gameId = typeof game.game_id === "string" ? game.game_id : "";
+                const application = gameId ? applications[gameId] : undefined;
+                const gameName = (typeof game.name === "string" && game.name.trim())
+                  ? game.name
+                  : application?.name?.trim() || "Unknown game";
+                const iconUrl = application?.icon && gameId
+                  ? `https://cdn.discordapp.com/app-icons/${gameId}/${application.icon}.png?size=128`
+                  : null;
+                const tags = Array.isArray(game.tags)
+                  ? game.tags.filter((tag: unknown): tag is string => typeof tag === "string")
+                  : [];
+                return (
+                  <div className="profile-game-widget-game" key={`${gameId}-${gameIndex}`}>
+                    {iconUrl
+                      ? <img className="profile-game-widget-icon" src={iconUrl} alt="" onError={event => { event.currentTarget.style.visibility = "hidden"; }} />
+                      : <div className="profile-game-widget-icon profile-game-widget-icon-placeholder"><Gamepad2 size={19} /></div>}
+                    <div className="profile-game-widget-game-details">
+                    <strong>{gameName}</strong>
+                    {typeof game.comment === "string" && game.comment && <div className="profile-game-widget-comment">{game.comment}</div>}
+                    {tags.length > 0 && (
+                      <div className="profile-game-widget-tags">
+                        {tags.map((tag: string) => (
+                          <span className="profile-game-widget-tag" key={tag}>
+                            {GAME_WIDGET_TAG_LABELS[tag] || tag.replaceAll("_", " ")}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
 
 async function secureSaveToken(accountId: string, token: string): Promise<void> {
   try {
@@ -842,11 +1265,11 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
             Enter your Discord user token to connect.<br />
             <span className="login-warn">⚠ Keep your token private. Never share it.</span>
           </p>
-          <label className="login-label">User Token</label>
+          <label className="login-label">Discord Token</label>
           <input
             className="login-input"
             type="password"
-            placeholder="Paste your token here…"
+            placeholder="Paste a user token or Bot token here…"
             value={token}
             onChange={e => setToken(e.target.value)}
             onKeyDown={e => e.key === "Enter" && submit()}
@@ -857,7 +1280,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
             {loading ? <Loader2 size={16} className="spinning" /> : "Connect"}
           </button>
           <p className="login-hint">
-            Find your token in DevTools → Network → any Discord request → Authorization header.
+            Bot accounts: enter the token as <code>Bot &lt;token&gt;</code>. Bots can access servers and channels they joined, but Discord does not provide user DMs or friends for bots.
           </p>
         </div>
       </div>
@@ -1029,10 +1452,11 @@ function AccountSwitcher({
                 <img src={avatarUrl(account.user, 48)} alt="" />
                 <div className="account-switcher-name">
                   <div className="account-switcher-name-row">
-                    <strong>{displayName(account.user)}</strong>
+                    <strong><StyledDisplayName user={account.user} /></strong>
                     <span className={`account-role-tag role-${account.role || (current ? "primary" : "secondary")}`}>
                       ({account.role || (current ? "primary" : "secondary")})
                     </span>
+                    {account.user.bot && <span className="account-role-tag">Bot</span>}
                   </div>
                   <small>@{account.user.username}{formatDiscriminator(account.user)}{current ? " · Current session" : ""}</small>
                   <div className="account-switcher-role-picker">
@@ -1082,7 +1506,7 @@ function AccountSwitcher({
         </div>
         <form className="account-add-form" onSubmit={event => { event.preventDefault(); void connect(token); }}>
           <label htmlFor="add-account-token">Add another account</label>
-          <div className="account-add-row"><input id="add-account-token" type="password" autoComplete="off" placeholder="Paste account token" value={token} onChange={event => setToken(event.target.value)} /><button type="submit" disabled={busy || !token.trim()}>{busy && !busyId ? <Loader2 size={14} className="spinning" /> : "Add"}</button></div>
+          <div className="account-add-row"><input id="add-account-token" type="password" autoComplete="off" placeholder="User token or Bot &lt;token&gt;" value={token} onChange={event => setToken(event.target.value)} /><button type="submit" disabled={busy || !token.trim()}>{busy && !busyId ? <Loader2 size={14} className="spinning" /> : "Add"}</button></div>
           {busy && <small className="account-switcher-progress">{busyId ? "Switching account…" : "Connecting account…"}</small>}
           {error && <p className="account-switcher-error">{error}</p>}
         </form>
@@ -1101,6 +1525,7 @@ export default function App() {
   const [accountSessionVersion, setAccountSessionVersion] = useState(0);
   const [rawMessage, setRawMessage] = useState<DiscordMessage | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [startupTip, setStartupTip] = useState("Loading saved accounts…");
 
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [discordGuildFolders, setDiscordGuildFolders] = useState<DiscordGuildFolderSettings | null>(null);
@@ -1318,6 +1743,7 @@ export default function App() {
       return {};
     }
   });
+  const [checkedAltGuildAccounts, setCheckedAltGuildAccounts] = useState<Set<string>>(() => new Set());
   const [altGuildJoinModal, setAltGuildJoinModal] = useState<{ guild: DiscordGuild; ownerAccount: SavedDiscordAccount } | null>(null);
   const [altGuildJoinLoading, setAltGuildJoinLoading] = useState(false);
   const [altGuildJoinError, setAltGuildJoinError] = useState<string | null>(null);
@@ -1328,8 +1754,24 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [protoSettingsOpen, setProtoSettingsOpen] = useState(false);
   const [settingsTheme, setSettingsTheme] = useState<"dark" | "light">("dark");
-  const [settingsTab, setSettingsTab] = useState<"account" | "themes" | "notifications">("account");
+  const [settingsTab, setSettingsTab] = useState<"account" | "themes" | "notifications" | "plugins">("account");
+  const [reviewModalTarget, setReviewModalTarget] = useState<{ id: string; name: string; type?: ReviewType } | null>(null);
+  const [reviewDbTokenVal, setReviewDbTokenVal] = useState(() => getStoredReviewDbToken() || "");
   const [preferences, setPreferences] = useState<AppPreferences>(readPreferences);
+  const themeFileInputRef = useRef<HTMLInputElement>(null);
+  const preferenceSaveFailedRef = useRef(false);
+  const [gameDetectionEnabled, setGameDetectionEnabled] = useState(() => localStorage.getItem("voidcord:game-detection-enabled") === "true");
+  const [gameProcessMappings, setGameProcessMappings] = useState<GameProcessMapping[]>(readGameProcessMappings);
+  const [rpcListenerEnabled, setRpcListenerEnabled] = useState(() => localStorage.getItem("voidcord:rpc-listener-enabled") === "true");
+  const [rpcConnectedClients, setRpcConnectedClients] = useState(0);
+  const [customRpcConfig, setCustomRpcConfig] = useState<CustomRpcConfig>(readCustomRpcConfig);
+  const [customRpcEnabled, setCustomRpcEnabled] = useState(() => localStorage.getItem("voidcord:custom-rpc-enabled") === "true");
+  const [customRpcBusy, setCustomRpcBusy] = useState(false);
+  const [newGameProcessName, setNewGameProcessName] = useState("");
+  const [newGameDisplayName, setNewGameDisplayName] = useState("");
+  const activeGameActivityRef = useRef<string | null>(null);
+  const activeGameActivityKeyRef = useRef<string | null>(null);
+  const customRpcAppliedRef = useRef(false);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [mediaViewer, setMediaViewer] = useState<MediaViewerState | null>(null);
   const [mediaZoom, setMediaZoom] = useState(1);
@@ -1372,6 +1814,19 @@ export default function App() {
   );
   const [toast, setToast] = useState<NoticeState | null>(null);
   const [systemNotice, setSystemNotice] = useState<NoticeState | null>(null);
+  const [safetyHub, setSafetyHub] = useState<SafetyHubData | null>(null);
+  const [safetyHubLoading, setSafetyHubLoading] = useState(false);
+  const [safetyHubError, setSafetyHubError] = useState("");
+  const [safetyHubOpen, setSafetyHubOpen] = useState(false);
+  const [safetyNoticeDismissal, setSafetyNoticeDismissal] = useState("");
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  const [reportReasons, setReportReasons] = useState<ReportReason[]>([]);
+  const [reportReason, setReportReason] = useState<number | "">("");
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const reportRequestRef = useRef(0);
+  const safetyHubRequestRef = useRef(0);
   const notificationSequence = useRef(0);
   const [sending, setSending] = useState(false);
   const [replyToMessage, setReplyToMessage] = useState<DiscordMessage | null>(null);
@@ -1400,6 +1855,15 @@ export default function App() {
   const [contextBusy, setContextBusy] = useState(false);
   const [forwardTarget, setForwardTarget] = useState<{ message: DiscordMessage; channel: DiscordChannel } | null>(null);
   const [forwardBusy, setForwardBusy] = useState(false);
+
+  useEffect(() => {
+    const handleStartupProgress = (event: Event) => {
+      const message = (event as CustomEvent<unknown>).detail;
+      if (typeof message === "string" && message.trim()) setStartupTip(message);
+    };
+    window.addEventListener("voidcord-startup-progress", handleStartupProgress);
+    return () => window.removeEventListener("voidcord-startup-progress", handleStartupProgress);
+  }, []);
 
   const listRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
@@ -1454,6 +1918,11 @@ export default function App() {
     return execute(command, args);
   }, []);
 
+  const resolveProfileGameApplication = useCallback(
+    (applicationId: string) => invoke<{ name?: string; icon?: string | null }>("get_rpc_application", { applicationId }),
+    [invoke],
+  );
+
   useEffect(() => {
     if (!contextMenu) return;
     const closeMenu = () => setContextMenu(null);
@@ -1475,6 +1944,36 @@ export default function App() {
   const notify = useCallback((msg: string, ms = 2600) => {
     setToast({ id: ++notificationSequence.current, message: msg, duration: ms, exiting: false });
   }, []);
+
+  const loadSafetyHub = useCallback(async () => {
+    if (!me?.id) return;
+    const requestId = ++safetyHubRequestRef.current;
+    setSafetyHubLoading(true);
+    setSafetyHubError("");
+    try {
+      const result = await invoke<SafetyHubData>("get_safety_hub");
+      if (!result || typeof result !== "object") {
+        throw new Error("Discord returned an invalid Safety Hub response");
+      }
+      if (requestId !== safetyHubRequestRef.current) return;
+      setSafetyHub(result);
+    } catch (error) {
+      if (requestId !== safetyHubRequestRef.current) return;
+      setSafetyHubError(String(error));
+    } finally {
+      if (requestId === safetyHubRequestRef.current) setSafetyHubLoading(false);
+    }
+  }, [invoke, me?.id]);
+
+  useEffect(() => {
+    if (!me?.id) {
+      ++safetyHubRequestRef.current;
+      setSafetyHub(null);
+      setSafetyHubError("");
+      return;
+    }
+    void loadSafetyHub();
+  }, [loadSafetyHub, me?.id, accountSessionVersion]);
 
   const notifySystem = useCallback((msg: string, ms = preferences.systemNotificationDuration) => {
     if (!preferences.showSystemNotifications) return;
@@ -1959,8 +2458,169 @@ export default function App() {
   };
 
   useEffect(() => {
-    localStorage.setItem("voidcord:preferences", JSON.stringify(preferences));
-  }, [preferences]);
+    try {
+      localStorage.setItem("voidcord:preferences", JSON.stringify(preferences));
+      preferenceSaveFailedRef.current = false;
+    } catch (error) {
+      console.error("Could not save local VoidCord preferences", error);
+      if (!preferenceSaveFailedRef.current) notify("Could not save preferences; local storage may be full.");
+      preferenceSaveFailedRef.current = true;
+    }
+  }, [preferences, notify]);
+
+  useEffect(() => {
+    const existing = document.getElementById("voidcord-custom-theme") as HTMLStyleElement | null;
+    if (!preferences.customThemeEnabled || !preferences.customThemeCss) {
+      existing?.remove();
+      return;
+    }
+
+    const style = existing || document.createElement("style");
+    style.id = "voidcord-custom-theme";
+    style.textContent = preferences.customThemeCss;
+    if (!existing) document.head.appendChild(style);
+    return () => style.remove();
+  }, [preferences.customThemeCss, preferences.customThemeEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("voidcord:game-detection-enabled", String(gameDetectionEnabled));
+    localStorage.setItem("voidcord:game-process-mappings", JSON.stringify(gameProcessMappings));
+  }, [gameDetectionEnabled, gameProcessMappings]);
+
+  useEffect(() => {
+    localStorage.setItem("voidcord:custom-rpc", JSON.stringify(customRpcConfig));
+    localStorage.setItem("voidcord:custom-rpc-enabled", String(customRpcEnabled));
+  }, [customRpcConfig, customRpcEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("voidcord:rpc-listener-enabled", String(rpcListenerEnabled));
+    void invoke("set_rpc_listener_enabled", {
+      enabled: rpcListenerEnabled,
+      status: selfPresence.status,
+      customStatus: selfPresence.customStatus || null,
+    }).catch(error => {
+      notify(`Could not ${rpcListenerEnabled ? "start" : "stop"} the local RPC listener: ${error}`);
+      if (rpcListenerEnabled) setRpcListenerEnabled(false);
+    });
+  }, [rpcListenerEnabled, selfPresence.status, selfPresence.customStatus, notify]);
+
+  useEffect(() => {
+    let disposed = false;
+    const publish = async () => {
+      if (!customRpcEnabled) {
+        if (customRpcAppliedRef.current) {
+          customRpcAppliedRef.current = false;
+          try {
+            await invoke("set_custom_rpc_activity", {
+              activity: null,
+              status: selfPresence.status,
+              customStatus: selfPresence.customStatus || null,
+            });
+          } catch (error) {
+            if (gatewayStatus === "connected") notify(`Could not clear custom RPC activity: ${error}`);
+          }
+        }
+        return;
+      }
+      if (gatewayStatus !== "connected") return;
+      setCustomRpcBusy(true);
+      try {
+        await invoke("set_custom_rpc_activity", {
+          activity: customRpcCommandPayload(customRpcConfig),
+          status: selfPresence.status,
+          customStatus: selfPresence.customStatus || null,
+        });
+        if (!disposed) customRpcAppliedRef.current = true;
+      } catch (error) {
+        if (!disposed) notify(`Could not publish custom RPC activity: ${error}`);
+      } finally {
+        if (!disposed) setCustomRpcBusy(false);
+      }
+    };
+    void publish();
+    return () => { disposed = true; };
+  }, [
+    customRpcEnabled,
+    customRpcConfig,
+    gatewayStatus,
+    selfPresence.status,
+    selfPresence.customStatus,
+    notify,
+  ]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<{ connectedClients?: number }>("voidcord:rpc-status", event => {
+      if (!disposed) setRpcConnectedClients(event.payload.connectedClients || 0);
+    }).then(unsubscribe => {
+      if (disposed) unsubscribe();
+      else unlisten = unsubscribe;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (gatewayStatus !== "connected") {
+      activeGameActivityKeyRef.current = null;
+      return;
+    }
+
+    if (!gameDetectionEnabled || gameProcessMappings.length === 0) {
+      if (activeGameActivityRef.current !== null) {
+        void invoke("set_game_activity", {
+          gameName: null,
+          status: selfPresence.status,
+          customStatus: selfPresence.customStatus || null,
+        }).then(() => {
+          activeGameActivityRef.current = null;
+          activeGameActivityKeyRef.current = null;
+        }).catch(error => notify(`Could not clear game activity: ${error}`));
+      }
+      return;
+    }
+
+    let disposed = false;
+    let scanning = false;
+    let lastError = "";
+    const scan = async () => {
+      if (disposed || scanning) return;
+      scanning = true;
+      try {
+        const gameName = await invoke<string | null>("detect_running_game", { mappings: gameProcessMappings });
+        if (disposed) return;
+        const activityKey = JSON.stringify([gameName, selfPresence.status, selfPresence.customStatus]);
+        if (gameName === null && activeGameActivityRef.current === null) {
+          activeGameActivityKeyRef.current = activityKey;
+          return;
+        }
+        if (activeGameActivityRef.current === gameName && activeGameActivityKeyRef.current === activityKey) return;
+        await invoke("set_game_activity", {
+          gameName,
+          status: selfPresence.status,
+          customStatus: selfPresence.customStatus || null,
+        });
+        activeGameActivityRef.current = gameName;
+        activeGameActivityKeyRef.current = activityKey;
+        lastError = "";
+      } catch (error) {
+        const message = String(error);
+        if (message !== lastError) notify(`Game detection failed: ${message}`);
+        lastError = message;
+      } finally {
+        scanning = false;
+      }
+    };
+    void scan();
+    const timer = window.setInterval(() => void scan(), 15_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [gatewayStatus, gameDetectionEnabled, gameProcessMappings, selfPresence.status, selfPresence.customStatus, notify, dmChannels, guilds, relationships, savedAccounts]);
 
   // Pre-fetch data worker: loads up to 20 channels (top DMs + guild text channels), presences, and application commands
   const prefetchRunningRef = useRef(false);
@@ -1988,7 +2648,13 @@ export default function App() {
       // Pre-fetch messages for gathered channels in the background
       for (const ch of targetChannels.slice(0, 20)) {
         try {
-          const msgs = await invoke<DiscordMessage[]>("get_messages", { channelId: ch.id });
+          const asToken = ch.account_id
+            ? savedAccounts.find(account => account.user.id === ch.account_id)?.token
+            : undefined;
+          const msgs = await invoke<DiscordMessage[]>("get_messages", {
+            channelId: ch.id,
+            ...(asToken ? { asToken } : {}),
+          });
           if (Array.isArray(msgs) && msgs.length > 0) {
             void writeCachedMessages(ch.id, msgs);
           }
@@ -2028,6 +2694,38 @@ export default function App() {
   }, [me?.id, dmChannels.length, guilds.length]);
 
   useEffect(() => {
+    const openExternalLink = (event: MouseEvent) => {
+      if (event.defaultPrevented || (event.button !== 0 && event.button !== 1)) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const anchor = target.closest<HTMLAnchorElement>("a[href]");
+      if (!anchor || anchor.hasAttribute("download") || anchor.dataset.voidcordInAppLink === "true") return;
+      if (anchor.classList.contains("msg-file-link") && !navigator.onLine) return;
+
+      let url: URL;
+      try {
+        url = new URL(anchor.href, window.location.href);
+      } catch {
+        return;
+      }
+      if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin === window.location.origin) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void openUrl(url.href).catch(error => {
+        console.error("Could not open external link in the system browser:", error);
+      });
+    };
+
+    document.addEventListener("click", openExternalLink, true);
+    document.addEventListener("auxclick", openExternalLink, true);
+    return () => {
+      document.removeEventListener("click", openExternalLink, true);
+      document.removeEventListener("auxclick", openExternalLink, true);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!settingsOpen && !serverDialogOpen && !mediaViewer) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -2045,6 +2743,10 @@ export default function App() {
   }, [settingsOpen, serverDialogOpen, serverActionBusy, mediaViewer]);
 
   const archiveMessageMedia = useCallback((message: DiscordMessage): Promise<void> => {
+    if (!navigator.onLine) return Promise.resolve();
+    const pending = messageArchivePromisesRef.current.get(message.id);
+    if (pending) return pending;
+
     const media = new Map<string, string>();
     (message.attachments || []).forEach(attachment => {
       if (attachment.url) media.set(`${message.id}:${attachment.id}`, attachment.url);
@@ -2057,15 +2759,23 @@ export default function App() {
         media.set(`${message.id}:embed:${index}:thumbnail`, embed.thumbnail.url);
       }
     });
+    if (media.size === 0) return Promise.resolve();
+
+    const failures: unknown[] = [];
     let promise: Promise<void>;
     promise = Promise.all([...media].map(async ([key, url]) => {
       try {
+        if (await readArchivedMedia(key)) return;
         const dataUrl = await invoke<string>("archive_message_media", { url });
         await writeArchivedMedia(key, dataUrl);
       } catch (error) {
-        console.warn(`Could not archive media for message ${message.id}`, error);
+        failures.push(error);
       }
-    })).then(() => undefined).finally(() => {
+    })).then(() => {
+      if (failures.length > 0) {
+        console.warn(`Could not archive ${failures.length} media item(s) for message ${message.id}`, failures[0]);
+      }
+    }).finally(() => {
       if (messageArchivePromisesRef.current.get(message.id) === promise) {
         messageArchivePromisesRef.current.delete(message.id);
       }
@@ -2301,6 +3011,7 @@ export default function App() {
     (async () => {
       try {
         const store = await load("voidcord-v1.json", { autoSave: true, defaults: {} });
+        setStartupTip("Unlocking saved account credentials…");
         let diskAccounts = await store.get<SavedDiscordAccount[]>("accounts") || [];
         const rawSavedToken = await store.get<string>("token");
 
@@ -2346,12 +3057,14 @@ export default function App() {
         const tokenToConnect = primaryAcc?.token;
 
         if (tokenToConnect) {
+          setStartupTip("Preparing offline data…");
           const cachedUser = await readCachedAppData<DiscordUser>("current-user").catch(() => undefined);
           if (cachedUser && (!primaryAcc || cachedUser.id === primaryAcc.user.id)) {
             setMe(cachedUser);
             setAuthLoading(false);
           }
           try {
+            setStartupTip("Connecting to Discord…");
             const user = await invoke<DiscordUser>("set_token", { token: tokenToConnect });
             setMe(user);
             void writeCachedAppData("current-user", user);
@@ -2391,11 +3104,20 @@ export default function App() {
           readCachedAppData<DiscordChannel[]>("dm-channels").catch(() => undefined),
         ])
         : [undefined, undefined];
-      const validCachedGuilds = normalizeGuildList(cachedGuilds);
-      if (cachedGuilds) setGuilds(validCachedGuilds);
-      if (cachedDms) setDmChannels(cachedDms);
+      const cachedProfile = await readStoredProfile(me.id);
+      if (me.bot) setUserProfile(null);
+      else if (cachedProfile) setUserProfile(cachedProfile);
+      const validCachedGuilds = me.bot ? [] : normalizeGuildList(cachedGuilds);
+      if (cachedGuilds || me.bot) setGuilds(validCachedGuilds);
+      if (cachedDms && !me.bot) setDmChannels(cachedDms);
+      if (me.bot) {
+        setDmChannels([]);
+        setRelationships([]);
+        setMessageRequests([]);
+        setIsDmView(false);
+      }
       if (!navigator.onLine) {
-        const cachedDm = cachedDms?.find(channel => channel.id === lastReadChannel?.channelId);
+        const cachedDm = !me.bot && cachedDms?.find(channel => channel.id === lastReadChannel?.channelId);
         if (cachedDm) {
           void selectChannel(cachedDm);
         } else if (lastReadChannel?.guildId) {
@@ -2406,37 +3128,43 @@ export default function App() {
       }
 
       let availableGuilds = validCachedGuilds;
-      try {
-        const list = await invoke<DiscordGuild[]>("get_guilds");
-        availableGuilds = normalizeGuildList(list);
-        setGuilds(availableGuilds);
+      if (!me.bot) {
         try {
-          const proto = await invoke<{ settings?: string }>("get_guild_folder_settings");
-          if (proto.settings) {
-            const decoded = decodeGuildFolderSettings(proto.settings);
-            setDiscordGuildFolders(decoded);
-            const remoteOrder = [...new Set([...decoded.folders.flatMap(folder => folder.guildIds), ...decoded.positions])];
-            setPreferences(current => ({ ...current, cachedServerOrder: remoteOrder, cachedDiscordFolders: decoded.folders }));
+          const list = await invoke<DiscordGuild[]>("get_guilds");
+          availableGuilds = normalizeGuildList(list);
+          setGuilds(availableGuilds);
+          try {
+            const proto = await invoke<{ settings?: string }>("get_guild_folder_settings");
+            if (proto.settings) {
+              const decoded = decodeGuildFolderSettings(proto.settings);
+              setDiscordGuildFolders(decoded);
+              const remoteOrder = [...new Set([...decoded.folders.flatMap(folder => folder.guildIds), ...decoded.positions])];
+              setPreferences(current => ({ ...current, cachedServerOrder: remoteOrder, cachedDiscordFolders: decoded.folders }));
+            }
+          } catch (settingsError) {
+            console.warn("Could not load Discord guild folder settings; keeping local sidebar layout", settingsError);
           }
-        } catch (settingsError) {
-          console.warn("Could not load Discord guild folder settings; keeping local sidebar layout", settingsError);
+          void writeCachedAppData("guilds", availableGuilds);
+        } catch (e) {
+          notify(`Failed to load servers: ${e}`);
         }
-        void writeCachedAppData("guilds", availableGuilds);
-      } catch (e) {
-        notify(`Failed to load servers: ${e}`);
       }
 
-      let availableDms = cachedDms || [];
-      try {
-        const dms = await invoke<DiscordChannel[]>("get_dm_channels");
-        availableDms = dms;
-        setDmChannels(dms);
-        void writeCachedAppData("dm-channels", dms);
-      } catch (e) {
-        console.error("Failed to load DMs", e);
+      let availableDms = me.bot ? [] : cachedDms || [];
+      if (!me.bot) {
+        try {
+          const dms = await invoke<DiscordChannel[]>("get_dm_channels", {
+            accounts: getAccountReadCredentials(savedAccounts),
+          });
+          availableDms = dms;
+          setDmChannels(dms);
+          void writeCachedAppData("dm-channels", dms);
+        } catch (e) {
+          console.error("Failed to load DMs", e);
+        }
       }
 
-      if (lastReadChannel) {
+      if (!me.bot && lastReadChannel) {
         const savedDm = availableDms.find(channel => channel.id === lastReadChannel?.channelId);
         if (savedDm) {
           void selectChannel(savedDm);
@@ -2446,29 +3174,37 @@ export default function App() {
         }
       }
 
-      try {
-        const list = await invoke<DiscordRelationship[]>("get_relationships");
-        setRelationships(list.filter(relationship => relationship.user));
-      } catch (e) {
-        notify(`Failed to load friends and requests: ${e}`);
-      }
+      if (!me.bot) {
+        try {
+          const list = await invoke<DiscordRelationship[]>("get_relationships");
+          setRelationships(list.filter(relationship => relationship.user));
+          const ignored = new Set(list.filter(relationship => relationship.user_ignored).map(relationship => relationship.id));
+          setIgnoredUserIds(ignored);
+          try { localStorage.setItem("voidcord:ignored-users", JSON.stringify([...ignored])); } catch { /* optional local cache */ }
+        } catch (e) {
+          notify(`Failed to load friends and requests: ${e}`);
+        }
 
-      setMessageRequestsLoading(true);
-      try {
-        const requests = await invoke<DiscordChannel[]>("get_message_requests");
-        setMessageRequests(requests);
+        setMessageRequestsLoading(true);
+        try {
+          const requests = await invoke<DiscordChannel[]>("get_message_requests");
+          setMessageRequests(requests);
+          setMessageRequestsError("");
+        } catch (e) {
+          setMessageRequestsError(String(e));
+        } finally {
+          setMessageRequestsLoading(false);
+        }
+
+        try {
+          const prof = await loadUserProfile(me.id, getAccountReadCredentials(savedAccounts), setUserProfile);
+          if (prof) setUserProfile(prof);
+        } catch (e) {
+          console.error("Failed to load extended profile", e);
+        }
+      } else {
         setMessageRequestsError("");
-      } catch (e) {
-        setMessageRequestsError(String(e));
-      } finally {
         setMessageRequestsLoading(false);
-      }
-
-      try {
-        const prof = await invoke<any>("get_user_profile", { userId: me.id });
-        if (prof) setUserProfile(prof);
-      } catch (e) {
-        console.error("Failed to load extended profile", e);
       }
 
       try {
@@ -2479,7 +3215,7 @@ export default function App() {
         notify(`Gateway error: ${e}`);
       }
     })();
-  }, [me?.id, online, accountSessionVersion]);
+  }, [me?.id, online, accountSessionVersion, savedAccounts]);
 
   useEffect(() => {
     let subscriptionsDisposed = false;
@@ -2723,6 +3459,7 @@ export default function App() {
             : [...existing, nextMessage].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
           void writeCachedMessages(payload.channel_id, [nextMessage])
             .catch(error => notify(`Could not cache edited message: ${error}`));
+          void archiveMessageMedia(nextMessage);
           if (payload.channel_id === selectedChannelRef.current?.id) {
             setMessages(prev => prev.map(message => message.id === payload.message.id ? nextMessage : message));
           }
@@ -2943,6 +3680,12 @@ export default function App() {
     }).then(u => unsubs.push(u));
 
     listen<any>("discord:guild_create", ({ payload }) => {
+      if (payload?.id && typeof payload.name === "string") {
+        setGuilds(current => normalizeGuildList([
+          ...current.filter(guild => guild.id !== payload.id),
+          payload as DiscordGuild,
+        ]));
+      }
       if (Array.isArray(payload?.members)) {
         void mergeGatewayMembers(payload.id || "", payload.members);
       }
@@ -3346,7 +4089,13 @@ export default function App() {
     }
     setMsgLoading(!cachedMessages);
     try {
-      const msgs = await invoke<DiscordMessage[]>("get_messages", { channelId: channel.id });
+      const asToken = channel.account_id
+        ? savedAccounts.find(account => account.user.id === channel.account_id)?.token
+        : undefined;
+      const msgs = await invoke<DiscordMessage[]>("get_messages", {
+        channelId: channel.id,
+        ...(asToken ? { asToken } : {}),
+      });
       if (requestId !== channelLoadRequest.current) return;
       const onlineIds = new Set(msgs.map(message => message.id));
       const oldestOnlineTimestamp = msgs[0] ? new Date(msgs[0].timestamp).getTime() : Number.POSITIVE_INFINITY;
@@ -3426,6 +4175,9 @@ export default function App() {
       const older = await invoke<DiscordMessage[]>("get_messages", {
         channelId: channel.id,
         before: firstMessageId,
+        ...(channel.account_id
+          ? { asToken: savedAccounts.find(account => account.user.id === channel.account_id)?.token }
+          : {}),
       });
       if (requestId !== channelLoadRequest.current || channel.id !== selectedChannel?.id) return;
 
@@ -3519,7 +4271,11 @@ export default function App() {
     let cancelled = false;
     setDmProfileLoading(true);
     setDmProfileData(null);
-    invoke<any>("get_user_profile", { userId: recipient.id })
+    loadUserProfile(
+      recipient.id,
+      getAccountReadCredentials(savedAccounts),
+      profile => { if (!cancelled) setDmProfileData(profile); },
+    )
       .then(profile => {
         if (!cancelled) setDmProfileData(profile);
       })
@@ -3533,7 +4289,7 @@ export default function App() {
         if (!cancelled) setDmProfileLoading(false);
       });
     return () => { cancelled = true; };
-  }, [isDmView, selectedChannel?.id, me?.id, notify]);
+  }, [isDmView, selectedChannel?.id, me?.id, notify, savedAccounts]);
 
   const handleOpenMemberProfile = async (userObj: any, openFullProfile = false) => {
     if (ignoredUserIds.has(userObj.id)) {
@@ -3544,7 +4300,11 @@ export default function App() {
     setFullProfileOpen(false);
     setMemberProfileLoading(true);
     try {
-      const prof = await invoke<any>("get_user_profile", { userId: userObj.id });
+      const prof = await loadUserProfile(
+        userObj.id,
+        getAccountReadCredentials(savedAccounts),
+        setMemberProfileData,
+      );
       setMemberProfileData(prof);
       if (openFullProfile) setFullProfileOpen(true);
     } catch (e) {
@@ -3558,22 +4318,27 @@ export default function App() {
   const refreshRelationships = async () => {
     const list = await invoke<DiscordRelationship[]>("get_relationships");
     setRelationships(list.filter(relationship => relationship.user));
+    const ignored = new Set(list.filter(relationship => relationship.user_ignored).map(relationship => relationship.id));
+    setIgnoredUserIds(ignored);
+    try { localStorage.setItem("voidcord:ignored-users", JSON.stringify([...ignored])); } catch { /* optional local cache */ }
   };
 
   const refreshMessageRequests = async () => {
     const requests = await invoke<DiscordChannel[]>("get_message_requests");
     setMessageRequests(requests);
     setMessageRequestsError("");
+    return requests;
   };
 
   const loadRequestMessages = async (channel: DiscordChannel) => {
     setSelectedMessageRequest(channel);
-    setRequestMessages([]);
+    setRequestMessages(channel.message_preview ? [channel.message_preview] : []);
     setRequestMessagesError("");
     setRequestMessagesLoading(true);
     try {
       const list = await invoke<DiscordMessage[]>("get_messages", { channelId: channel.id });
-      setRequestMessages(list);
+      const preview = channel.message_preview;
+      setRequestMessages(preview && !list.some(message => message.id === preview.id) ? [...list, preview] : list);
     } catch (e) {
       setRequestMessagesError(String(e));
     } finally {
@@ -3623,7 +4388,12 @@ export default function App() {
       await invoke("update_relationship", { userId: sender.id, action: "block" });
       try {
         await invoke("update_message_request", { channelId: channel.id, action: "ignore" });
-      } catch {}
+      } catch (requestError) {
+        const remainingRequests = await refreshMessageRequests();
+        if (remainingRequests.some(request => request.id === channel.id)) {
+          throw new Error(`User was blocked, but the message request could not be removed: ${requestError}`);
+        }
+      }
       setMessageRequests(previous => previous.filter(request => request.id !== channel.id));
       if (selectedMessageRequest?.id === channel.id) {
         setSelectedMessageRequest(null);
@@ -3633,7 +4403,7 @@ export default function App() {
       notify(`Blocked @${sender.username} and ignored message request`);
       await refreshRelationships();
     } catch (e) {
-      notify(`Could not block user: ${e}`);
+      notify(`Could not complete block and message-request cleanup: ${e}`);
     } finally {
       setRequestBusy(null);
     }
@@ -3651,7 +4421,18 @@ export default function App() {
       }
       notify(`Cleared ${channelIds.length} message request${channelIds.length > 1 ? "s" : ""}`);
     } catch (e) {
-      notify(`Could not clear message requests: ${e}`);
+      let refreshError = "";
+      try {
+        const remainingRequests = await refreshMessageRequests();
+        if (selectedMessageRequest && !remainingRequests.some(request => request.id === selectedMessageRequest.id)) {
+          setSelectedMessageRequest(null);
+          setRequestMessages([]);
+          setRequestMessagesError("");
+        }
+      } catch (error) {
+        refreshError = ` Could not refresh the list: ${error}`;
+      }
+      notify(`Could not clear message requests: ${e}.${refreshError}`);
     }
   };
 
@@ -3668,31 +4449,144 @@ export default function App() {
     }
   };
 
-  const toggleIgnoredUser = (userId: string) => {
-    const next = new Set(ignoredUserIds);
-    if (next.has(userId)) next.delete(userId);
-    else next.add(userId);
-    setIgnoredUserIds(next);
-    try { localStorage.setItem("voidcord:ignored-users", JSON.stringify([...next])); } catch { /* optional local preference */ }
-    setRevealedIgnoredProfileIds(current => { const updated = new Set(current); updated.delete(userId); return updated; });
-    notify(next.has(userId) ? "User ignored on this device" : "User unignored");
+  const toggleIgnoredUser = async (userId: string) => {
+    const ignored = !ignoredUserIds.has(userId);
+    setRelationshipBusy(userId);
+    try {
+      await invoke("set_user_ignored", { userId, ignored });
+      setIgnoredUserIds(current => {
+        const next = new Set(current);
+        if (ignored) next.add(userId);
+        else next.delete(userId);
+        try { localStorage.setItem("voidcord:ignored-users", JSON.stringify([...next])); } catch { /* optional local cache */ }
+        return next;
+      });
+      setRevealedIgnoredProfileIds(current => { const updated = new Set(current); updated.delete(userId); return updated; });
+      notify(ignored ? "User ignored" : "User unignored");
+    } catch (error) {
+      notify(`Could not ${ignored ? "ignore" : "unignore"} user: ${error}`);
+    } finally {
+      setRelationshipBusy(null);
+    }
+  };
+
+  const closeReportFlow = () => {
+    reportRequestRef.current += 1;
+    setReportTarget(null);
+    setReportReasons([]);
+    setReportReason("");
+    setReportError("");
+    setReportLoading(false);
+    setReportSubmitting(false);
   };
 
   const openDiscordReportFlow = async (userId?: string, message?: DiscordMessage, channel?: DiscordChannel) => {
-    const reportUrl = "https://discord.com/safety/360044103651-reporting-abusive-behavior-to-discord";
-    try {
-      if (message && channel) {
-        await navigator.clipboard.writeText(`https://discord.com/channels/${channel.guild_id || "@me"}/${channel.id}/${message.id}`);
-        notify("Message link copied. Discord’s report guide is opening.");
-      } else if (userId) {
-        await navigator.clipboard.writeText(userId);
-        notify("User ID copied. Discord’s report guide is opening.");
-      }
-    } catch {
-      notify("Opening Discord’s report guide");
+    if (!me) {
+      notify("Sign in before submitting a report.");
+      return;
     }
+    if (message && channel) {
+      if (message.author.id === me.id) {
+        notify("You can’t report your own message.");
+        return;
+      }
+      const target: ReportTarget = { kind: "message", channelId: channel.id, messageId: message.id };
+      setSafetyHubOpen(false);
+      setReportTarget(target);
+      setReportReasons([]);
+      setReportReason("");
+      setReportError("");
+      setReportLoading(true);
+      const requestId = ++reportRequestRef.current;
+      try {
+        const reasons = await invoke<ReportReason[]>("get_report_reasons", {
+          userId: null,
+          channelId: target.channelId,
+          messageId: target.messageId,
+        });
+        if (requestId !== reportRequestRef.current) return;
+        if (!Array.isArray(reasons) || reasons.some(reason => typeof reason.reason !== "number" || !reason.label)) {
+          throw new Error("Discord returned invalid report reasons.");
+        }
+        setReportReasons(reasons);
+      } catch (error) {
+        if (requestId === reportRequestRef.current) setReportError(String(error));
+      } finally {
+        if (requestId === reportRequestRef.current) setReportLoading(false);
+      }
+      return;
+    }
+
+    if (userId) {
+      if (userId === me.id) {
+        notify("You can’t report your own account.");
+        return;
+      }
+      const target: ReportTarget = { kind: "user", userId };
+      setSafetyHubOpen(false);
+      setReportTarget(target);
+      setReportReasons([]);
+      setReportReason("");
+      setReportError("");
+      setReportLoading(true);
+      const requestId = ++reportRequestRef.current;
+      try {
+        const reasons = await invoke<ReportReason[]>("get_report_reasons", {
+          userId: target.userId,
+          channelId: null,
+          messageId: null,
+        });
+        if (requestId !== reportRequestRef.current) return;
+        if (!Array.isArray(reasons) || reasons.some(reason => typeof reason.reason !== "number" || !reason.label)) {
+          throw new Error("Discord returned invalid report reasons.");
+        }
+        setReportReasons(reasons);
+      } catch (error) {
+        if (requestId === reportRequestRef.current) setReportError(String(error));
+      } finally {
+        if (requestId === reportRequestRef.current) setReportLoading(false);
+      }
+      return;
+    }
+
+    const reportUrl = "https://discord.com/safety/360044103651-reporting-abusive-behavior-to-discord";
     try { await openUrl(reportUrl); }
     catch (error) { notify(`Could not open Discord’s report guide: ${error}`); }
+  };
+
+  const submitReport = async () => {
+    if (!reportTarget || reportReason === "") return;
+    setReportSubmitting(true);
+    setReportError("");
+    try {
+      await invoke("create_report", {
+        userId: reportTarget.kind === "user" ? reportTarget.userId : null,
+        channelId: reportTarget.kind === "message" ? reportTarget.channelId : null,
+        messageId: reportTarget.kind === "message" ? reportTarget.messageId : null,
+        reason: reportReason,
+      });
+      closeReportFlow();
+      notify("Report submitted to Discord. Reports are anonymous.");
+    } catch (error) {
+      setReportError(String(error));
+    } finally {
+      setReportSubmitting(false);
+    }
+  };
+
+  const openSafetyHub = () => {
+    setSafetyHubOpen(true);
+    if (!safetyHub && !safetyHubLoading) void loadSafetyHub();
+  };
+
+  const dismissSafetyNotice = () => {
+    if (!safetyNoticeId || !me?.id) return;
+    try {
+      localStorage.setItem(`voidcord:safety-dismissed:${me.id}`, safetyNoticeId);
+    } catch (error) {
+      notify(`Warning dismissed for this session, but could not save the preference: ${error}`);
+    }
+    setSafetyNoticeDismissal(safetyNoticeId);
   };
 
   const sendFriendRequest = async () => {
@@ -3735,7 +4629,7 @@ export default function App() {
 
   const changePresence = async (status: string, customStatus = selfPresence.customStatus) => {
     const previous = selfPresence;
-    const next = { status, customStatus: customStatus.trim() };
+    const next = { status, customStatus: me?.bot ? "" : customStatus.trim() };
     setSelfPresence(next);
     try {
       await invoke("set_presence", { status, customStatus: next.customStatus || null });
@@ -3749,7 +4643,7 @@ export default function App() {
   };
 
   const saveBio = async () => {
-    if (!me) return;
+    if (!me || me.bot) return;
     const bio = bioDraft.trim();
     if ([...bio].length > 190) {
       notify("Bio must be 190 characters or fewer");
@@ -3759,7 +4653,7 @@ export default function App() {
     setBioSaving(true);
     try {
       await invoke("update_bio", { bio });
-      const profile = await invoke<any>("get_user_profile", { userId: me.id });
+      const profile = await loadUserProfile(me.id, getAccountReadCredentials(savedAccounts), setUserProfile);
       if (profile) setUserProfile(profile);
       setBioDraft(profile?.user_profile?.bio ?? profile?.user?.bio ?? bio);
       setBioEditing(false);
@@ -3803,10 +4697,14 @@ export default function App() {
       return;
     }
     setProfileCardOpen(true);
+    if (me.bot) {
+      setOwnProfileLoading(false);
+      return;
+    }
     setCustomStatusDraft(selfPresence.customStatus);
     setOwnProfileLoading(true);
     const [profileResult, settingsResult] = await Promise.allSettled([
-      invoke<any>("get_user_profile", { userId: me.id }),
+      loadUserProfile(me.id, getAccountReadCredentials(savedAccounts), setUserProfile),
       invoke<any>("get_current_user_settings"),
     ]);
     if (profileResult.status === "fulfilled" && profileResult.value) {
@@ -3839,8 +4737,9 @@ export default function App() {
     ++channelLoadRequest.current;
     setAccountSwitcherOpen(false);
     setProfileCardOpen(false);
-    setIsDmView(true);
-    setActiveDmTab("friends");
+    setCustomStatusEditing(false);
+    setIsDmView(!user.bot);
+    setActiveDmTab(user.bot ? "chat" : "friends");
     setSelectedGuild(null);
     selectedGuildRef.current = null;
     setSelectedChannel(null);
@@ -4599,13 +5498,33 @@ export default function App() {
   }, [composerSendingAccountId, savedAccounts, me]);
 
   useEffect(() => {
-    if (!me?.id || savedAccounts.length <= 1) return;
+    if (!me?.id) return;
     const otherAccounts = savedAccounts.filter(a => a.user.id !== me.id && a.token);
-    if (otherAccounts.length === 0) return;
+    const accountIds = new Set(otherAccounts.map(account => account.user.id));
+    setCheckedAltGuildAccounts(new Set());
+
+    if (otherAccounts.length === 0) {
+      setAltAccountGuilds({});
+      try {
+        localStorage.removeItem("voidcord:alt-guilds-cache");
+      } catch {}
+      return;
+    }
+
+    if (!online) {
+      setCheckedAltGuildAccounts(accountIds);
+      return;
+    }
 
     void (async () => {
       let changed = false;
       const nextAltGuilds = { ...altAccountGuilds };
+      for (const userId of Object.keys(nextAltGuilds)) {
+        if (!accountIds.has(userId)) {
+          delete nextAltGuilds[userId];
+          changed = true;
+        }
+      }
       for (const alt of otherAccounts) {
         try {
           const fetched = await invoke<DiscordGuild[]>("get_guilds", { asToken: alt.token });
@@ -4613,8 +5532,13 @@ export default function App() {
             nextAltGuilds[alt.user.id] = fetched;
             changed = true;
           }
-        } catch {}
+        } catch (error) {
+          delete nextAltGuilds[alt.user.id];
+          changed = true;
+          console.debug(`Could not load servers for alternate account ${alt.user.id}`, error);
+        }
       }
+      setCheckedAltGuildAccounts(accountIds);
       if (changed) {
         setAltAccountGuilds(nextAltGuilds);
         try {
@@ -4622,7 +5546,7 @@ export default function App() {
         } catch {}
       }
     })();
-  }, [me?.id, savedAccounts]);
+  }, [me?.id, savedAccounts, online]);
 
   const otherAccountGuilds = useMemo(() => {
     if (!me?.id) return [];
@@ -4630,7 +5554,7 @@ export default function App() {
     const seenAltGuildIds = new Set<string>();
     const list: { guild: DiscordGuild; ownerAccount: SavedDiscordAccount }[] = [];
     for (const account of savedAccounts) {
-      if (account.user.id === me.id || !account.token) continue;
+      if (account.user.id === me.id || !account.token || !checkedAltGuildAccounts.has(account.user.id)) continue;
       const accountGuilds = altAccountGuilds[account.user.id] || [];
       for (const g of accountGuilds) {
         if (!activeGuildIds.has(g.id) && !seenAltGuildIds.has(g.id)) {
@@ -4640,7 +5564,7 @@ export default function App() {
       }
     }
     return list;
-  }, [me?.id, guilds, savedAccounts, altAccountGuilds]);
+  }, [me?.id, guilds, savedAccounts, altAccountGuilds, checkedAltGuildAccounts]);
 
   const officialDiscordDm = !!selectedChannel && !selectedChannel.guild_id &&
     !!selectedChannel.recipients?.some(user => user?.bot && user.username?.toLowerCase() === "discord");
@@ -4669,6 +5593,8 @@ export default function App() {
     window.addEventListener("pointerup", stop, { once: true });
   };
   const selectedProfileBio = memberProfileData?.user?.bio || memberProfileData?.user_profile?.bio || "";
+  const selectedProfileUser = memberProfileData?.user || selectedMemberProfile;
+  const selectedProfileIsOwn = !!me && !!selectedMemberProfile && selectedMemberProfile.id === me.id;
   const selectedProfileRoleColorInfo = !isDmView && selectedMemberProfile
     ? getUserRoleColorInfo(selectedMemberProfile.id, guildMembers, guildRoles)
     : {};
@@ -4678,12 +5604,57 @@ export default function App() {
     && friendRelationships.some(relationship => relationship.user.id === selectedMemberProfile.id);
   const selectedProfileIsBlocked = !!selectedMemberProfile
     && relationships.some(relationship => relationship.user?.id === selectedMemberProfile.id && relationship.type === 2);
+  const accountStandingState = safetyHub?.account_standing?.state;
+  const safetyClassifications = [
+    ...(Array.isArray(safetyHub?.classifications) ? safetyHub.classifications : []),
+    ...(Array.isArray(safetyHub?.guild_classifications) ? safetyHub.guild_classifications : []),
+  ];
+  const latestWarning = safetyClassifications
+    .filter(classification => classification.actions?.some(action => action.action_type === 4))
+    .sort((left, right) => {
+      try {
+        const leftId = BigInt(left.id);
+        const rightId = BigInt(right.id);
+        return leftId > rightId ? -1 : leftId < rightId ? 1 : 0;
+      } catch {
+        return 0;
+      }
+    })[0];
+  const warningReason = latestWarning?.description
+    || latestWarning?.actions?.flatMap(action => action.descriptions || []).find(Boolean)
+    || "a Trust & Safety policy";
+  const standingLabels: Record<number, string> = {
+    100: "Good standing",
+    200: "Limited",
+    300: "Very limited",
+    400: "At risk",
+    500: "Suspended",
+  };
+  const safetyNotice = latestWarning
+    ? `Warning: Your account was warned for ${warningReason}. Use the client responsibly.`
+    : accountStandingState !== undefined && accountStandingState !== 100
+      ? `Your account standing is ${standingLabels[accountStandingState] || "not in good standing"}. Check Safety Hub for details.`
+      : "";
+  const safetyNoticeId = safetyNotice && me?.id
+    ? `${me.id}:${accountStandingState ?? "unknown"}:${latestWarning?.id || "standing"}`
+    : "";
+  let safetyNoticeDismissed = false;
+  if (safetyNoticeId) {
+    try {
+      safetyNoticeDismissed = localStorage.getItem(`voidcord:safety-dismissed:${me?.id}`) === safetyNoticeId;
+    } catch {
+      safetyNoticeDismissed = safetyNoticeDismissal === safetyNoticeId;
+    }
+  }
 
   if (authLoading) {
     return (
       <div className="splash">
         <div className="splash-logo">V</div>
-        <Loader2 size={22} className="spinning" style={{ color: "var(--accent-bright)" }} />
+        <div className="splash-status" role="status" aria-live="polite">
+          <Loader2 size={18} className="spinning" style={{ color: "var(--accent-bright)" }} />
+          <span>{startupTip}</span>
+        </div>
       </div>
     );
   }
@@ -4697,7 +5668,7 @@ export default function App() {
   }
 
   return (
-    <main className={`app dark accent-${preferences.accent} ${settingsTheme === "light" ? "settings-theme-light" : ""} ${preferences.compactMessages ? "compact-messages" : ""} ${preferences.reduceMotion ? "reduce-motion" : ""} ${sidebarResizing ? "sidebar-resizing" : ""}`} style={{ "--chat-font-size": `${14 * preferences.chatFontScale / 100}px` } as React.CSSProperties}>
+    <main className={`app dark theme-dark accent-${preferences.accent} ${settingsTheme === "light" ? "settings-theme-light theme-light" : ""} ${preferences.compactMessages ? "compact-messages" : ""} ${preferences.reduceMotion ? "reduce-motion" : ""} ${sidebarResizing ? "sidebar-resizing" : ""}`} style={{ "--chat-font-size": `${14 * preferences.chatFontScale / 100}px` } as React.CSSProperties}>
       {accountSwitcherOpen && <AccountSwitcher activeUser={me} accounts={savedAccounts} onClose={() => setAccountSwitcherOpen(false)} onConnected={handleAccountConnected} />}
       {!online && (
         <div className="top-net-banner">
@@ -4713,7 +5684,19 @@ export default function App() {
           <span>{gatewayStatus === "reconnecting" ? "Reconnecting to Discord gateway…" : "Connecting to Discord gateway…"}</span>
         </div>
       )}
-      {Object.keys(incomingCallChannels).length > 0 && (() => {
+      {safetyNotice && !safetyNoticeDismissed && (
+        <div className="account-safety-banner" role="alert">
+          <AlertTriangle size={16} aria-hidden="true" />
+          <span>{safetyNotice}</span>
+          <button type="button" className="account-safety-check" onClick={openSafetyHub}>
+            <ShieldCheck size={14} /> Check Safety Hub
+          </button>
+          <button type="button" className="account-safety-dismiss" onClick={dismissSafetyNotice} aria-label="Dismiss account warning">
+            <X size={15} />
+          </button>
+        </div>
+      )}
+      {!me.bot && Object.keys(incomingCallChannels).length > 0 && (() => {
         const incomingId = Object.keys(incomingCallChannels)[0];
         const incomingChannel = dmChannels.find(channel => channel.id === incomingId);
         if (!incomingChannel) return null;
@@ -4733,28 +5716,39 @@ export default function App() {
         {/* Server Rail */}
         <nav className="serverrail" aria-label="Servers">
           <div className="server-list-scroll">
-            <button
-              className={`home-box ${isDmView ? "active" : ""}`}
-              title="Direct Messages"
-              onClick={() => {
-                ++guildLoadRequest.current;
-                ++channelLoadRequest.current;
-                setIsDmView(true);
-                setSelectedGuild(null);
-                selectedGuildRef.current = null;
-                if (dmChannels.length > 0) {
-                  setActiveDmTab("chat");
-                  void selectChannel(dmChannels[0]);
-                } else {
-                  setActiveDmTab("friends");
+            {!me.bot && (
+              <button
+                className={`home-box ${isDmView ? "active" : ""}`}
+                title="Direct Messages"
+                onClick={() => {
+                  ++guildLoadRequest.current;
                   ++channelLoadRequest.current;
-                  setSelectedChannel(null);
-                  setMessages([]);
-                  setMsgLoading(false);
-                }
-              }}
+                  setIsDmView(true);
+                  setSelectedGuild(null);
+                  selectedGuildRef.current = null;
+                  if (dmChannels.length > 0) {
+                    setActiveDmTab("chat");
+                    void selectChannel(dmChannels[0]);
+                  } else {
+                    setActiveDmTab("friends");
+                    ++channelLoadRequest.current;
+                    setSelectedChannel(null);
+                    setMessages([]);
+                    setMsgLoading(false);
+                  }
+                }}
+              >
+                <MessageSquare size={20} />
+              </button>
+            )}
+            <button
+              type="button"
+              className={`safety-hub-launch ${safetyNotice && !safetyNoticeDismissed ? "has-warning" : ""}`}
+              title="Safety Hub"
+              aria-label="Open Safety Hub"
+              onClick={openSafetyHub}
             >
-              <MessageSquare size={20} />
+              <ShieldCheck size={18} />
             </button>
 
             <div className="rail-sep" />
@@ -4928,7 +5922,7 @@ export default function App() {
                       if (!user) return null;
                       return <button key={`${c.id}:${state.user_id}`} type="button" className="sidebar-voice-member" onClick={() => void handleOpenMemberProfile(user)}>
                         <img src={avatarUrl(user, 24)} alt="" />
-                        <span>{state.member?.nick || displayName(user)}</span>
+                        <span><StyledDisplayName user={user}>{state.member?.nick || displayName(user)}</StyledDisplayName></span>
                         {(state.self_mute || state.self_deaf) && <Mic size={12} className="voice-member-muted" />}
                       </button>;
                     })}
@@ -4960,7 +5954,7 @@ export default function App() {
                             if (!user) return null;
                             return <button key={`${c.id}:${state.user_id}`} type="button" className="sidebar-voice-member" onClick={() => void handleOpenMemberProfile(user)}>
                               <img src={avatarUrl(user, 24)} alt="" />
-                              <span>{state.member?.nick || displayName(user)}</span>
+                              <span><StyledDisplayName user={user}>{state.member?.nick || displayName(user)}</StyledDisplayName></span>
                               {(state.self_mute || state.self_deaf) && <Mic size={12} className="voice-member-muted" />}
                             </button>;
                           })}
@@ -4982,7 +5976,7 @@ export default function App() {
                 <span className={`user-bar-status status-${selfPresence?.status || "offline"}`} />
               </div>
               <div className="user-bar-names">
-                <strong className="user-bar-name">{displayName(me)}</strong>
+                <strong className="user-bar-name"><StyledDisplayName user={me} /></strong>
                 <span className="user-bar-sub">{selfPresence?.customStatus || "Set a custom status"}</span>
               </div>
             </button>
@@ -4990,7 +5984,7 @@ export default function App() {
             <div className="user-bar-controls">
               <button className={`user-bar-btn ${micMuted ? "muted" : ""}`} title={micMuted ? "Unmute" : "Mute"} onClick={() => void updateVoiceControls(!micMuted, deafened)}><Mic size={15} /></button>
               <button className={`user-bar-btn ${deafened ? "deafened" : ""}`} title={deafened ? "Undeafen" : "Deafen"} onClick={() => void updateVoiceControls(micMuted, !deafened)}><Headphones size={15} /></button>
-              <button className="user-bar-btn" title="Open Rust Console" aria-label="Open Rust Console" onClick={() => void tauriInvoke("open_rust_console").catch(error => console.error("Could not open Rust console", error))}><Terminal size={15} /></button>
+              <button className="user-bar-btn" title="Toggle Rust Console" aria-label="Toggle Rust Console" onClick={() => void tauriInvoke("open_rust_console").catch(error => console.error("Could not open Rust console", error))}><Terminal size={15} /></button>
               <button className="user-bar-btn" title="Settings" onClick={() => setProtoSettingsOpen(true)}><Settings size={15} /></button>
             </div>
           </div>
@@ -5020,19 +6014,8 @@ export default function App() {
                 ) : (
                   <>
                     {(() => {
-                      const dns = (profileUser as any).display_name_styles;
-                      const fontClass = displayNameFontClass(dns?.font_id);
-                      const nameColors: number[] | undefined = dns?.colors;
-                      let nameStyle: React.CSSProperties = {};
-                      if (nameColors && nameColors.length >= 2) {
-                        nameStyle = roleColorStyle(nameColors[0], nameColors[1], nameColors[2]);
-                      } else if (nameColors && nameColors.length === 1 && nameColors[0]) {
-                        nameStyle = { color: '#' + nameColors[0].toString(16).padStart(6, '0') };
-                      }
                       return (
-                        <strong className={fontClass || undefined} style={nameStyle}>
-                          {displayName(profileUser)} <PlatformIndicators platforms={memberPlatforms[profileUser.id] || []} />
-                        </strong>
+                        <strong><StyledDisplayName user={profileUser} /> <PlatformIndicators platforms={memberPlatforms[profileUser.id] || []} /></strong>
                       );
                     })()}
                     <span className="profile-popover-handle">@{profileUser.username}{formatDiscriminator(profileUser)}</span>
@@ -5045,7 +6028,7 @@ export default function App() {
                     )}
                     <div className="profile-status-bubble">
                       <span>{selfPresence.customStatus || "Set a custom status"}</span>
-                      <button
+                      {!me.bot && <button
                         type="button"
                         aria-label="Edit custom status"
                         title="Edit custom status"
@@ -5053,9 +6036,9 @@ export default function App() {
                           setCustomStatusDraft(selfPresence.customStatus);
                           setCustomStatusEditing(true);
                         }}
-                      ><Edit3 size={13} /></button>
+                      ><Edit3 size={13} /></button>}
                     </div>
-                    {profileBio && (
+                    {!me.bot && profileBio && (
                       <>
                         <div className="profile-popover-bio"><DiscordMarkdown content={profileBio} /></div>
                         <button className="profile-bio-link" onClick={() => {
@@ -5064,15 +6047,15 @@ export default function App() {
                         }}>View Full Bio</button>
                       </>
                     )}
-                    <button
+                    {!me.bot && <button
                       type="button"
                       className="profile-bio-link"
                       onClick={() => {
                         setBioDraft(profileBio);
                         setBioEditing(true);
                       }}
-                    >Edit bio</button>
-                    {bioEditing && (
+                    >Edit bio</button>}
+                    {!me.bot && bioEditing && (
                       <div className="profile-bio-editor">
                         <textarea
                           aria-label="Profile bio"
@@ -5118,7 +6101,7 @@ export default function App() {
                   setProfileCardOpen(false);
                   setAccountSwitcherOpen(true);
                 }}><Users size={14} /> Switch accounts</button>
-                {customStatusEditing && (
+                {!me.bot && customStatusEditing && (
                   <div className="profile-custom-status">
                     <input
                       aria-label="Custom status"
@@ -5145,10 +6128,10 @@ export default function App() {
                     }}><X size={14} /></button>
                   </div>
                 )}
-                <button className="profile-open-full-btn" onClick={() => {
+                {!me.bot && <button className="profile-open-full-btn" onClick={() => {
                   setProfileCardOpen(false);
                   void handleOpenMemberProfile(me, true);
-                }}>View full profile</button>
+                }}>View full profile</button>}
               </div>
                   </>
                 );
@@ -5239,7 +6222,7 @@ export default function App() {
                                   <span className={`status-dot status-${status}`} />
                                 </span>
                                 <span className="directory-person-name">
-                                  <strong>{displayName(friend)} <PlatformIndicators platforms={memberPlatforms[friend.id] || []} /></strong>
+                                  <strong><StyledDisplayName user={friend} /> <PlatformIndicators platforms={memberPlatforms[friend.id] || []} /></strong>
                                   <small>{friend.username}{status !== "offline" ? ` · ${status}` : ""}</small>
                                 </span>
                               </button>
@@ -5312,7 +6295,7 @@ export default function App() {
                                   )}
                                 </div>
                                 <div className="activity-user-info">
-                                  <span className="activity-user-name">{authorName}</span>
+                                  <span className="activity-user-name">{author ? <StyledDisplayName user={author}>{authorName}</StyledDisplayName> : authorName}</span>
                                   {author?.username && <span className="activity-user-username">@{author.username}</span>}
                                 </div>
                                 {timestamp && <small className="activity-time">{timestamp}</small>}
@@ -5370,7 +6353,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={relationship.user} />
                     </span>
                     <div className="request-person-info">
-                      <strong>{displayName(relationship.user)} <PlatformIndicators platforms={memberPlatforms[relationship.user.id] || []} /></strong>
+                      <strong><StyledDisplayName user={relationship.user} /> <PlatformIndicators platforms={memberPlatforms[relationship.user.id] || []} /></strong>
                       <small>@{relationship.user.username} · Incoming request</small>
                     </div>
                     <div className="request-actions">
@@ -5388,7 +6371,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={relationship.user} />
                     </span>
                     <div className="request-person-info">
-                      <strong>{displayName(relationship.user)} <PlatformIndicators platforms={memberPlatforms[relationship.user.id] || []} /></strong>
+                      <strong><StyledDisplayName user={relationship.user} /> <PlatformIndicators platforms={memberPlatforms[relationship.user.id] || []} /></strong>
                       <small>@{relationship.user.username} · Request sent</small>
                     </div>
                     <div className="request-actions">
@@ -5401,8 +6384,8 @@ export default function App() {
                 )}
               </div>
             ) : (() => {
-              const spamRequests = messageRequests.filter(r => r.is_spam || ((r.flags || 0) & (1 << 6)) !== 0);
-              const regularRequests = messageRequests.filter(r => !r.is_spam && !((r.flags || 0) & (1 << 6)));
+              const spamRequests = messageRequests.filter(r => r.is_spam || ((r.flags || 0) & (1 << 5)) !== 0);
+              const regularRequests = messageRequests.filter(r => !r.is_spam && !((r.flags || 0) & (1 << 5)));
               const displayedRequests = messageRequestTab === "spam" ? spamRequests : regularRequests;
               const reqSender = selectedMessageRequest?.recipients?.[0];
 
@@ -5437,7 +6420,7 @@ export default function App() {
                     {!messageRequestsLoading && !messageRequestsError && displayedRequests.map(request => {
                       const sender = request.recipients?.[0];
                       const name = sender ? displayName(sender) : request.name || "Unknown user";
-                      const isSpam = request.is_spam || ((request.flags || 0) & (1 << 6)) !== 0;
+                      const isSpam = request.is_spam || ((request.flags || 0) & (1 << 5)) !== 0;
                       return (
                         <div key={request.id} className={`message-request-row ${selectedMessageRequest?.id === request.id ? "selected" : ""}`}>
                           <button className="message-request-summary" onClick={() => void loadRequestMessages(request)}>
@@ -5455,6 +6438,9 @@ export default function App() {
                                 {isSpam && <span className="spam-badge">SPAM</span>}
                               </span>
                               <small>{sender?.username ? `@${sender.username}` : "Message request"}</small>
+                              {request.message_preview?.content && (
+                                <small className="message-request-preview">{request.message_preview.content}</small>
+                              )}
                             </span>
                           </button>
                           <div className="request-actions">
@@ -5479,7 +6465,7 @@ export default function App() {
                       <>
                         <header className="request-conversation-header">
                           <div className="request-header-user">
-                            <strong>{reqSender ? displayName(reqSender) : selectedMessageRequest.name || "Message Request"}</strong>
+                            <strong>{reqSender ? <StyledDisplayName user={reqSender} /> : selectedMessageRequest.name || "Message Request"}</strong>
                             {reqSender && <BotTag user={reqSender} />}
                             {reqSender && <span className="author-discriminator">{formatDiscriminator(reqSender)}</span>}
                             {reqSender?.username && <small className="request-header-username">@{reqSender.username}</small>}
@@ -5509,7 +6495,7 @@ export default function App() {
                         <div className="request-message-history">
                           {requestMessagesLoading && <div className="directory-empty"><Loader2 size={18} className="spinning" /></div>}
                           {requestMessagesError && <div className="directory-error request-load-error">Could not load request messages: {requestMessagesError}</div>}
-                          {!requestMessagesLoading && !requestMessagesError && requestMessages.map(message => (
+                          {!requestMessagesLoading && requestMessages.map(message => (
                             <div className="request-message" key={message.id}>
                               <span className="request-history-avatar-wrap">
                                 <img src={avatarUrl(message.author, 40)} alt="" />
@@ -5517,7 +6503,7 @@ export default function App() {
                               </span>
                               <div className="request-message-body">
                                 <div className="request-message-header">
-                                  <strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong>
+                                  <strong><StyledDisplayName user={message.author} /> <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong>
                                   <BotTag user={message.author} />
                                   <span className="author-discriminator">{formatDiscriminator(message.author)}</span>
                                   <small>{formatTimestamp(message.timestamp)}</small>
@@ -5646,7 +6632,17 @@ export default function App() {
                 <input placeholder="Search" value={query} onChange={e => setQuery(e.target.value)} />
               </div>
               <button className="icon-btn" title="More"><MoreHorizontal size={18} /></button>
-              <div className="vencord-toolbar"><Wrench size={12} /><span>Vencord</span></div>
+              <button
+                type="button"
+                className="vencord-toolbar"
+                title="Open VoidCord Plugins"
+                onClick={() => {
+                  setSettingsTab("plugins");
+                  setSettingsOpen(true);
+                }}
+              >
+                <Wrench size={12} /><span>Plugins</span>
+              </button>
             </div>
           </div>
 
@@ -5972,7 +6968,9 @@ export default function App() {
                               onClick={() => void handleOpenMemberProfile(m.author)}
                               onContextMenu={event => openContextMenu(event, { kind: "user", user: m.author, source: "member", guildId: selectedChannel?.guild_id })}
                             >
-                              {displayName(m.author)}
+                              <StyledDisplayName user={m.author} fallbackStyle={{ color: authorColor || undefined }}>
+                                {displayName(m.author)}
+                              </StyledDisplayName>
                             </button>
                             <BotTag user={m.author} />
                             <span className="msg-time">{formatTimestamp(m.timestamp)}</span>
@@ -6393,7 +7391,7 @@ export default function App() {
                 <article className="voice-chat-message" key={message.id}>
                   <img src={avatarUrl(message.author, 32)} alt="" />
                   <div>
-                    <header><strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong><time>{formatTimestamp(message.timestamp)}</time></header>
+                    <header><strong><StyledDisplayName user={message.author} /> <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong><time>{formatTimestamp(message.timestamp)}</time></header>
                     <MessageContent message={message} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(target, emoji) => void toggleMessageReaction(selectedVoiceChannel.id, target, emoji)} autoplayVideos={preferences.autoplayVideos} />
                   </div>
                 </article>
@@ -6490,7 +7488,7 @@ export default function App() {
                       <AvatarDecorationOverlay user={dmProfileUser} />
                       <span className={`status-dot status-${memberPresences[dmUser.id] || "offline"}`} />
                     </span>
-                    <strong>{displayName(dmProfileUser)} <PlatformIndicators platforms={memberPlatforms[dmProfileUser.id] || []} /></strong>
+                    <strong><StyledDisplayName user={dmProfileUser} /> <PlatformIndicators platforms={memberPlatforms[dmProfileUser.id] || []} /></strong>
                     <small>@{dmProfileUser.username}{formatDiscriminator(dmProfileUser)}</small>
                   </button>
                   {memberCustomStatuses[dmUser.id] && (
@@ -6532,7 +7530,7 @@ export default function App() {
                     const avatarSrc = avatarUrl(userObj, 32);
                     const userStatus = memberPresences[userObj.id] || "offline";
                     const userRoleColorInfo = !isDmView
-                      ? getUserRoleColorInfo(userObj.id, guildMembers, guildRoles)
+                      ? getUserRoleColorInfo(userObj.id, guildMembers, guildRoles, Array.isArray(m?.roles) ? m.roles : undefined)
                       : {};
                     const userRoleColor = userRoleColorInfo.hex;
                     const userRoleStyle = userRoleColorInfo.style;
@@ -6545,7 +7543,7 @@ export default function App() {
                           <span className={`status-dot status-${userStatus}`} />
                         </div>
                         <div className="member-info">
-                          <strong style={userRoleStyle || { color: userRoleColor || undefined }}>{name}</strong>
+                          <strong><StyledDisplayName user={userObj} fallbackStyle={userRoleStyle || { color: userRoleColor || undefined }}>{name}</StyledDisplayName></strong>
                           {formatDiscriminator(userObj) && <span className="author-discriminator" style={{ marginLeft: 3 }}>{formatDiscriminator(userObj)}</span>}
                           <BotTag user={userObj} style={{ fontSize: 9, marginLeft: 4 }} />
                           <small className="member-subline">{userObj.username}{formatDiscriminator(userObj)}<PlatformIndicators platforms={memberPlatforms[userObj.id] || []} /></small>
@@ -6611,43 +7609,72 @@ export default function App() {
             {fullProfileOpen ? (
               <div className="profile-full-body">
                 <button className="profile-back-button" onClick={() => setFullProfileOpen(false)}>← Back to profile card</button>
-                {(() => {
-                  const dns = ((memberProfileData?.user || selectedMemberProfile) as any)?.display_name_styles;
-                  const fontClass = displayNameFontClass(dns?.font_id);
-                  const nameColors: number[] | undefined = dns?.colors;
-                  let nameStyle: React.CSSProperties = selectedProfileRoleStyle || { color: selectedProfileRoleColor };
-                  if (nameColors && nameColors.length >= 2) {
-                    nameStyle = roleColorStyle(nameColors[0], nameColors[1], nameColors[2]);
-                  } else if (nameColors && nameColors.length === 1 && nameColors[0] && !selectedProfileRoleColor) {
-                    nameStyle = { color: '#' + nameColors[0].toString(16).padStart(6, '0') };
-                  }
-                  return <h2 className={fontClass || undefined} style={nameStyle}>{displayName(selectedMemberProfile)}<BotTag user={selectedMemberProfile} /></h2>;
-                })()}
-                <span className="profile-handle">@{selectedMemberProfile.username}{formatDiscriminator(selectedMemberProfile)}</span>
-                {memberProfileData?.user_profile?.pronouns && <span className="profile-pronouns">{memberProfileData.user_profile.pronouns}</span>}
-                <h3>About me</h3>
-                <div className="profile-full-bio">{selectedProfileBio ? <DiscordMarkdown content={selectedProfileBio} /> : "This user hasn't added a bio yet."}</div>
-                <div className="profile-full-meta">
-                  <span>Member since</span>
-                  <strong>{snowflakeTime(selectedMemberProfile.id) || "Unknown"}</strong>
-                </div>
-                {memberProfileData?.badges?.length > 0 && (
-                  <div className="profile-badges-row">
-                    {memberProfileData.badges.map((badge: any) => (
-                      <img key={badge.id} src={badge.icon_url || `https://cdn.discordapp.com/badge-icons/${badge.icon}.png`} alt={badge.description} title={badge.description} style={{ width: 22, height: 22, objectFit: "contain" }} />
-                    ))}
-                  </div>
-                )}
-                <div className="profile-full-actions">
-                  <button onClick={() => void startDirectMessage(selectedMemberProfile)}><MessageSquare size={15} /> Message</button>
-                  {selectedMemberProfile.id !== me.id && (
-                    selectedProfileIsFriend
-                      ? <button onClick={() => void changeRelationship(selectedMemberProfile.id, "remove")}><Users size={15} /> Remove Friend</button>
-                      : <button onClick={() => void changeRelationship(selectedMemberProfile.id, "add")}><UserPlus size={15} /> Add Friend</button>
+                <div className={`profile-full-layout ${selectedProfileIsOwn ? "profile-full-layout-own" : ""}`}>
+                  {selectedProfileIsOwn && (
+                    <aside className="profile-customize-panel">
+                      <div className="profile-customize-heading"><Settings size={15} /> Customize Profile</div>
+                      <p>Profile appearance</p>
+                      <div className="profile-customize-item">
+                        <span>Nameplate</span>
+                        <strong>{selectedProfileUser?.collectibles?.nameplate?.label || "No nameplate applied"}</strong>
+                      </div>
+                      <div className="profile-customize-item">
+                        <span>Avatar &amp; Decoration</span>
+                        <strong>{selectedProfileUser?.avatar_decoration_data?.asset ? "Decoration applied" : "Default avatar"}</strong>
+                      </div>
+                      <div className="profile-customize-item">
+                        <span>Display Name Style</span>
+                        <StyledDisplayName user={selectedProfileUser} fallbackStyle={selectedProfileRoleStyle || { color: selectedProfileRoleColor }}>
+                          {displayName(selectedMemberProfile)}
+                        </StyledDisplayName>
+                      </div>
+                      <div className="profile-customize-item">
+                        <span>Banner</span>
+                        <strong>{bannerUrl(selectedProfileUser, 128) ? "Profile banner applied" : "No banner applied"}</strong>
+                      </div>
+                      <div className="profile-customize-item">
+                        <span>Profile Effect</span>
+                        <strong>{selectedProfileUser?.profile_effect?.id || selectedProfileUser?.profile_effect_id ? "Effect applied" : "No effect applied"}</strong>
+                      </div>
+                    </aside>
                   )}
-                  {selectedMemberProfile.id !== me.id && <button onClick={() => void changeRelationship(selectedMemberProfile.id, selectedProfileIsBlocked ? "unblock" : "block")}><Ban size={15} /> {selectedProfileIsBlocked ? "Unblock" : "Block"}</button>}
-                  {selectedMemberProfile.id !== me.id && <button onClick={() => toggleIgnoredUser(selectedMemberProfile.id)}><UserX size={15} /> {ignoredUserIds.has(selectedMemberProfile.id) ? "Unignore" : "Ignore"}</button>}
-                  {selectedMemberProfile.id !== me.id && <button onClick={() => void openDiscordReportFlow(selectedMemberProfile.id)}><Flag size={15} /> Report user…</button>}
+
+                  <section className="profile-full-content">
+                    <div className="profile-full-identity">
+                      <h2><StyledDisplayName user={selectedProfileUser} fallbackStyle={selectedProfileRoleStyle || { color: selectedProfileRoleColor }}>{displayName(selectedMemberProfile)}</StyledDisplayName><BotTag user={selectedMemberProfile} /></h2>
+                      <span className="profile-handle">@{selectedMemberProfile.username}{formatDiscriminator(selectedMemberProfile)}</span>
+                      {memberProfileData?.user_profile?.pronouns && <span className="profile-pronouns">{memberProfileData.user_profile.pronouns}</span>}
+                    </div>
+                    {memberProfileData?.badges?.length > 0 && (
+                      <div className="profile-badges-row">
+                        {memberProfileData.badges.map((badge: any) => (
+                          <img key={badge.id} src={badge.icon_url || `https://cdn.discordapp.com/badge-icons/${badge.icon}.png`} alt={badge.description} title={badge.description} style={{ width: 22, height: 22, objectFit: "contain" }} />
+                        ))}
+                      </div>
+                    )}
+                    <section className="profile-full-about">
+                      <h3>About me</h3>
+                      <div className="profile-full-bio">{selectedProfileBio ? <DiscordMarkdown content={selectedProfileBio} /> : "This user hasn't added a bio yet."}</div>
+                      <div className="profile-full-meta">
+                        <span>Member since</span>
+                        <strong>{snowflakeTime(selectedMemberProfile.id) || "Unknown"}</strong>
+                      </div>
+                    </section>
+                    {!selectedProfileIsOwn && (
+                      <div className="profile-full-actions">
+                        <button onClick={() => void startDirectMessage(selectedMemberProfile)}><MessageSquare size={15} /> Message</button>
+                        {selectedProfileIsFriend
+                          ? <button onClick={() => void changeRelationship(selectedMemberProfile.id, "remove")}><Users size={15} /> Remove Friend</button>
+                          : <button onClick={() => void changeRelationship(selectedMemberProfile.id, "add")}><UserPlus size={15} /> Add Friend</button>}
+                        <button onClick={() => void changeRelationship(selectedMemberProfile.id, selectedProfileIsBlocked ? "unblock" : "block")}><Ban size={15} /> {selectedProfileIsBlocked ? "Unblock" : "Block"}</button>
+                        <button onClick={() => toggleIgnoredUser(selectedMemberProfile.id)}><UserX size={15} /> {ignoredUserIds.has(selectedMemberProfile.id) ? "Unignore" : "Ignore"}</button>
+                        <button onClick={() => void openDiscordReportFlow(selectedMemberProfile.id)}><Flag size={15} /> Report user…</button>
+                        <button type="button" onClick={() => setReviewModalTarget({ id: selectedMemberProfile.id, name: displayName(selectedMemberProfile), type: ReviewType.User })}><Star size={15} /> Reviews</button>
+                      </div>
+                    )}
+                  </section>
+
+                  <ProfileGameWidgets widgets={memberProfileData?.widgets} resolveApplication={resolveProfileGameApplication} />
                 </div>
               </div>
             ) : <div className="profile-popout-body">
@@ -6658,18 +7685,7 @@ export default function App() {
               ) : (
                 <>
                   <div className="profile-identity">
-                    {(() => {
-                      const dns = ((memberProfileData?.user || selectedMemberProfile) as any)?.display_name_styles;
-                      const fontClass = displayNameFontClass(dns?.font_id);
-                      const nameColors: number[] | undefined = dns?.colors;
-                      let nameStyle: React.CSSProperties = selectedProfileRoleStyle || { color: selectedProfileRoleColor };
-                      if (nameColors && nameColors.length >= 2) {
-                        nameStyle = roleColorStyle(nameColors[0], nameColors[1], nameColors[2]);
-                      } else if (nameColors && nameColors.length === 1 && nameColors[0] && !selectedProfileRoleColor) {
-                        nameStyle = { color: '#' + nameColors[0].toString(16).padStart(6, '0') };
-                      }
-                      return <h3 className={["profile-display-name", fontClass].filter(Boolean).join(" ")} style={nameStyle}>{displayName(selectedMemberProfile)}<BotTag user={selectedMemberProfile} /></h3>;
-                    })()}
+                    <h3 className="profile-display-name"><StyledDisplayName user={memberProfileData?.user || selectedMemberProfile} fallbackStyle={selectedProfileRoleStyle || { color: selectedProfileRoleColor }}>{displayName(selectedMemberProfile)}</StyledDisplayName><BotTag user={selectedMemberProfile} /></h3>
                     <div className="profile-handle-row">
                       <span className="profile-handle">{selectedMemberProfile.username}{formatDiscriminator(selectedMemberProfile)}</span>
                       {memberProfileData?.user_profile?.pronouns && (
@@ -6702,12 +7718,17 @@ export default function App() {
                     </div>
                   )}
                   <button className="profile-open-full-btn" onClick={() => setFullProfileOpen(true)}>View Full Profile</button>
+                  <button className="profile-open-full-btn" style={{ marginTop: 6, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }} onClick={() => setReviewModalTarget({ id: selectedMemberProfile.id, name: displayName(selectedMemberProfile), type: ReviewType.User })}>
+                    <Star size={14} /> View Reviews (ReviewDB)
+                  </button>
 
                   <div className="profile-menu-section" style={{ marginTop: 12 }}>
-                    <button className="profile-menu-item" onClick={() => void startDirectMessage(selectedMemberProfile)}>
-                      <MessageSquare size={15} />
-                      <span>Message</span>
-                    </button>
+                    {selectedMemberProfile.id !== me.id && (
+                      <button className="profile-menu-item" onClick={() => void startDirectMessage(selectedMemberProfile)}>
+                        <MessageSquare size={15} />
+                        <span>Message</span>
+                      </button>
+                    )}
                     {selectedMemberProfile.id !== me.id && (
                       selectedProfileIsFriend
                         ? <button className="profile-menu-item" onClick={() => void changeRelationship(selectedMemberProfile.id, "remove")}><Users size={15} /><span>Remove Friend</span></button>
@@ -6877,7 +7898,7 @@ export default function App() {
                       ? deletedChannelMessages.map(message => (
                         <article className={`deleted-channel-message ${message.deleted_at ? "deleted-message" : ""}`} key={message.id}>
                           <header>
-                            <strong>{displayName(message.author)} <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong>
+                            <strong><StyledDisplayName user={message.author} /> <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong>
                             <span>{formatTimestamp(message.timestamp)}</span>
                             {message.deleted_at && <span className="deleted-message-label">DELETED</span>}
                           </header>
@@ -6940,6 +7961,7 @@ export default function App() {
               <button type="button" className={settingsTab === "account" ? "active" : ""} onClick={() => setSettingsTab("account")}>Preferences</button>
               <button type="button" className={settingsTab === "themes" ? "active" : ""} onClick={() => setSettingsTab("themes")}>Appearance</button>
               <button type="button" className={settingsTab === "notifications" ? "active" : ""} onClick={() => setSettingsTab("notifications")}>Notifications</button>
+              <button type="button" className={settingsTab === "plugins" ? "active" : ""} onClick={() => setSettingsTab("plugins")}>Plugins</button>
               <button type="button" onClick={() => setProtoSettingsOpen(true)}>Discord settings</button>
             </div>
             {settingsTab === "account" ? (
@@ -6948,8 +7970,93 @@ export default function App() {
                 <label className="settings-option"><span><strong>Reduce motion</strong><small>Disable decorative interface animations.</small></span><input type="checkbox" checked={preferences.reduceMotion} onChange={event => setPreferences(current => ({ ...current, reduceMotion: event.target.checked }))} /></label>
                 <label className="settings-option"><span><strong>Autoplay videos</strong><small>Automatically play videos in messages when possible.</small></span><input type="checkbox" checked={preferences.autoplayVideos} onChange={event => setPreferences(current => ({ ...current, autoplayVideos: event.target.checked }))} /></label>
                 <label className="feature-field"><span>Chat text size · {preferences.chatFontScale}%</span><input type="range" min="85" max="125" step="5" value={preferences.chatFontScale} onChange={event => setPreferences(current => ({ ...current, chatFontScale: Number(event.target.value) }))} /></label>
+                <h3 className="settings-section-title">Game activity detection</h3>
+                <p className="settings-help">VoidCord checks only the executable names you add below. When a match is running, it publishes a basic “Playing” activity. This does not inspect game SDKs or scan/upload your process list.</p>
+                <label className="settings-option"><span><strong>Accept activity from game SDKs</strong><small>Host Discord-compatible RPC on local IPC pipes and publish games that connect.</small></span><input type="checkbox" checked={rpcListenerEnabled} onChange={event => setRpcListenerEnabled(event.target.checked)} /></label>
+                {rpcListenerEnabled && <>
+                  <p className="settings-help">Connected game SDK clients: {rpcConnectedClients}</p>
+                  <p className="settings-help game-rpc-warning" role="note">Discord Desktop may already own the first IPC pipe. Games often connect to the first available client, so SDK activity may go to Discord Desktop instead. VoidCord only accepts presence updates; it does not expose account, chat, or voice-control commands.</p>
+                </>}
+                <h3 className="settings-section-title">Custom Rich Presence</h3>
+                <p className="settings-help">Create an application in the Discord Developer Portal and use its Application ID. Image fields are asset keys uploaded on that application's Rich Presence page. This activity is saved locally.</p>
+                <div className="custom-rpc-fields">
+                  <label><span>Application ID</span><input inputMode="numeric" maxLength={32} value={customRpcConfig.applicationId} onChange={event => setCustomRpcConfig(current => ({ ...current, applicationId: event.target.value.replace(/\D/g, "") }))} placeholder="123456789012345678" /></label>
+                  <label><span>Activity name</span><input maxLength={128} value={customRpcConfig.name} onChange={event => setCustomRpcConfig(current => ({ ...current, name: event.target.value }))} placeholder="My Game" /></label>
+                  <label><span>Activity type</span><select value={customRpcConfig.activityType} onChange={event => setCustomRpcConfig(current => ({ ...current, activityType: Number(event.target.value) }))}>
+                    <option value={0}>Playing</option><option value={1}>Streaming</option><option value={2}>Listening</option><option value={3}>Watching</option><option value={5}>Competing</option>
+                  </select></label>
+                  {customRpcConfig.activityType === 1 && <label><span>Stream HTTPS URL</span><input type="url" value={customRpcConfig.streamUrl} onChange={event => setCustomRpcConfig(current => ({ ...current, streamUrl: event.target.value }))} placeholder="https://twitch.tv/your-channel" /></label>}
+                  <label><span>Details</span><input maxLength={128} value={customRpcConfig.details} onChange={event => setCustomRpcConfig(current => ({ ...current, details: event.target.value }))} placeholder="In a match" /></label>
+                  <label><span>State</span><input maxLength={128} value={customRpcConfig.state} onChange={event => setCustomRpcConfig(current => ({ ...current, state: event.target.value }))} placeholder="Ranked" /></label>
+                  <label><span>Large image asset key</span><input maxLength={256} value={customRpcConfig.largeImage} onChange={event => setCustomRpcConfig(current => ({ ...current, largeImage: event.target.value }))} placeholder="game_logo" /></label>
+                  <label><span>Large image tooltip</span><input maxLength={128} value={customRpcConfig.largeText} onChange={event => setCustomRpcConfig(current => ({ ...current, largeText: event.target.value }))} /></label>
+                  <label><span>Small image asset key</span><input maxLength={256} value={customRpcConfig.smallImage} onChange={event => setCustomRpcConfig(current => ({ ...current, smallImage: event.target.value }))} placeholder="rank_icon" /></label>
+                  <label><span>Small image tooltip</span><input maxLength={128} value={customRpcConfig.smallText} onChange={event => setCustomRpcConfig(current => ({ ...current, smallText: event.target.value }))} /></label>
+                  <label><span>Start time</span><input type="datetime-local" value={timestampToLocalInput(customRpcConfig.startTimestamp)} onChange={event => {
+                    const timestamp = event.target.value ? Date.parse(event.target.value) : null;
+                    setCustomRpcConfig(current => ({ ...current, startTimestamp: timestamp !== null && Number.isFinite(timestamp) ? timestamp : null }));
+                  }} /></label>
+                  <label><span>End time</span><input type="datetime-local" value={timestampToLocalInput(customRpcConfig.endTimestamp)} onChange={event => {
+                    const timestamp = event.target.value ? Date.parse(event.target.value) : null;
+                    setCustomRpcConfig(current => ({ ...current, endTimestamp: timestamp !== null && Number.isFinite(timestamp) ? timestamp : null }));
+                  }} /></label>
+                  <label><span>Party size</span><input type="number" min="1" max="100000" value={customRpcConfig.partySize ?? ""} onChange={event => setCustomRpcConfig(current => ({ ...current, partySize: event.target.value ? Number(event.target.value) : null }))} placeholder="1" /></label>
+                  <label><span>Party maximum</span><input type="number" min="1" max="100000" value={customRpcConfig.partyMax ?? ""} onChange={event => setCustomRpcConfig(current => ({ ...current, partyMax: event.target.value ? Number(event.target.value) : null }))} placeholder="4" /></label>
+                </div>
+                <div className="custom-rpc-buttons">
+                  {[0, 1].map(index => {
+                    const button = customRpcConfig.buttons[index] || { label: "", url: "" };
+                    const updateButton = (field: keyof CustomRpcButton, value: string) => setCustomRpcConfig(current => {
+                      const buttons = [...current.buttons];
+                      while (buttons.length <= index) buttons.push({ label: "", url: "" });
+                      buttons[index] = { ...buttons[index], [field]: value };
+                      return { ...current, buttons };
+                    });
+                    return <div className="custom-rpc-button-row" key={index}>
+                      <label><span>Button {index + 1} label</span><input maxLength={32} value={button.label} onChange={event => updateButton("label", event.target.value)} placeholder="Join" /></label>
+                      <label><span>Button {index + 1} HTTPS URL</span><input value={button.url} onChange={event => updateButton("url", event.target.value)} placeholder="https://example.com" /></label>
+                    </div>;
+                  })}
+                </div>
+                <div className="custom-rpc-actions">
+                  <button type="button" disabled={customRpcBusy || !/^\d{1,32}$/.test(customRpcConfig.applicationId) || !customRpcConfig.name.trim()} onClick={() => setCustomRpcEnabled(true)}>{customRpcBusy ? "Publishing…" : "Apply Rich Presence"}</button>
+                  <button type="button" className="secondary" disabled={!customRpcEnabled && !customRpcAppliedRef.current} onClick={() => setCustomRpcEnabled(false)}>Clear activity</button>
+                  {customRpcEnabled && <small>Configured to publish when connected</small>}
+                </div>
+                <label className="settings-option"><span><strong>Automatically show detected games</strong><small>Check your configured process names every 15 seconds while connected.</small></span><input type="checkbox" checked={gameDetectionEnabled} onChange={event => setGameDetectionEnabled(event.target.checked)} /></label>
+                <form className="game-process-add" onSubmit={event => {
+                  event.preventDefault();
+                  const processName = newGameProcessName.trim();
+                  const displayName = newGameDisplayName.trim();
+                  if (!processName || !displayName || gameProcessMappings.length >= 100) return;
+                  if (processName.includes("/") || processName.includes("\\") || processName.includes("\0") || processName.length > 260 || displayName.length > 128) {
+                    notify("Enter an executable file name and a game name of at most 128 characters.");
+                    return;
+                  }
+                  if (gameProcessMappings.some(mapping => mapping.processName.toLowerCase() === processName.toLowerCase())) {
+                    notify("That executable is already in your detection list.");
+                    return;
+                  }
+                  setGameProcessMappings(current => [...current, { processName, displayName }]);
+                  setNewGameProcessName("");
+                  setNewGameDisplayName("");
+                }}>
+                  <label><span>Process executable</span><input value={newGameProcessName} onChange={event => setNewGameProcessName(event.target.value)} placeholder="game.exe" maxLength={260} /></label>
+                  <label><span>Activity name</span><input value={newGameDisplayName} onChange={event => setNewGameDisplayName(event.target.value)} placeholder="My Game" maxLength={128} /></label>
+                  <button type="submit" disabled={!newGameProcessName.trim() || !newGameDisplayName.trim() || gameProcessMappings.length >= 100}>Add game</button>
+                </form>
+                {gameProcessMappings.length === 0 ? <p className="settings-help">No games configured yet. Add an executable name such as <code>game.exe</code>.</p> : (
+                  <div className="game-process-list">
+                    {gameProcessMappings.map((mapping, index) => (
+                      <div className="game-process-row" key={`${mapping.processName}-${index}`}>
+                        <span><strong>{mapping.displayName}</strong><small>{mapping.processName}</small></span>
+                        <button type="button" aria-label={`Remove ${mapping.displayName} game detection`} onClick={() => setGameProcessMappings(current => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <h3 className="settings-section-title">Ignored users</h3>
-                <p className="settings-help">Ignored users are hidden only in this VoidCord installation. This preference does not sync to Discord.</p>
+                <p className="settings-help">Ignored users are hidden in VoidCord and synced with your Discord account.</p>
                 {ignoredUserIds.size === 0 ? <p className="settings-help">No ignored users.</p> : (
                   <div className="ignored-users-list">
                     {[...ignoredUserIds].map(userId => {
@@ -6964,6 +8071,74 @@ export default function App() {
                 <label className="feature-field"><span>Accent color</span><select value={preferences.accent} onChange={event => setPreferences(current => ({ ...current, accent: event.target.value as AppPreferences["accent"] }))}>
                   <option value="blurple">Blurple</option><option value="violet">Violet</option><option value="emerald">Emerald</option>
                 </select></label>
+                <h3 className="settings-section-title">Discord mod themes</h3>
+                <p className="settings-help">Import a .css theme file. Common Discord theme color variables are mapped to VoidCord; themes that depend on Discord's private DOM class names may need VoidCord-specific selectors. CSS @import and url() resources may contact remote hosts.</p>
+                <input
+                  ref={themeFileInputRef}
+                  type="file"
+                  accept=".css,text/css"
+                  hidden
+                  onChange={event => {
+                    const file = event.currentTarget.files?.[0];
+                    event.currentTarget.value = "";
+                    if (!file) return;
+                    if (file.size > MAX_CUSTOM_THEME_BYTES) {
+                      notify("Theme CSS must be 512 KiB or smaller.");
+                      return;
+                    }
+                    void file.text().then(css => {
+                      if (!css.trim()) {
+                        notify("That theme file is empty.");
+                        return;
+                      }
+                      const header = css.match(/\/\*[\s\S]*?\*\//)?.[0] || "";
+                      const metadataName = header.match(/@name\s+([^\r\n*]+)/i)?.[1]?.trim();
+                      const name = (metadataName || file.name.replace(/\.css$/i, "")).slice(0, 100);
+                      setPreferences(current => ({
+                        ...current,
+                        customThemeCss: css,
+                        customThemeName: name,
+                        customThemeEnabled: true,
+                      }));
+                      notify(`Imported theme: ${name}`);
+                    }).catch(error => {
+                      notify(`Could not read the theme file: ${String(error)}`);
+                    });
+                  }}
+                />
+                <div className="custom-theme-card">
+                  <div className="custom-theme-summary">
+                    <strong>{preferences.customThemeName || "No custom theme installed"}</strong>
+                    <span>{preferences.customThemeCss ? "Imported CSS theme" : "Choose a Discord mod .css file to begin."}</span>
+                  </div>
+                  <div className="custom-theme-actions">
+                    <button type="button" className="settings-action-button" onClick={() => themeFileInputRef.current?.click()}>Import CSS theme</button>
+                    {preferences.customThemeCss && (
+                      <>
+                        <label className="custom-theme-enable">
+                          <input
+                            type="checkbox"
+                            checked={preferences.customThemeEnabled}
+                            onChange={event => setPreferences(current => ({ ...current, customThemeEnabled: event.target.checked }))}
+                          />
+                          Enable
+                        </label>
+                        <button
+                          type="button"
+                          className="settings-action-button"
+                          onClick={() => setPreferences(current => ({
+                            ...current,
+                            customThemeCss: "",
+                            customThemeName: "",
+                            customThemeEnabled: false,
+                          }))}
+                        >
+                          Remove
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
                 <label className="feature-field"><span>Channel sidebar width · {preferences.channelSidebarWidth}px</span><input type="range" min="180" max="360" step="4" value={preferences.channelSidebarWidth} onChange={event => setPreferences(current => ({ ...current, channelSidebarWidth: Number(event.target.value) }))} /></label>
                 <h3 className="settings-section-title">Server folders and order</h3>
                 <p className="settings-help">Group servers by folder name. Use arrows to change their order in the server rail.</p>
@@ -7030,7 +8205,7 @@ export default function App() {
                   ))}
                 </div>
               </div>
-            ) : (
+            ) : settingsTab === "notifications" ? (
               <div className="settings-options">
                 <h3 className="settings-section-title">In-app notifications</h3>
                 <p className="settings-help">Control VoidCord's connection and status banners. This is a local client preference and does not change Discord push notifications.</p>
@@ -7038,6 +8213,8 @@ export default function App() {
                 <label className="feature-field"><span>Banner duration · {(preferences.systemNotificationDuration / 1000).toFixed(1)} seconds</span><input type="range" min="2000" max="10000" step="500" value={preferences.systemNotificationDuration} onChange={event => setPreferences(current => ({ ...current, systemNotificationDuration: Number(event.target.value) }))} /></label>
                 <p className="settings-help">Changes are saved locally and apply immediately.</p>
               </div>
+            ) : (
+              <PluginHub />
             )}
             <div className="feature-modal-actions"><button type="button" onClick={() => setSettingsOpen(false)}>Done</button></div>
           </section>
@@ -7348,6 +8525,13 @@ export default function App() {
               }}>
                 View {contextMenu.source === "profile" ? "Full " : ""}Profile
               </button>
+              <button role="menuitem" onClick={() => {
+                const user = contextMenu.user;
+                setContextMenu(null);
+                setReviewModalTarget({ id: user.id, name: displayName(user), type: ReviewType.User });
+              }}>
+                <Star size={14} /> View Reviews (ReviewDB)
+              </button>
               {contextMenu.user.id !== me.id && (
                 <button role="menuitem" onClick={() => {
                   const user = contextMenu.user;
@@ -7522,6 +8706,20 @@ export default function App() {
           )}
         </div>
       )}
+      {reviewModalTarget && (
+        <ReviewModal
+          targetId={reviewModalTarget.id}
+          targetName={reviewModalTarget.name}
+          type={reviewModalTarget.type}
+          currentDiscordId={me?.id}
+          onClose={() => setReviewModalTarget(null)}
+          onUserClick={userId => {
+            setReviewModalTarget(null);
+            const user = [...mentionUsers, ...guildMembers, ...dmChannels.flatMap(c => c.recipients || [])].find(u => u?.id === userId);
+            if (user) void handleOpenMemberProfile(user);
+          }}
+        />
+      )}
       {rawMessage && (
         <div
           className="raw-message-backdrop"
@@ -7545,6 +8743,144 @@ export default function App() {
               </div>
             </header>
             <pre className="raw-message-pre"><code>{JSON.stringify(rawMessage, null, 2)}</code></pre>
+          </section>
+        </div>
+      )}
+      {safetyHubOpen && (
+        <div
+          className="modal-backdrop safety-hub-backdrop"
+          onMouseDown={event => {
+            if (event.target === event.currentTarget) setSafetyHubOpen(false);
+          }}
+        >
+          <section className="message-logger-modal safety-hub-modal" role="dialog" aria-modal="true" aria-labelledby="safety-hub-title">
+            <header className="message-logger-header">
+              <div>
+                <h2 id="safety-hub-title"><ShieldCheck size={18} /> Safety Hub</h2>
+                <p>Account standing, warnings, and Trust &amp; Safety actions for {displayName(me)}.</p>
+              </div>
+              <div className="safety-hub-header-actions">
+                <button type="button" className="safety-hub-refresh" onClick={() => void loadSafetyHub()} disabled={safetyHubLoading} aria-label="Refresh Safety Hub">
+                  <RotateCcw size={14} className={safetyHubLoading ? "spinning" : ""} /> Refresh
+                </button>
+                <button type="button" className="icon-btn" onClick={() => setSafetyHubOpen(false)} aria-label="Close Safety Hub"><X size={17} /></button>
+              </div>
+            </header>
+            <div className="safety-hub-content">
+              {safetyHubLoading && !safetyHub && <div className="directory-empty"><Loader2 size={18} className="spinning" /> Loading account status…</div>}
+              {safetyHubError && <div className="directory-error" role="alert">Could not load account status: {safetyHubError}</div>}
+              {safetyHub && (
+                <>
+                  <section className={`safety-standing-card ${accountStandingState === 100 ? "good" : "warning"}`}>
+                    <div className="safety-standing-icon">
+                      {accountStandingState === 100 ? <ShieldCheck size={21} /> : <AlertTriangle size={21} />}
+                    </div>
+                    <div>
+                      <small>ACCOUNT STANDING</small>
+                      <strong>{accountStandingState === undefined ? "Unknown" : standingLabels[accountStandingState] || "Needs attention"}</strong>
+                      <span>
+                        {accountStandingState === 100
+                          ? "No current account restrictions are reported."
+                          : latestWarning
+                            ? `Warning: ${warningReason}`
+                            : "Review the classifications below for more information."}
+                      </span>
+                    </div>
+                  </section>
+                  <div className="safety-classification-heading">
+                    <strong>Account actions</strong>
+                    <span>{safetyClassifications.length}</span>
+                  </div>
+                  {safetyClassifications.length ? (
+                    <div className="safety-classification-list">
+                      {safetyClassifications.map(classification => (
+                        <article className="safety-classification" key={classification.id}>
+                          <div>
+                            <strong>{classification.description || "Trust & Safety action"}</strong>
+                            {classification.guild_metadata?.name && <span>Server: {classification.guild_metadata.name}</span>}
+                            {classification.actions?.flatMap(action => action.descriptions || []).filter(Boolean).map((description, index) => (
+                              <span key={`${classification.id}-action-${index}`}>{description}</span>
+                            ))}
+                            {classification.max_expiration_time && (
+                              <small>
+                                {new Date(classification.max_expiration_time).getTime() > Date.now()
+                                  ? `Expires ${formatTimestamp(classification.max_expiration_time)}`
+                                  : "Expired"}
+                              </small>
+                            )}
+                          </div>
+                          {classification.appeal_status?.status && (
+                            <span className="safety-appeal-state">
+                              {classification.appeal_status.status === 1 ? "Review pending"
+                                : classification.appeal_status.status === 2 ? "Review denied"
+                                  : classification.appeal_status.status === 3 ? "Action overturned"
+                                    : "Review status"}
+                            </span>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="safety-hub-empty">No account or server actions were reported.</div>
+                  )}
+                  <p className="safety-hub-footnote">
+                    Safety Hub data is provided by Discord. For formal reports or additional details, use Discord’s reporting tools.
+                  </p>
+                </>
+              )}
+            </div>
+            <footer className="safety-hub-footer">
+              <button type="button" className="safety-hub-report" onClick={() => {
+                setSafetyHubOpen(false);
+                void openDiscordReportFlow();
+              }}>
+                <Flag size={14} /> Open Discord reporting guide
+              </button>
+              <button type="button" className="request-accept" onClick={() => setSafetyHubOpen(false)}>Done</button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {reportTarget && (
+        <div
+          className="modal-backdrop report-flow-backdrop"
+          onMouseDown={event => {
+            if (event.target === event.currentTarget && !reportSubmitting) closeReportFlow();
+          }}
+        >
+          <section className="message-logger-modal report-flow-modal" role="dialog" aria-modal="true" aria-labelledby="report-flow-title">
+            <header className="message-logger-header">
+              <div>
+                <h2 id="report-flow-title"><Flag size={18} /> Report {reportTarget.kind === "user" ? "user" : "message"}</h2>
+                <p>Select the reason that best describes this report.</p>
+              </div>
+              <button type="button" className="icon-btn" onClick={closeReportFlow} disabled={reportSubmitting} aria-label="Close report dialog"><X size={17} /></button>
+            </header>
+            <div className="report-flow-content">
+              {reportLoading && <div className="directory-empty"><Loader2 size={18} className="spinning" /> Loading report reasons…</div>}
+              {reportError && <div className="directory-error" role="alert">Report could not be completed: {reportError}</div>}
+              {!reportLoading && reportReasons.length > 0 && (
+                <label className="report-reason-field">
+                  <span>Reason</span>
+                  <select value={reportReason} onChange={event => setReportReason(event.target.value === "" ? "" : Number(event.target.value))}>
+                    <option value="">Choose a reason…</option>
+                    {reportReasons.map(reason => (
+                      <option key={reason.reason} value={reason.reason}>{reason.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {reportReason !== "" && reportReasons.find(reason => reason.reason === reportReason)?.description && (
+                <p className="report-reason-description">{reportReasons.find(reason => reason.reason === reportReason)?.description}</p>
+              )}
+              <p className="report-flow-notice">Your report is sent to Discord and is anonymous. Only submit reports that accurately describe the content or account.</p>
+            </div>
+            <footer className="report-flow-footer">
+              <button type="button" className="report-flow-cancel" onClick={closeReportFlow} disabled={reportSubmitting}>Cancel</button>
+              <button type="button" className="request-accept" onClick={() => void submitReport()} disabled={reportLoading || reportSubmitting || reportReason === ""}>
+                {reportSubmitting ? <><Loader2 size={14} className="spinning" /> Submitting…</> : "Submit report"}
+              </button>
+            </footer>
           </section>
         </div>
       )}
@@ -7639,9 +8975,47 @@ function BotTag({
   );
 }
 
+function useArchivedMedia(mediaId: string): {
+  cachedUrl?: string;
+  loadArchivedMedia: () => Promise<string | undefined>;
+} {
+  const [cachedUrl, setCachedUrl] = useState<string>();
+  const loadArchivedMedia = useCallback(async () => {
+    if (!mediaId) return undefined;
+    const dataUrl = await readArchivedMedia(mediaId);
+    if (dataUrl) setCachedUrl(dataUrl);
+    return dataUrl;
+  }, [mediaId]);
+
+  useEffect(() => {
+    if (!mediaId) return;
+    const handleArchivedMedia = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: unknown; dataUrl?: unknown }>).detail;
+      if (detail?.id === mediaId && typeof detail.dataUrl === "string") {
+        setCachedUrl(detail.dataUrl);
+      }
+    };
+    const handleOffline = () => {
+      void loadArchivedMedia().catch(error => {
+        console.warn("Could not read archived attachment media", error);
+      });
+    };
+    window.addEventListener("voidcord-media-archived", handleArchivedMedia);
+    window.addEventListener("offline", handleOffline);
+    if (!navigator.onLine) handleOffline();
+    return () => {
+      window.removeEventListener("voidcord-media-archived", handleArchivedMedia);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [loadArchivedMedia, mediaId]);
+
+  return { cachedUrl, loadArchivedMedia };
+}
+
 type RefreshableAttachmentImageProps = {
   channelId: string;
   messageId: string;
+  archivedMediaId?: string;
   attachment: { id: string; url: string; proxy_url?: string; filename: string; width?: number; height?: number };
   alt?: string;
   className?: string;
@@ -7656,6 +9030,7 @@ type RefreshableAttachmentImageProps = {
 function RefreshableAttachmentImage({
   channelId,
   messageId,
+  archivedMediaId,
   attachment,
   alt,
   className,
@@ -7670,12 +9045,19 @@ function RefreshableAttachmentImage({
   const [failed, setFailed] = useState(false);
   const refreshInFlight = useRef(false);
   const lastFailedUrl = useRef<string | null>(null);
+  const { cachedUrl, loadArchivedMedia } = useArchivedMedia(archivedMediaId || "");
 
   useEffect(() => {
     setSrc(attachment.url);
     setFailed(false);
     lastFailedUrl.current = null;
-  }, [attachment.url, attachment.id]);
+  }, [attachment.url, attachment.id, archivedMediaId]);
+
+  useEffect(() => {
+    if (!failed || !cachedUrl || src === cachedUrl) return;
+    setSrc(cachedUrl);
+    setFailed(false);
+  }, [cachedUrl, failed, src]);
 
   const refreshAttachment = useCallback(async () => {
     if (refreshInFlight.current || !navigator.onLine) return;
@@ -7709,8 +9091,23 @@ function RefreshableAttachmentImage({
   const handleImageError = () => {
     if (lastFailedUrl.current === src) return;
     lastFailedUrl.current = src;
-    setFailed(true);
-    void refreshAttachment();
+    if (src.startsWith("data:")) {
+      setFailed(true);
+      return;
+    }
+    void loadArchivedMedia().then(cached => {
+      if (cached) {
+        setSrc(cached);
+        setFailed(false);
+      } else {
+        setFailed(true);
+        void refreshAttachment();
+      }
+    }).catch(error => {
+      console.warn("Could not read archived attachment media", error);
+      setFailed(true);
+      void refreshAttachment();
+    });
   };
 
   useEffect(() => {
@@ -7733,6 +9130,73 @@ function RefreshableAttachmentImage({
       onKeyDown={onKeyDown}
       onError={handleImageError}
     />
+  );
+}
+
+function CachedVideoAttachment({
+  mediaId,
+  url,
+  filename,
+  autoplay,
+  onOpen,
+}: {
+  mediaId: string;
+  url: string;
+  filename: string;
+  autoplay: boolean;
+  onOpen?: (url: string, kind: "image" | "video", name?: string) => void;
+}) {
+  const { cachedUrl, loadArchivedMedia } = useArchivedMedia(mediaId);
+  const [usingCachedMedia, setUsingCachedMedia] = useState(false);
+  const source = usingCachedMedia && cachedUrl ? cachedUrl : url;
+  useEffect(() => {
+    if (!navigator.onLine && cachedUrl) setUsingCachedMedia(true);
+  }, [cachedUrl]);
+  return (
+    <div className="msg-video-attachment">
+      <video
+        src={source}
+        controls
+        preload="metadata"
+        autoPlay={autoplay}
+        muted={autoplay}
+        onError={() => {
+          void loadArchivedMedia().then(cached => {
+            if (cached) setUsingCachedMedia(true);
+          }).catch(error => console.warn("Could not read archived attachment media", error));
+        }}
+      />
+      <button
+        type="button"
+        className="msg-video-open-btn"
+        title="Open video in media viewer"
+        onClick={() => onOpen?.(source, "video", filename)}
+      >
+        <Maximize2 size={13} />
+        <span>Open video</span>
+      </button>
+    </div>
+  );
+}
+
+function CachedAttachmentLink({ mediaId, url, filename }: { mediaId: string; url: string; filename: string }) {
+  const { cachedUrl, loadArchivedMedia } = useArchivedMedia(mediaId);
+  return (
+    <a
+      href={cachedUrl || url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="msg-file-link"
+      onClick={() => {
+        if (!cachedUrl && !navigator.onLine) {
+          void loadArchivedMedia().catch(error => {
+            console.warn("Could not read archived attachment media", error);
+          });
+        }
+      }}
+    >
+      📎 {filename}
+    </a>
   );
 }
 
@@ -7867,6 +9331,7 @@ function MessageContent({
             key={a.id}
             channelId={m.channel_id || channelId || ""}
             messageId={m.id}
+            archivedMediaId={`${m.id}:${a.id}`}
             attachment={a}
             alt={a.filename}
             className="msg-attachment-img"
@@ -7877,7 +9342,7 @@ function MessageContent({
             onKeyDown={event => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                onMediaOpen?.(a.url, "image", a.filename);
+                onMediaOpen?.(event.currentTarget.src, "image", a.filename);
               }
             }}
             style={{ maxWidth: Math.min(a.width ?? 400, 400), maxHeight: 300, borderRadius: 6, marginTop: 4, display: "block" }}
@@ -7887,24 +9352,20 @@ function MessageContent({
       {m.attachments
         ?.filter(isVideoAttachment)
         ?.map(a => (
-          <div className="msg-video-attachment" key={a.id}>
-            <video src={a.url} controls preload="metadata" autoPlay={autoplayVideos} muted={autoplayVideos} />
-            <button
-              type="button"
-              className="msg-video-open-btn"
-              onClick={() => onMediaOpen?.(a.url, "video", a.filename)}
-              title="Open video in media viewer"
-            >
-              <Maximize2 size={13} />
-              <span>Open video</span>
-            </button>
-          </div>
+          <CachedVideoAttachment
+            key={a.id}
+            mediaId={`${m.id}:${a.id}`}
+            url={a.url}
+            filename={a.filename}
+            autoplay={autoplayVideos}
+            onOpen={onMediaOpen}
+          />
         ))}
 
       {m.attachments
         ?.filter(a => !isImageAttachment(a) && !isVideoAttachment(a))
         ?.map(a => (
-          <a key={a.id} href={a.url} target="_blank" rel="noopener noreferrer" className="msg-file-link">📎 {a.filename}</a>
+          <CachedAttachmentLink key={a.id} mediaId={`${m.id}:${a.id}`} url={a.url} filename={a.filename} />
         ))}
 
       {m.thread && (

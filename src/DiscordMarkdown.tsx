@@ -35,8 +35,7 @@ export function DiscordMarkdown({ content, channels, users, onChannelClick }: Di
     setLinkMenu(null);
     try { await openUrl(url.href); }
     catch (error) {
-      console.warn("Tauri opener rejected external URL; using browser fallback", error);
-      window.open(url.href, "_blank", "noopener,noreferrer");
+      console.error("Could not open external URL in the system browser:", error);
     }
   };
   const linkHandlers = {

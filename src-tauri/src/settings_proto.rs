@@ -101,7 +101,10 @@ impl SettingsProtoV1Delta {
         }
 
         let mut output = Vec::with_capacity(nested.len() + 4);
-        write_varint((OBSERVED_FIELD_NUMBER << 3) | OBSERVED_WIRE_TYPE, &mut output);
+        write_varint(
+            (OBSERVED_FIELD_NUMBER << 3) | OBSERVED_WIRE_TYPE,
+            &mut output,
+        );
         write_varint(
             u64::try_from(nested.len())
                 .map_err(|_| "Protobuf field length is too large".to_owned())?,

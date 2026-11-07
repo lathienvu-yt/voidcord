@@ -71,9 +71,9 @@ export interface DiscordUser {
   profile_effect_id?: string | null;
   profile_effect?: { id: string; expires_at?: number | null } | null;
   display_name_styles?: {
-    colors?: number[];
-    effect_id?: number;
-    font_id?: number;
+    colors?: number[] | null;
+    effect_id?: number | null;
+    font_id?: number | null;
   } | null;
 }
 
@@ -82,6 +82,7 @@ export interface DiscordRelationship {
   type: number;
   user: DiscordUser;
   nickname?: string | null;
+  user_ignored?: boolean;
 }
 
 export interface DiscordGuild {
@@ -93,6 +94,7 @@ export interface DiscordGuild {
 
 export interface DiscordChannel {
   id: string;
+  account_id?: string;
   type: number; // 0=text, 1=DM, 2=voice, 3=GroupDM, 4=category, 5=announcement, 10=announcement thread, 11=public thread, 12=private thread, 13=stage, 15=forum
   name?: string;
   topic?: string | null;
@@ -108,6 +110,7 @@ export interface DiscordChannel {
   is_message_request_timestamp?: string | null;
   is_spam?: boolean;
   flags?: number;
+  message_preview?: DiscordMessage;
   safety_warnings?: Array<{ id: string; type: number; description?: string; dismissed?: boolean }>;
   permission_overwrites?: { id: string; type: number; allow: string; deny: string }[];
   recipients?: DiscordUser[];
@@ -428,12 +431,27 @@ export function primaryGuildBadgeUrl(guildId: string | undefined, badgeHash: str
   return `https://cdn.discordapp.com/guild-tag-badges/${guildId}/${badgeHash}.png`;
 }
 
-// Display-name font helper
-// font_id: 3=Cherry Bomb One (Sakura), 4=Chicle (Jellybean); others=default
+// Discord display-name font IDs; deprecated fonts intentionally use the default.
 export function displayNameFontClass(fontId?: number | null): string {
-  if (fontId === 3) return 'dn-font-3';
-  if (fontId === 4) return 'dn-font-4';
-  return '';
+  const classes: Record<number, string> = {
+    1: "dn-font-1",
+    2: "dn-font-2",
+    3: "dn-font-3",
+    4: "dn-font-4",
+    5: "dn-font-5",
+    6: "dn-font-6",
+    7: "dn-font-7",
+    8: "dn-font-8",
+    9: "dn-font-9",
+    10: "dn-font-10",
+    11: "dn-font-11",
+    12: "dn-font-12",
+    13: "dn-font-13",
+    14: "dn-font-14",
+    15: "dn-font-15",
+    16: "dn-font-16",
+  };
+  return fontId == null ? "" : classes[fontId] || "";
 }
 
 // Role gradient style helper

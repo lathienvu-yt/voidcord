@@ -1,0 +1,118 @@
+name: Plugin Port Application
+description: Submit a Vencord plugin port to VoidCord
+title: "[Port]: "
+labels:
+  - plugin-port
+  - pending-review
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form to propose an official VoidCord port of an existing Vencord plugin.
+        A submission is a request for review, not a guarantee that the port will be accepted.
+        Do not include account tokens, credentials, or other secrets.
+
+  - type: checkboxes
+    id: developer-check
+    attributes:
+      label: Developer Verification
+      description: Confirm your identity, permission to submit, and plugin status.
+      options:
+        - label: I am the original developer or have permission to submit this plugin port
+          required: true
+        - label: This is an existing Vencord plugin
+          required: true
+        - label: I confirm this plugin accepts VoidCord in its API (if self-hosted)
+          required: true
+        - label: This plugin is tagged as [Unofficial] if I am a third-party contributor
+          required: false
+
+  - type: input
+    id: plugin-name
+    attributes:
+      label: Plugin Name
+      placeholder: e.g., ReviewDB
+    validations:
+      required: true
+
+  - type: textarea
+    id: plugin-source
+    attributes:
+      label: Repository URL / Source Code
+      description: Link to the upstream Vencord plugin source and, if applicable, your proposed port.
+      placeholder: Link to the plugin repository, source directory, or pull request
+    validations:
+      required: true
+
+  - type: dropdown
+    id: port-status
+    attributes:
+      label: Port Status
+      description: Choose the current state of your proposal.
+      options:
+        - Proposal only
+        - Port in progress
+        - Port ready for review
+    validations:
+      required: true
+
+  - type: textarea
+    id: plugin-purpose
+    attributes:
+      label: What does the plugin do?
+      description: Explain its user-facing behavior and why it would be useful in VoidCord.
+      placeholder: Describe the plugin's main features and intended users.
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: VoidCord Compatibility and Porting Plan
+      description: Identify Vencord-specific APIs, Discord internals, services, or dependencies that need adaptation.
+      placeholder: |
+        - Vencord APIs used:
+        - VoidCord APIs or UI integration needed:
+        - External services or self-hosted API requirements:
+        - Planned adaptations:
+    validations:
+      required: true
+
+  - type: textarea
+    id: permissions-and-data
+    attributes:
+      label: Permissions, Network Access, and User Data
+      description: Describe any account permissions, network requests, or user data the plugin uses.
+      placeholder: State what data is accessed, where it is sent, and how users control it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: testing
+    attributes:
+      label: Testing and Verification
+      description: For a completed port, provide steps to reproduce and results. For a proposal, describe how it could be tested.
+      placeholder: |
+        1. Configure or enable the plugin
+        2. Perform the relevant action
+        3. Expected result
+    validations:
+      required: true
+
+  - type: input
+    id: applicant-contact
+    attributes:
+      label: Applicant Contact
+      description: Optional GitHub username or another preferred contact method.
+      placeholder: "@username"
+    validations:
+      required: false
+
+  - type: textarea
+    id: reviewer-notes
+    attributes:
+      label: Additional Notes
+      description: Add screenshots, licensing details, known limitations, or anything else reviewers should know.
+      placeholder: Optional
+    validations:
+      required: false

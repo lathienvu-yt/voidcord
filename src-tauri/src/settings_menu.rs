@@ -42,9 +42,9 @@ pub struct AppearanceDelta {
 pub struct PrivacyDelta {
     pub default_guilds_restricted: Option<bool>, // field 4: bool
     pub allow_accessibility_detection: Option<bool>, // field 5: wrapped bool message
-    pub contact_sync_enabled: Option<bool>, // field 10: wrapped bool message
-    pub hide_legacy_username: Option<bool>, // field 22: wrapped bool message
-    pub drops_opted_out: Option<bool>, // field 29: wrapped bool message
+    pub contact_sync_enabled: Option<bool>,      // field 10: wrapped bool message
+    pub hide_legacy_username: Option<bool>,      // field 22: wrapped bool message
+    pub drops_opted_out: Option<bool>,           // field 29: wrapped bool message
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -88,70 +88,96 @@ pub async fn save_client_settings(
 ) -> Result<SettingsProtoEnvelope, String> {
     // Fetch the authoritative current proto first. Sending a partial nested
     // scope would reset every omitted sibling field to its default on Discord.
-    let current = state.router.rest(
-        AccountIdentity::ReadOnly,
-        reqwest::Method::GET,
-        "users/@me/settings-proto/1",
-        None,
-    ).await.map_err(|error| format!("Could not read current settings proto: {error}"))?;
+    let current = state
+        .router
+        .rest(
+            AccountIdentity::ReadOnly,
+            reqwest::Method::GET,
+            "users/@me/settings-proto/1",
+            None,
+        )
+        .await
+        .map_err(|error| format!("Could not read current settings proto: {error}"))?;
     let encoded_current = current
         .get("settings")
         .and_then(Value::as_str)
-        .ok_or_else(|| "Discord settings-proto response did not contain Base64 settings".to_owned())?;
+        .ok_or_else(|| {
+            "Discord settings-proto response did not contain Base64 settings".to_owned()
+        })?;
     let decoded_current = STANDARD
         .decode(encoded_current)
         .map_err(|_| "Discord returned invalid Base64 settings".to_owned())?;
     let mut fields = parse_fields(&decoded_current)?;
     // Use the data version from the snapshot we are about to merge, rather
     // than the UI's old placeholder, so Discord can reject stale writes safely.
-    let required_data_version = extract_data_version(&fields)
-        .unwrap_or(changes.required_data_version);
+    let required_data_version =
+        extract_data_version(&fields).unwrap_or(changes.required_data_version);
 
     let mut changed_scopes = Vec::new();
     if let Some(scope) = changes.appearance {
-        apply_scope(&mut fields, 13, vec![
-            (2, scope.developer_mode, false),
-            (15, scope.dark_sidebar, false),
-            (18, scope.message_display_compact, false),
-        ])?;
+        apply_scope(
+            &mut fields,
+            13,
+            vec![
+                (2, scope.developer_mode, false),
+                (15, scope.dark_sidebar, false),
+                (18, scope.message_display_compact, false),
+            ],
+        )?;
         changed_scopes.push(13);
     }
     if let Some(scope) = changes.privacy {
-        apply_scope(&mut fields, 8, vec![
-            (4, scope.default_guilds_restricted, false),
-            (5, scope.allow_accessibility_detection, true),
-            (10, scope.contact_sync_enabled, true),
-            (22, scope.hide_legacy_username, true),
-            (29, scope.drops_opted_out, true),
-        ])?;
+        apply_scope(
+            &mut fields,
+            8,
+            vec![
+                (4, scope.default_guilds_restricted, false),
+                (5, scope.allow_accessibility_detection, true),
+                (10, scope.contact_sync_enabled, true),
+                (22, scope.hide_legacy_username, true),
+                (29, scope.drops_opted_out, true),
+            ],
+        )?;
         changed_scopes.push(8);
     }
     if let Some(scope) = changes.text_and_images {
-        apply_scope(&mut fields, 6, vec![
-            (9, scope.inline_attachment_media, true),
-            (10, scope.inline_embed_media, true),
-            (11, scope.gif_auto_play, true),
-            (12, scope.render_embeds, true),
-            (13, scope.render_reactions, true),
-            (14, scope.animate_emoji, true),
-            (20, scope.use_rich_chat_input, true),
-            (21, scope.convert_emoticons, true),
-            (22, scope.use_thread_sidebar, true),
-        ])?;
+        apply_scope(
+            &mut fields,
+            6,
+            vec![
+                (9, scope.inline_attachment_media, true),
+                (10, scope.inline_embed_media, true),
+                (11, scope.gif_auto_play, true),
+                (12, scope.render_embeds, true),
+                (13, scope.render_reactions, true),
+                (14, scope.animate_emoji, true),
+                (20, scope.use_rich_chat_input, true),
+                (21, scope.convert_emoticons, true),
+                (22, scope.use_thread_sidebar, true),
+            ],
+        )?;
         changed_scopes.push(6);
     }
     if let Some(scope) = changes.clips {
-        apply_scope(&mut fields, 19, vec![
-            (1, scope.allow_voice_recording, true),
-            (2, scope.clips_enabled, true),
-        ])?;
+        apply_scope(
+            &mut fields,
+            19,
+            vec![
+                (1, scope.allow_voice_recording, true),
+                (2, scope.clips_enabled, true),
+            ],
+        )?;
         changed_scopes.push(19);
     }
     if let Some(scope) = changes.notifications {
-        apply_scope(&mut fields, 10, vec![
-            (1, scope.show_in_app_notifications, true),
-            (2, scope.notify_friends_on_go_live, true),
-        ])?;
+        apply_scope(
+            &mut fields,
+            10,
+            vec![
+                (1, scope.show_in_app_notifications, true),
+                (2, scope.notify_friends_on_go_live, true),
+            ],
+        )?;
         changed_scopes.push(10);
     }
     if changed_scopes.is_empty() {
@@ -161,22 +187,29 @@ pub async fn save_client_settings(
     // Send only the top-level scopes actually changed. Each included scope is
     // complete, while unrelated scopes remain omitted to avoid needless writes.
     let mut wire = Vec::new();
-    for field in fields.into_iter().filter(|field| changed_scopes.contains(&(field.number as u32))) {
+    for field in fields
+        .into_iter()
+        .filter(|field| changed_scopes.contains(&(field.number as u32)))
+    {
         wire.extend_from_slice(&field.raw);
     }
     let envelope = SettingsProtoEnvelope {
         settings: STANDARD.encode(wire),
         required_data_version,
     };
-    state.router.rest(
-        AccountIdentity::Primary,
-        reqwest::Method::PATCH,
-        "users/@me/settings-proto/1",
-        Some(json!({
-            "settings": envelope.settings,
-            "required_data_version": envelope.required_data_version,
-        })),
-    ).await.map_err(|error| error.to_string())?;
+    state
+        .router
+        .rest(
+            AccountIdentity::Primary,
+            reqwest::Method::PATCH,
+            "users/@me/settings-proto/1",
+            Some(json!({
+                "settings": envelope.settings,
+                "required_data_version": envelope.required_data_version,
+            })),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(envelope)
 }
 
@@ -192,12 +225,18 @@ struct WireField {
 /// nested uint32 field 3) from the snapshot. Unknown version layouts are left
 /// alone and let the caller use its supplied fallback.
 fn extract_data_version(fields: &[WireField]) -> Option<u32> {
-    let versions = fields.iter().find(|field| field.number == 1 && field.wire_type == 2)?;
+    let versions = fields
+        .iter()
+        .find(|field| field.number == 1 && field.wire_type == 2)?;
     let nested = parse_fields(versions.payload.as_deref()?).ok()?;
-    let data_version = nested.iter().find(|field| field.number == 3 && field.wire_type == 0)?;
+    let data_version = nested
+        .iter()
+        .find(|field| field.number == 3 && field.wire_type == 0)?;
     let mut cursor = 0;
     let key = read_varint(&data_version.raw, &mut cursor).ok()?;
-    if key >> 3 != 3 || key & 7 != 0 { return None; }
+    if key >> 3 != 3 || key & 7 != 0 {
+        return None;
+    }
     u32::try_from(read_varint(&data_version.raw, &mut cursor).ok()?).ok()
 }
 
@@ -220,25 +259,41 @@ fn parse_fields(bytes: &[u8]) -> Result<Vec<WireField>, String> {
                 None
             }
             1 => {
-                cursor = cursor.checked_add(8).ok_or_else(|| "Protobuf cursor overflow".to_owned())?;
-                if cursor > bytes.len() { return Err("Truncated fixed64 protobuf field".to_owned()); }
+                cursor = cursor
+                    .checked_add(8)
+                    .ok_or_else(|| "Protobuf cursor overflow".to_owned())?;
+                if cursor > bytes.len() {
+                    return Err("Truncated fixed64 protobuf field".to_owned());
+                }
                 None
             }
             2 => {
                 let length = usize::try_from(read_varint(bytes, &mut cursor)?)
                     .map_err(|_| "Protobuf field length is too large".to_owned())?;
-                let end = cursor.checked_add(length).ok_or_else(|| "Protobuf field length overflow".to_owned())?;
-                if end > bytes.len() { return Err("Truncated length-delimited protobuf field".to_owned()); }
+                let end = cursor
+                    .checked_add(length)
+                    .ok_or_else(|| "Protobuf field length overflow".to_owned())?;
+                if end > bytes.len() {
+                    return Err("Truncated length-delimited protobuf field".to_owned());
+                }
                 let value = bytes[cursor..end].to_vec();
                 cursor = end;
                 Some(value)
             }
             5 => {
-                cursor = cursor.checked_add(4).ok_or_else(|| "Protobuf cursor overflow".to_owned())?;
-                if cursor > bytes.len() { return Err("Truncated fixed32 protobuf field".to_owned()); }
+                cursor = cursor
+                    .checked_add(4)
+                    .ok_or_else(|| "Protobuf cursor overflow".to_owned())?;
+                if cursor > bytes.len() {
+                    return Err("Truncated fixed32 protobuf field".to_owned());
+                }
                 None
             }
-            _ => return Err(format!("Unsupported protobuf wire type {wire_type}; refusing to rewrite settings")),
+            _ => {
+                return Err(format!(
+                    "Unsupported protobuf wire type {wire_type}; refusing to rewrite settings"
+                ))
+            }
         };
         fields.push(WireField {
             number,
@@ -257,7 +312,9 @@ fn apply_scope(
     scope_number: u32,
     updates: Vec<(u32, Option<bool>, bool)>,
 ) -> Result<(), String> {
-    let matching: Vec<usize> = top_fields.iter().enumerate()
+    let matching: Vec<usize> = top_fields
+        .iter()
+        .enumerate()
         .filter_map(|(index, field)| (field.number == u64::from(scope_number)).then_some(index))
         .collect();
 
@@ -266,15 +323,24 @@ fn apply_scope(
     for index in &matching {
         let field = &top_fields[*index];
         if field.wire_type != 2 {
-            return Err(format!("Settings scope {scope_number} was not length-delimited"));
+            return Err(format!(
+                "Settings scope {scope_number} was not length-delimited"
+            ));
         }
-        let payload = field.payload.as_deref().ok_or_else(|| "Missing protobuf scope payload".to_owned())?;
+        let payload = field
+            .payload
+            .as_deref()
+            .ok_or_else(|| "Missing protobuf scope payload".to_owned())?;
         nested.extend(parse_fields(payload)?);
     }
 
     for (leaf_number, value, wrapped) in updates {
-        let Some(value) = value else { continue; };
-        let first_match = nested.iter().position(|field| field.number == u64::from(leaf_number));
+        let Some(value) = value else {
+            continue;
+        };
+        let first_match = nested
+            .iter()
+            .position(|field| field.number == u64::from(leaf_number));
         nested.retain(|field| field.number != u64::from(leaf_number));
 
         // Proto3 scalar false is represented by absence; BoolValue false must
@@ -306,7 +372,9 @@ fn apply_scope(
     }
 
     let mut payload = Vec::new();
-    for field in nested { payload.extend_from_slice(&field.raw); }
+    for field in nested {
+        payload.extend_from_slice(&field.raw);
+    }
     let replacement = WireField {
         number: u64::from(scope_number),
         wire_type: 2,
@@ -331,7 +399,9 @@ fn apply_scope(
             inserted = true;
         }
     }
-    if !inserted { rebuilt.push(replacement); }
+    if !inserted {
+        rebuilt.push(replacement);
+    }
     *top_fields = rebuilt;
     Ok(())
 }
@@ -349,13 +419,17 @@ fn encode_field(number: u64, wire_type: u64, payload: &[u8]) -> Vec<u8> {
 fn read_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, String> {
     let mut value = 0u64;
     for shift in (0..70).step_by(7) {
-        let byte = *bytes.get(*cursor).ok_or_else(|| "Truncated protobuf varint".to_owned())?;
+        let byte = *bytes
+            .get(*cursor)
+            .ok_or_else(|| "Truncated protobuf varint".to_owned())?;
         *cursor += 1;
         if shift == 63 && byte > 1 {
             return Err("Protobuf varint overflow".to_owned());
         }
         value |= u64::from(byte & 0x7f) << shift;
-        if byte & 0x80 == 0 { return Ok(value); }
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
     }
     Err("Protobuf varint is too long".to_owned())
 }
@@ -378,18 +452,26 @@ mod tests {
         // field 99 is an unknown varint retained byte-for-byte.
         let appearance = vec![8, 2, 16, 1, 152, 6, 7];
         let mut top = parse_fields(&encode_field(13, 2, &appearance)).unwrap();
-        apply_scope(&mut top, 13, vec![
-            (2, Some(false), false),
-            (15, Some(true), false),
-        ]).unwrap();
+        apply_scope(
+            &mut top,
+            13,
+            vec![(2, Some(false), false), (15, Some(true), false)],
+        )
+        .unwrap();
 
         let encoded: Vec<u8> = top.iter().flat_map(|field| field.raw.clone()).collect();
         let top_parsed = parse_fields(&encoded).unwrap();
         let nested = parse_fields(top_parsed[0].payload.as_deref().unwrap()).unwrap();
-        assert!(nested.iter().any(|field| field.number == 1 && field.raw == [8, 2]));
+        assert!(nested
+            .iter()
+            .any(|field| field.number == 1 && field.raw == [8, 2]));
         assert!(!nested.iter().any(|field| field.number == 2));
-        assert!(nested.iter().any(|field| field.number == 15 && field.raw == [120, 1]));
-        assert!(nested.iter().any(|field| field.number == 99 && field.raw == [152, 6, 7]));
+        assert!(nested
+            .iter()
+            .any(|field| field.number == 15 && field.raw == [120, 1]));
+        assert!(nested
+            .iter()
+            .any(|field| field.number == 99 && field.raw == [152, 6, 7]));
     }
 
     #[test]

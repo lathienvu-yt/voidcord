@@ -136,7 +136,7 @@ export function DiscordEmbedView({
   if (imageOnly && standaloneImageUrl) {
     const href = embed.url && !embed.url.startsWith("attachment://") ? embed.url : standaloneImageUrl;
     return (
-      <a className="embed-standalone-image" href={href} target="_blank" rel="noopener noreferrer" onClick={event => {
+      <a className="embed-standalone-image" data-voidcord-in-app-link="true" href={href} target="_blank" rel="noopener noreferrer" onClick={event => {
         if (!onMediaOpen) return;
         event.preventDefault();
         onMediaOpen(standaloneImageUrl, "image", embed.title);

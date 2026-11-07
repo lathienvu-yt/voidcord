@@ -3,26 +3,26 @@ use std::{
     collections::{HashMap, VecDeque},
     str::FromStr,
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
 
 use cacophony::{
-    Connection, ConnectionConfig, ConnectionConnect, SpeakingFlags,
     opus::{
-        Decoder,
         discord::{EncodeConfig, PacketEncoder, PcmFrame},
+        Decoder,
     },
+    Connection, ConnectionConfig, ConnectionConnect, SpeakingFlags,
 };
 use cpal::{
-    Data, Device, DeviceId, SampleFormat, Stream, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
+    Data, Device, DeviceId, SampleFormat, Stream, StreamConfig,
 };
 use rubato::{
-    Async, FixedAsync, Resampler, SincInterpolationParameters,
-    audioadapter_buffers::owned::InterleavedOwned,
+    audioadapter_buffers::owned::InterleavedOwned, Async, FixedAsync, Resampler,
+    SincInterpolationParameters,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -236,7 +236,7 @@ async fn run_audio_session(
                     captured_samples.clear();
                     continue;
                 }
-                
+
                 let converted = if let Some(converter) = input_converter.as_mut() {
                     converter.process(capture_chunk)?
                 } else {
@@ -244,7 +244,7 @@ async fn run_audio_session(
                 };
 
                 captured_samples.extend(converted);
-                
+
                 // If accumulated backlog is too high, drop old audio frames to clear latency instantly
                 if captured_samples.len() > OPUS_SAMPLES_PER_FRAME * 4 {
                     let drain_len = captured_samples.len() - (OPUS_SAMPLES_PER_FRAME * 2);
@@ -300,7 +300,7 @@ async fn run_audio_session(
                         .map_err(|error| format!("Could not create Opus decoder: {error}"))?;
                     decoders.insert(ssrc, (decoder, Instant::now()));
                 }
-                
+
                 let (decoder, last_used) = decoders
                     .get_mut(&ssrc)
                     .expect("decoder inserted for incoming SSRC");
@@ -462,7 +462,11 @@ fn resolve_device(
 }
 
 fn device_kind(input: bool) -> &'static str {
-    if input { "microphone" } else { "speaker" }
+    if input {
+        "microphone"
+    } else {
+        "speaker"
+    }
 }
 
 fn select_config(device: &Device, input: bool) -> Result<cpal::SupportedStreamConfig, String> {
@@ -722,7 +726,7 @@ fn append_playback_samples(playback: &Mutex<VecDeque<i16>>, samples: &[f32]) -> 
     let mut playback = playback
         .lock()
         .map_err(|_| "Audio playback buffer was poisoned".to_owned())?;
-    
+
     playback.extend(
         samples
             .iter()
