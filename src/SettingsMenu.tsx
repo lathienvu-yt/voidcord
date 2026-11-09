@@ -77,6 +77,7 @@ const defaults: SettingsState = {
 };
 
 type Props = {
+  embedded?: boolean;
   onClose: () => void;
   onThemeChange: (theme: Theme) => void;
   ignoredUserIds: Set<string>;
@@ -87,6 +88,7 @@ type Props = {
 };
 
 export default function SettingsMenu({
+  embedded = false,
   onClose,
   onThemeChange,
   ignoredUserIds,
@@ -202,20 +204,27 @@ export default function SettingsMenu({
 
   return (
     <div
-      className="proto-settings-backdrop"
-      onMouseDown={e => {
+      className={embedded ? "proto-settings-embedded" : "proto-settings-backdrop"}
+      onMouseDown={embedded ? undefined : e => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <section className="proto-settings-window" role="dialog" aria-modal="true" aria-label="Settings">
-        <header className="proto-settings-topbar">
-          <div>
-            <strong>{tabTitles[tab]}</strong>
-          </div>
-          <button className="proto-settings-close" onClick={onClose} aria-label="Close settings">
-            <X size={18} />
-          </button>
-        </header>
+      <section
+        className={`proto-settings-window${embedded ? " proto-settings-window-embedded" : ""}`}
+        role="dialog"
+        aria-modal={embedded ? undefined : true}
+        aria-label="Discord settings"
+      >
+        {!embedded && (
+          <header className="proto-settings-topbar">
+            <div>
+              <strong>{tabTitles[tab]}</strong>
+            </div>
+            <button className="proto-settings-close" onClick={onClose} aria-label="Close settings">
+              <X size={18} />
+            </button>
+          </header>
+        )}
         <div className="proto-settings-layout">
           <nav className="proto-settings-nav" aria-label="Settings sections">
             <div className="proto-settings-sidebar-brand">
@@ -261,7 +270,7 @@ export default function SettingsMenu({
             {visibleTabs.length === 0 && <p className="proto-settings-no-results">No settings found</p>}
             <div className="proto-settings-nav-spacer" />
             <button className="proto-settings-client-link" onClick={onOpenClientSettings}>
-              Client preferences
+              Client settings
             </button>
           </nav>
           <div className="proto-settings-content">

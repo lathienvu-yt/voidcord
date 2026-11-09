@@ -3803,6 +3803,27 @@ input, textarea { font-family: inherit; }
 .captcha-privacy-note { display: block; margin-top: 14px; color: #8f9299; font-size: 10px; line-height: 1.4; }
 .settings-modal { width: min(560px, 100%); max-height: 86vh; overflow-y: auto; }
 .settings-modal .feature-modal-tabs { margin-top: 22px; }
+.settings-modal-discord {
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 96vw);
+  height: min(800px, 90vh);
+  max-height: 90vh;
+  overflow: hidden;
+}
+.settings-modal-discord .feature-modal-tabs { flex: 0 0 auto; margin-top: 12px; margin-bottom: 12px; }
+.proto-settings-embedded { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.proto-settings-window-embedded {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: 0;
+  background: #0e1521;
+  box-shadow: none;
+}
+.proto-settings-window-embedded .proto-settings-nav { overflow-y: auto; }
 .settings-options { display: flex; flex-direction: column; gap: 8px; }
 .custom-theme-card {
   display: flex;

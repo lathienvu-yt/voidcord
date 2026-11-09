@@ -1752,9 +1752,8 @@ export default function App() {
   const [gifUrl, setGifUrl] = useState("");
   const [memberOpen, setMemberOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [protoSettingsOpen, setProtoSettingsOpen] = useState(false);
   const [settingsTheme, setSettingsTheme] = useState<"dark" | "light">("dark");
-  const [settingsTab, setSettingsTab] = useState<"account" | "themes" | "notifications" | "plugins">("account");
+  const [settingsTab, setSettingsTab] = useState<"account" | "themes" | "notifications" | "plugins" | "discord">("discord");
   const [reviewModalTarget, setReviewModalTarget] = useState<{ id: string; name: string; type?: ReviewType } | null>(null);
   const [reviewDbTokenVal, setReviewDbTokenVal] = useState(() => getStoredReviewDbToken() || "");
   const [preferences, setPreferences] = useState<AppPreferences>(readPreferences);
@@ -5985,7 +5984,7 @@ export default function App() {
               <button className={`user-bar-btn ${micMuted ? "muted" : ""}`} title={micMuted ? "Unmute" : "Mute"} onClick={() => void updateVoiceControls(!micMuted, deafened)}><Mic size={15} /></button>
               <button className={`user-bar-btn ${deafened ? "deafened" : ""}`} title={deafened ? "Undeafen" : "Deafen"} onClick={() => void updateVoiceControls(micMuted, !deafened)}><Headphones size={15} /></button>
               <button className="user-bar-btn" title="Toggle Rust Console" aria-label="Toggle Rust Console" onClick={() => void tauriInvoke("open_rust_console").catch(error => console.error("Could not open Rust console", error))}><Terminal size={15} /></button>
-              <button className="user-bar-btn" title="Settings" onClick={() => setProtoSettingsOpen(true)}><Settings size={15} /></button>
+              <button className="user-bar-btn" title="Settings" onClick={() => { setSettingsTab("discord"); setSettingsOpen(true); }}><Settings size={15} /></button>
             </div>
           </div>
           {profileCardOpen && (
@@ -7954,7 +7953,7 @@ export default function App() {
         <div className="feature-modal-backdrop" onMouseDown={event => {
           if (event.target === event.currentTarget) setSettingsOpen(false);
         }}>
-          <section className="feature-modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+          <section className={`feature-modal settings-modal${settingsTab === "discord" ? " settings-modal-discord" : ""}`} role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <button type="button" className="feature-modal-close" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>×</button>
             <h2 id="settings-title">Settings</h2>
             <div className="feature-modal-tabs">
@@ -7962,9 +7961,20 @@ export default function App() {
               <button type="button" className={settingsTab === "themes" ? "active" : ""} onClick={() => setSettingsTab("themes")}>Appearance</button>
               <button type="button" className={settingsTab === "notifications" ? "active" : ""} onClick={() => setSettingsTab("notifications")}>Notifications</button>
               <button type="button" className={settingsTab === "plugins" ? "active" : ""} onClick={() => setSettingsTab("plugins")}>Plugins</button>
-              <button type="button" onClick={() => setProtoSettingsOpen(true)}>Discord settings</button>
+              <button type="button" className={settingsTab === "discord" ? "active" : ""} onClick={() => setSettingsTab("discord")}>Discord</button>
             </div>
-            {settingsTab === "account" ? (
+            {settingsTab === "discord" ? (
+              <SettingsMenu
+                embedded
+                onClose={() => setSettingsOpen(false)}
+                onOpenClientSettings={() => setSettingsTab("account")}
+                onThemeChange={setSettingsTheme}
+                ignoredUserIds={ignoredUserIds}
+                blockedUserIds={relationships.filter(relationship => relationship.type === 2).map(relationship => relationship.user.id)}
+                onToggleIgnore={toggleIgnoredUser}
+                onBlockUser={(userId, blocked) => void changeRelationship(userId, blocked ? "block" : "unblock")}
+              />
+            ) : settingsTab === "account" ? (
               <div className="settings-options">
                 <label className="settings-option"><span><strong>Compact messages</strong><small>Reduce spacing between messages in chat.</small></span><input type="checkbox" checked={preferences.compactMessages} onChange={event => setPreferences(current => ({ ...current, compactMessages: event.target.checked }))} /></label>
                 <label className="settings-option"><span><strong>Reduce motion</strong><small>Disable decorative interface animations.</small></span><input type="checkbox" checked={preferences.reduceMotion} onChange={event => setPreferences(current => ({ ...current, reduceMotion: event.target.checked }))} /></label>
@@ -8326,16 +8336,6 @@ export default function App() {
           </section>
         </div>
       )}
-
-      {protoSettingsOpen && <SettingsMenu
-        onClose={() => setProtoSettingsOpen(false)}
-        onOpenClientSettings={() => { setProtoSettingsOpen(false); setSettingsOpen(true); }}
-        onThemeChange={setSettingsTheme}
-        ignoredUserIds={ignoredUserIds}
-        blockedUserIds={relationships.filter(relationship => relationship.type === 2).map(relationship => relationship.user.id)}
-        onToggleIgnore={toggleIgnoredUser}
-        onBlockUser={(userId, blocked) => void changeRelationship(userId, blocked ? "block" : "unblock")}
-      />}
 
       {forwardTarget && (
         <div className="feature-modal-backdrop" onMouseDown={event => {
