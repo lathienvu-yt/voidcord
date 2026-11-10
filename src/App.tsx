@@ -7235,7 +7235,7 @@ export default function App() {
                         <span className="compact-ts">{formatTimestamp(m.timestamp)}</span>
                         <div className="msg-body">
                           {m.deleted_at && <span className="deleted-message-label">DELETED</span>}
-                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
+                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} onPollVote={votePoll} onPollEnd={endPoll} currentUserId={me?.id} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
                         </div>
                         <MsgActions message={m} onReact={emoji => void toggleMessageReaction(selectedChannel!.id, m, emoji)} />
                       </div>
@@ -7664,7 +7664,7 @@ export default function App() {
                   <img src={avatarUrl(message.author, 32)} alt="" />
                   <div>
                     <header><strong><StyledDisplayName user={message.author} /> <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong><time>{formatTimestamp(message.timestamp)}</time></header>
-                    <MessageContent message={message} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(target, emoji) => void toggleMessageReaction(selectedVoiceChannel.id, target, emoji)} autoplayVideos={preferences.autoplayVideos} />
+                    <MessageContent message={message} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(target, emoji) => void toggleMessageReaction(selectedVoiceChannel.id, target, emoji)} onPollVote={votePoll} onPollEnd={endPoll} currentUserId={me?.id} autoplayVideos={preferences.autoplayVideos} channelId={selectedVoiceChannel.id} />
                   </div>
                 </article>
               ))}
@@ -9572,7 +9572,6 @@ function PollCard({
   const closed = finalized || expired;
   const total = counts.reduce((sum: number, item: any) => sum + Number(item.count || 0), 0);
   const canEnd = !!currentUserId && message.author?.id === currentUserId && !closed && !!onEnd;
-  const durationText = poll?.expiry ? new Date(poll.expiry).toLocaleString() : "";
   const toggle = (id: number) => setSelected(current => current.includes(id)
     ? current.filter(value => value !== id)
     : poll.allow_multiselect ? [...current, id] : [id]);
