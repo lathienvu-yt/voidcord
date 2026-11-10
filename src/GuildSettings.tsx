@@ -241,7 +241,7 @@ export default function GuildSettings({
                   <p className="guild-settings-note">These are account-level preferences, not server configuration. Manage who can contact you and how your account activity is shared from User Settings → Privacy & Safety.</p>
                   <div className="guild-settings-info-card"><strong>Direct messages from server members</strong><span>Review whether people in shared servers can send you direct messages.</span></div>
                   <div className="guild-settings-info-card"><strong>Activity and data controls</strong><span>Review activity status, data personalization, and friend request permissions in your account privacy settings.</span></div>
-                  <button type="button" className="guild-settings-link" onClick={() => { onClose(); document.querySelector<HTMLButtonElement>(".pfp-button")?.click(); }}>Open User Settings</button>
+                  <button type="button" className="guild-settings-link" onClick={() => { onClose(); document.querySelector<HTMLButtonElement>('.user-bar-btn[title="Settings"]')?.click(); }}>Open User Settings</button>
                 </>
               ) : (
                 <>
