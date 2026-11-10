@@ -9542,6 +9542,82 @@ function CachedAttachmentLink({ mediaId, url, filename }: { mediaId: string; url
   );
 }
 
+function PollCard({
+  poll,
+  message,
+  channelId,
+  currentUserId,
+  onVote,
+  onEnd,
+}: {
+  poll: any;
+  message: DiscordMessage;
+  channelId: string;
+  currentUserId?: string;
+  onVote?: (channelId: string, messageId: string, answerIds: number[]) => Promise<void>;
+  onEnd?: (channelId: string, messageId: string) => Promise<void>;
+}) {
+  const answers = Array.isArray(poll?.answers) ? poll.answers : [];
+  const counts = Array.isArray(poll?.results?.answer_counts) ? poll.results.answer_counts : [];
+  const countFor = (id: number) => counts.find((item: any) => Number(item.id) === id);
+  const initialVotes = answers.filter((answer: any) => countFor(Number(answer.answer_id))?.me_voted).map((answer: any) => Number(answer.answer_id));
+  const [selected, setSelected] = useState<number[]>(initialVotes);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setSelected(answers.filter((answer: any) => countFor(Number(answer.answer_id))?.me_voted).map((answer: any) => Number(answer.answer_id)));
+  }, [message.id, poll?.results?.answer_counts]);
+  const finalized = !!poll?.results?.is_finalized;
+  const expired = !!poll?.expiry && new Date(poll.expiry).getTime() <= Date.now();
+  const closed = finalized || expired;
+  const total = counts.reduce((sum: number, item: any) => sum + Number(item.count || 0), 0);
+  const canEnd = !!currentUserId && message.author?.id === currentUserId && !closed && !!onEnd;
+  const durationText = poll?.expiry ? new Date(poll.expiry).toLocaleString() : "";
+  const toggle = (id: number) => setSelected(current => current.includes(id)
+    ? current.filter(value => value !== id)
+    : poll.allow_multiselect ? [...current, id] : [id]);
+  const submit = async (ids: number[]) => {
+    if (!onVote || busy) return;
+    setBusy(true); setError("");
+    try { await onVote(channelId || message.channel_id, message.id, ids); }
+    catch (reason) { setError(String(reason)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <section className={`discord-poll-card ${closed ? "poll-closed" : ""}`} aria-label="Poll">
+      <div className="discord-poll-heading"><span className="discord-poll-icon"><ListChecks size={17} /></span><div><strong>{poll?.question?.text || "Poll"}</strong><small>{poll?.allow_multiselect ? "Select one or more answers" : "Select one answer"}</small></div></div>
+      <div className="discord-poll-options">
+        {answers.map((answer: any) => {
+          const id = Number(answer.answer_id);
+          const result = countFor(id);
+          const votes = Number(result?.count || 0);
+          const percent = total > 0 ? Math.round(votes / total * 100) : 0;
+          const media = answer.poll_media || {};
+          const chosen = selected.includes(id);
+          return (
+            <button type="button" key={id} className={`discord-poll-option ${chosen ? "selected" : ""} ${result?.me_voted ? "mine" : ""}`} disabled={closed || busy || !onVote} onClick={() => toggle(id)}>
+              <span className="discord-poll-option-check">{chosen || result?.me_voted ? <Check size={13} /> : null}</span>
+              {media.emoji?.name && <span className="discord-poll-option-emoji">{media.emoji.id ? <img src={`https://cdn.discordapp.com/emojis/${media.emoji.id}.webp?size=24`} alt="" /> : media.emoji.name}</span>}
+              <span className="discord-poll-option-label">{media.text || "Answer"}</span>
+              {(poll?.results || closed) && <span className="discord-poll-option-result"><span>{percent}%</span><small>{votes}</small></span>}
+              {(poll?.results || closed) && <span className="discord-poll-option-bar" style={{ width: percent + "%" }} />}
+            </button>
+          );
+        })}
+      </div>
+      <div className="discord-poll-footer">
+        <span>{total} {total === 1 ? "vote" : "votes"}{closed ? " · Poll ended" : durationText ? " · Ends " + new Date(poll.expiry).toLocaleString() : ""}</span>
+        {!closed && <div className="discord-poll-actions">
+          {selected.length > 0 && <button type="button" onClick={() => void submit(selected)} disabled={busy || !onVote}>{busy ? "Saving…" : "Vote"}</button>}
+          {initialVotes.length > 0 && <button type="button" className="poll-remove-vote" onClick={() => { setSelected([]); void submit([]); }} disabled={busy || !onVote}>Remove vote</button>}
+          {canEnd && <button type="button" className="poll-end-btn" onClick={async () => { if (!busy && onEnd) { setBusy(true); try { await onEnd(channelId || message.channel_id, message.id); } catch (reason) { setError(String(reason)); } finally { setBusy(false); } } }} disabled={busy}>End poll</button>}
+        </div>}
+      </div>
+      {error && <p className="discord-poll-error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 function MessageContent({
   message: m,
   channels,
@@ -9549,6 +9625,9 @@ function MessageContent({
   onChannelClick,
   onMediaOpen,
   onReactionToggle,
+  onPollVote,
+  onPollEnd,
+  currentUserId,
   autoplayVideos = false,
   sessionId,
   channelId,
@@ -9561,6 +9640,9 @@ function MessageContent({
   onChannelClick?: (channelId: string) => void;
   onMediaOpen?: (url: string, kind: "image" | "video", name?: string) => void;
   onReactionToggle?: (message: DiscordMessage, emoji: string) => void;
+  onPollVote?: (channelId: string, messageId: string, answerIds: number[]) => Promise<void>;
+  onPollEnd?: (channelId: string, messageId: string) => Promise<void>;
+  currentUserId?: string;
   autoplayVideos?: boolean;
   sessionId?: string;
   channelId?: string;
@@ -9654,6 +9736,10 @@ function MessageContent({
         <div className="msg-text">
           <DiscordMarkdown content={m.content} channels={channels} users={users} onChannelClick={onChannelClick} />
         </div>
+      )}
+
+      {m.poll && typeof m.poll === "object" && (
+        <PollCard poll={m.poll} message={m} channelId={channelId || m.channel_id} currentUserId={currentUserId} onVote={onPollVote} onEnd={onPollEnd} />
       )}
 
       {m.embeds && m.embeds.length > 0 && (
