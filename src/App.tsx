@@ -3688,7 +3688,7 @@ export default function App() {
       guildMembersRef.current = merged;
       setGuildMembers(merged);
       pendingGuildDataRef.current.set(guildId, {
-        gatewayListenerStateRef.current.channels,
+        channels: gatewayListenerStateRef.current.channels,
         roles: gatewayListenerStateRef.current.guildRoles,
         memberRoles: currentGuildMemberRolesRef.current,
         guildMembers: merged,
