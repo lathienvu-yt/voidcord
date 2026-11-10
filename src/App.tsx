@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenGatewayAware as listen } from "./gatewayIpc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { load } from "@tauri-apps/plugin-store";
