@@ -6664,6 +6664,11 @@ input, textarea { font-family: inherit; }
   background: rgba(160, 75, 190, .13);
   text-shadow: none;
 }
+.server-boost-indicator:not(.is-boosted),
+.server-heading-boost:not(.is-boosted) {
+  color: var(--text-muted);
+  background: rgba(128,128,128,.12);
+}
 .server-invite-button-inline {
   color: var(--text-secondary);
   background: transparent;
