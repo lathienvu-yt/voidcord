@@ -1129,6 +1129,7 @@ pub async fn vote_poll(
     channel_id: String,
     message_id: String,
     answer_ids: Vec<u64>,
+    as_token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let valid_id = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
@@ -1138,7 +1139,11 @@ pub async fn vote_poll(
     if answer_ids.len() > 10 {
         return Err("Too many poll answers selected".to_owned());
     }
-    state.router.rest(
+    if let Some(token) = as_token.as_deref() {
+        ensure_credential_available(&state, token).await?;
+    }
+    state.router.rest_with_auth(
+        as_token.as_deref(),
         AccountIdentity::Primary,
         Method::PUT,
         &format!("channels/{channel_id}/polls/{message_id}/answers/@me"),
@@ -1151,13 +1156,18 @@ pub async fn vote_poll(
 pub async fn end_poll(
     channel_id: String,
     message_id: String,
+    as_token: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let valid_id = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
     if !valid_id(&channel_id) || !valid_id(&message_id) {
         return Err("Channel and message IDs must be numeric Discord IDs".to_owned());
     }
-    state.router.rest(
+    if let Some(token) = as_token.as_deref() {
+        ensure_credential_available(&state, token).await?;
+    }
+    state.router.rest_with_auth(
+        as_token.as_deref(),
         AccountIdentity::Primary,
         Method::POST,
         &format!("channels/{channel_id}/polls/{message_id}/expire"),
