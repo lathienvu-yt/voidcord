@@ -299,6 +299,8 @@ fn main() {
             commands::complete_oauth2_redirect,
             commands::get_content_inventory,
             commands::get_guilds,
+            commands::get_guild_settings,
+            commands::update_guild_settings,
             commands::retry_captcha_request,
             commands::join_guild_invite,
             commands::create_guild,
