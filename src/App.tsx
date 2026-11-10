@@ -4367,6 +4367,7 @@ export default function App() {
     // Keep the request inbox strict even if an API response includes ordinary DMs.
     const requests = response.filter(channel =>
       channel.is_message_request === true ||
+      channel.consent_status === 1 ||
       channel.is_spam === true ||
       ((channel.flags || 0) & (1 << 5)) !== 0 ||
       (channel.is_message_request == null && !!channel.is_message_request_timestamp)
