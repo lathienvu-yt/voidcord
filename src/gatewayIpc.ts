@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen as tauriListen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen as tauriListen } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 type GatewayFrame = { event: string; payload: unknown };
 type GatewayHandler = (event: { payload: any }) => void;
