@@ -1782,6 +1782,7 @@ export default function App() {
   const [mediaLensActive, setMediaLensActive] = useState(false);
   const [serverDialogOpen, setServerDialogOpen] = useState(false);
   const [guildSettingsOpen, setGuildSettingsOpen] = useState(false);
+  const [serverMenuOpen, setServerMenuOpen] = useState(false);
   const [serverDialogMode, setServerDialogMode] = useState<"join" | "create">("join");
   const [serverInvite, setServerInvite] = useState("");
   const [newServerName, setNewServerName] = useState("");
@@ -2446,6 +2447,21 @@ export default function App() {
       else await mediaViewerRef.current?.requestFullscreen();
     } catch (error) {
       notify(`Could not toggle full-screen media: ${error}`);
+    }
+  };
+
+  const createServerInvite = async () => {
+    if (!selectedGuild) return;
+    try {
+      const inviteCode = await invoke<string>("get_or_create_guild_invite", {
+        guildId: selectedGuild.id,
+        asToken: null,
+      });
+      const inviteUrl = `https://discord.gg/${inviteCode}`;
+      await navigator.clipboard.writeText(inviteUrl);
+      notify("Server invite copied");
+    } catch (error) {
+      notify(`Could not create or copy server invite: ${error}`);
     }
   };
 
@@ -5874,7 +5890,17 @@ export default function App() {
         {/* Sidebar */}
         <aside className={`sidebar ${profileCardOpen ? "profile-open" : ""}`} style={{ width: preferences.channelSidebarWidth }}>
           {!isDmView && selectedGuild && guildBannerUrl(selectedGuild) && (
-            <div className="server-channel-banner" style={{ backgroundImage: `linear-gradient(180deg, rgba(12,12,16,.08), rgba(12,12,16,.88)), url("${guildBannerUrl(selectedGuild, 600)}")` }} aria-label={`${selectedGuild.name} server banner`}><span>{selectedGuild.name}</span></div>
+            <div className="server-channel-banner" style={{ backgroundImage: `linear-gradient(180deg, rgba(12,12,16,.48), rgba(12,12,16,.12) 52%, rgba(12,12,16,.58)), url("${guildBannerUrl(selectedGuild, 600)}")` }} aria-label={`${selectedGuild.name} server banner`}>
+              <div className="server-banner-topline">
+                <div className="server-banner-title-frame">
+                  <span>{selectedGuild.name}</span>
+                  {(selectedGuild.premium_tier ?? 0) > 0 && <span className="server-boost-indicator" title={`Server Boost Level ${selectedGuild.premium_tier}`}><Sparkles size={13} /> Level {selectedGuild.premium_tier}</span>}
+                </div>
+                <button type="button" className="server-invite-button" title="Create and copy server invite" aria-label="Create and copy server invite" onClick={() => void createServerInvite()}>
+                  <UserPlus size={15} />
+                </button>
+              </div>
+            </div>
           )}
           {isDmView ? (
             <>
@@ -5948,14 +5974,30 @@ export default function App() {
           ) : (
             <>
               <div className="server-heading-row">
-                <button className="server-heading">
-                  <span>{selectedGuild?.name ?? "—"}</span>
-                  <ChevronDown size={14} />
-                </button>
-                {selectedGuild && (
-                  <button type="button" className="server-heading-settings" title="Server settings" aria-label="Open server settings" onClick={() => setGuildSettingsOpen(true)}>
-                    <Settings size={15} />
+                <div className="server-heading-menu-wrap" onBlur={event => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setServerMenuOpen(false);
+                }}>
+                  <button type="button" className="server-heading" aria-haspopup="menu" aria-expanded={serverMenuOpen} aria-label={`Server menu for ${selectedGuild?.name ?? "server"}`} onClick={() => setServerMenuOpen(open => !open)}>
+                    {guildBannerUrl(selectedGuild!) ? <><MoreHorizontal size={17} /><span className="server-heading-menu-label">Server menu</span></> : <><span>{selectedGuild?.name ?? "—"}</span><ChevronDown size={14} /></>}
                   </button>
+                  {serverMenuOpen && selectedGuild && (
+                    <div className="server-heading-menu" role="menu">
+                      <button type="button" role="menuitem" onClick={() => { setServerMenuOpen(false); setGuildSettingsOpen(true); }}>
+                        <Settings size={15} /><span>Server Settings</span>
+                      </button>
+                      <button type="button" role="menuitem" onClick={() => { setServerMenuOpen(false); void copyContextValue(selectedGuild.id, "Server ID"); }}>
+                        <Copy size={15} /><span>Copy Server ID</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {selectedGuild && !guildBannerUrl(selectedGuild) && (
+                  <button type="button" className="server-invite-button server-invite-button-inline" title="Create and copy server invite" aria-label="Create and copy server invite" onClick={() => void createServerInvite()}>
+                    <UserPlus size={15} />
+                  </button>
+                )}
+                {selectedGuild && (selectedGuild.premium_tier ?? 0) > 0 && (
+                  <span className="server-heading-boost" title={`Server Boost Level ${selectedGuild.premium_tier}`}><Sparkles size={14} /><span>Lvl {selectedGuild.premium_tier}</span></span>
                 )}
               </div>
 
