@@ -3328,7 +3328,14 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                             let _ = app2.emit("discord:thread_members_update", d);
                         }
                         "PRESENCE_UPDATE" => {
-                            let _ = app2.emit("discord:presence_update", d);
+                            let emit_started = std::time::Instant::now();
+                            log::debug!("[GW TRACE] Tauri emit START: discord:presence_update");
+                            let emit_result = app2.emit("discord:presence_update", d);
+                            log::debug!(
+                                "[GW TRACE] Tauri emit END: discord:presence_update elapsed={:?} result={:?}",
+                                emit_started.elapsed(),
+                                emit_result
+                            );
                         }
                         "VOICE_STATE_UPDATE" => {
                             let _ = app2.emit("discord:voice_state_update", d);
