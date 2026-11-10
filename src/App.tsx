@@ -3602,6 +3602,35 @@ export default function App() {
       }
     ).then(u => unsubs.push(u));
 
+    const refreshPollFromGateway = async (payload: { channel_id: string; message_id: string }) => {
+      if (!payload?.channel_id || !payload?.message_id || payload.channel_id !== selectedChannelRef.current?.id) return;
+      const cached = messageHistoryRef.current[payload.channel_id] || [];
+      if (!cached.some(message => message.id === payload.message_id && message.poll)) return;
+      try {
+        const updated = await invoke<DiscordMessage>("get_message", {
+          channelId: payload.channel_id,
+          messageId: payload.message_id,
+        });
+        if (!updated?.poll) return;
+        const history = messageHistoryRef.current[payload.channel_id] || [];
+        messageHistoryRef.current[payload.channel_id] = history.map(message => message.id === updated.id ? updated : message);
+        void writeCachedMessages(payload.channel_id, messageHistoryRef.current[payload.channel_id]);
+        if (selectedChannelRef.current?.id === payload.channel_id) {
+          setMessages(previous => previous.map(message => message.id === updated.id ? updated : message));
+        }
+      } catch (error) {
+        console.warn("Could not refresh poll results after a vote event", error);
+      }
+    };
+    listen<{ channel_id: string; message_id: string }>(
+      "discord:message_poll_vote_add",
+      ({ payload }) => { void refreshPollFromGateway(payload); },
+    ).then(u => unsubs.push(u));
+    listen<{ channel_id: string; message_id: string }>(
+      "discord:message_poll_vote_remove",
+      ({ payload }) => { void refreshPollFromGateway(payload); },
+    ).then(u => unsubs.push(u));
+
     listen<{ channel_id: string; message_id: string; message?: DiscordMessage }>(
       "discord:message_delete",
       ({ payload }) => {
