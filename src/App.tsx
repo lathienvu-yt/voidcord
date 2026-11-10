@@ -2108,7 +2108,7 @@ export default function App() {
             .catch(() => [])
             .then(commands => {
               // Cache empty/error results briefly too, so inaccessible apps are not hammered on every keystroke.
-              applicationCommandCacheRef.current.set({
+              applicationCommandCacheRef.current.set(key, {
                 expiresAt: Date.now() + (commands.length ? 5 * 60_000 : 60_000),
                 commands,
               });
