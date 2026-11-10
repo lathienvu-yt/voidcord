@@ -104,8 +104,9 @@ export default function GuildSettings({
         premium_progress_bar_enabled: draft.premium_progress_bar_enabled,
         banner: bannerData || undefined,
       };
-      const updated = await invoke<GuildSettingsData>("update_guild_settings", { guildId: guild.id, settings: payload });
-      const next = { ...data, ...updated, ...payload };
+      await invoke<GuildSettingsData>("update_guild_settings", { guildId: guild.id, settings: payload });
+      const refreshed = await invoke<GuildSettingsData>("get_guild_settings", { guildId: guild.id });
+      const next = { ...data, ...refreshed };
       setData(next);
       setDraft(makeDraft(next));
       setBannerData(null);
