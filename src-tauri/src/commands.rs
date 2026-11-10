@@ -718,18 +718,9 @@ fn is_snowflake(value: &str) -> bool {
 }
 
 fn is_message_request(channel: &Value) -> bool {
-    if channel.get("is_spam").and_then(Value::as_bool) == Some(true)
+    channel.get("is_message_request").and_then(Value::as_bool) == Some(true)
+        || channel.get("is_spam").and_then(Value::as_bool) == Some(true)
         || (channel.get("flags").and_then(Value::as_i64).unwrap_or(0) & (1 << 5)) != 0
-        || channel.get("consent_status").and_then(Value::as_i64) == Some(1)
-    {
-        return true;
-    }
-    match channel.get("is_message_request").and_then(Value::as_bool) {
-        Some(is_request) => is_request,
-        None => channel
-            .get("is_message_request_timestamp")
-            .is_some_and(|value| !value.is_null()),
-    }
 }
 
 fn merge_supplemental_message_requests(channels: &[Value], supplemental: &Value) -> Vec<Value> {
@@ -825,9 +816,12 @@ mod message_request_tests {
     }
 
     #[test]
-    fn pending_consent_status_identifies_a_request() {
-        assert!(is_message_request(&json!({ "consent_status": 1 })));
-        assert!(!is_message_request(&json!({ "consent_status": 2, "is_message_request": false })));
+    fn stale_timestamp_without_request_flag_is_not_enough() {
+        assert!(!is_message_request(&json!({
+            "is_message_request_timestamp": "2026-11-01T00:00:00Z",
+            "is_spam": false,
+            "flags": 0
+        })));
     }
     #[test]
     fn surrounding_message_query_selects_the_exact_target() {
