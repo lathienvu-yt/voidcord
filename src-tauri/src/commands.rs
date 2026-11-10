@@ -3402,6 +3402,21 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                                 .to_owned();
                             emit_gateway_event(&app2, "discord:message_update", json!({ "channel_id": channel_id, "message": d }),);
                         }
+                        "MESSAGE_POLL_VOTE_ADD" | "MESSAGE_POLL_VOTE_REMOVE" => {
+                            let channel_id = d.get("channel_id").and_then(Value::as_str).unwrap_or("").to_owned();
+                            let message_id = d.get("message_id").and_then(Value::as_str).unwrap_or("").to_owned();
+                            let event_name = if t == "MESSAGE_POLL_VOTE_ADD" {
+                                "discord:message_poll_vote_add"
+                            } else {
+                                "discord:message_poll_vote_remove"
+                            };
+                            emit_gateway_event(&app2, event_name, json!({
+                                "channel_id": channel_id,
+                                "message_id": message_id,
+                                "answer_id": d.get("answer_id").cloned().unwrap_or(Value::Null),
+                                "user_id": d.get("user_id").cloned().unwrap_or(Value::Null)
+                            }));
+                        }
                         "MESSAGE_DELETE" => {
                             let channel_id = d
                                 .get("channel_id")
