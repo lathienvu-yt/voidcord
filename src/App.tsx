@@ -1756,6 +1756,7 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const [quickSwitcherQuery, setQuickSwitcherQuery] = useState("");
+  const [quickSwitcherActiveIndex, setQuickSwitcherActiveIndex] = useState(0);
   const quickSwitcherInputRef = useRef<HTMLInputElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTheme, setSettingsTheme] = useState<"dark" | "light">("dark");
@@ -2756,10 +2757,9 @@ export default function App() {
   useEffect(() => {
     const handleQuickSwitcherShortcut = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k" || event.repeat) return;
-      const target = event.target;
-      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
       event.preventDefault();
       setQuickSwitcherQuery("");
+      setQuickSwitcherActiveIndex(0);
       setQuickSwitcherOpen(true);
     };
     window.addEventListener("keydown", handleQuickSwitcherShortcut);
@@ -8123,17 +8123,17 @@ export default function App() {
       {quickSwitcherOpen && (
         <div className="quick-switcher-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setQuickSwitcherOpen(false); }}>
           <section className="quick-switcher-window" role="dialog" aria-modal="true" aria-label="Quick switcher">
-            <label className="quick-switcher-search"><Search size={19} /><input ref={quickSwitcherInputRef} value={quickSwitcherQuery} onChange={event => setQuickSwitcherQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") setQuickSwitcherOpen(false); if (event.key === "Enter" && quickSwitchResults[0]) { const item = quickSwitchResults[0]; setQuickSwitcherOpen(false); if (item.kind === "server" && item.guild) { setIsDmView(false); void selectGuild(item.guild); } else if (item.channel) { setIsDmView(item.kind === "dm"); void selectChannel(item.channel); } } }} placeholder="Jump to a server, channel, or DM…" /></label>
+            <label className="quick-switcher-search"><Search size={19} /><input ref={quickSwitcherInputRef} value={quickSwitcherQuery} onChange={event => { setQuickSwitcherQuery(event.target.value); setQuickSwitcherActiveIndex(0); }} onKeyDown={event => { if (event.key === "Escape") { setQuickSwitcherOpen(false); return; } if (event.key === "ArrowDown") { event.preventDefault(); setQuickSwitcherActiveIndex(index => Math.min(index + 1, Math.max(0, quickSwitchResults.length - 1))); } else if (event.key === "ArrowUp") { event.preventDefault(); setQuickSwitcherActiveIndex(index => Math.max(0, index - 1)); } else if (event.key === "Enter" && quickSwitchResults[quickSwitcherActiveIndex]) { const item = quickSwitchResults[quickSwitcherActiveIndex]; setQuickSwitcherOpen(false); if (item.kind === "server" && item.guild) { setIsDmView(false); void selectGuild(item.guild); } else if (item.channel) { setIsDmView(item.kind === "dm"); void selectChannel(item.channel); } } }} placeholder="Jump to a server, channel, or DM…" /></label>
             <div className="quick-switcher-results">
-              {quickSwitchResults.map(item => (
-                <button type="button" className="quick-switcher-result" key={item.id} onClick={() => { setQuickSwitcherOpen(false); if (item.kind === "server" && item.guild) { setIsDmView(false); void selectGuild(item.guild); } else if (item.channel) { setIsDmView(item.kind === "dm"); void selectChannel(item.channel); } }}>
+              {quickSwitchResults.map((item, index) => (
+                <button type="button" className={`quick-switcher-result ${quickSwitcherActiveIndex === index ? "active" : ""}`} key={item.id} onMouseEnter={() => setQuickSwitcherActiveIndex(index)} onClick={() => { setQuickSwitcherOpen(false); if (item.kind === "server" && item.guild) { setIsDmView(false); void selectGuild(item.guild); } else if (item.channel) { setIsDmView(item.kind === "dm"); void selectChannel(item.channel); } }}>
                   <span className={`quick-switcher-kind quick-switcher-kind-${item.kind}`}>{item.kind === "server" ? "S" : item.kind === "dm" ? "@" : "#"}</span>
                   <span><strong>{item.title}</strong><small>{item.subtitle}</small></span>
                 </button>
               ))}
               {quickSwitchResults.length === 0 && <p className="quick-switcher-empty">No matching servers, channels, or DMs.</p>}
             </div>
-            <footer><kbd>↑</kbd><kbd>↓</kbd> Navigate <kbd>Enter</kbd> Open <kbd>Esc</kbd> Close</footer>
+            <footer><kbd>↑</kbd><kbd>↓</kbd> Navigate <kbd>Enter</kbd> Open <kbd>Esc</kbd> Close · Ctrl+K to open</footer>
           </section>
         </div>
       )}
