@@ -4368,8 +4368,7 @@ export default function App() {
     const requests = response.filter(channel =>
       channel.is_message_request === true ||
       channel.is_spam === true ||
-      ((channel.flags || 0) & (1 << 5)) !== 0 ||
-      (channel.is_message_request == null && !!channel.is_message_request_timestamp)
+      ((channel.flags || 0) & (1 << 5)) !== 0
     );
     setMessageRequests(requests);
     setMessageRequestsError("");
