@@ -3216,6 +3216,46 @@ export default function App() {
     })();
   }, [me?.id, online, accountSessionVersion, savedAccounts]);
 
+  // Keep gateway subscriptions mounted once; callbacks read the latest render state.
+  const gatewayListenerStateRef = useRef({
+    selectedChannel,
+    scrollToBottom,
+    me,
+    dmChannels,
+    channels,
+    guildRoles,
+    selectedGuild,
+    guilds,
+    isDmView,
+    activeDmTab,
+    archiveMessageMedia,
+    messageLoggerOpen,
+    messageLoggerMode,
+    deletedChannelViewerOpen,
+    notify,
+    notifySystem,
+    connectVoiceFromGateway,
+  });
+  gatewayListenerStateRef.current = {
+    selectedChannel,
+    scrollToBottom,
+    me,
+    dmChannels,
+    channels,
+    guildRoles,
+    selectedGuild,
+    guilds,
+    isDmView,
+    activeDmTab,
+    archiveMessageMedia,
+    messageLoggerOpen,
+    messageLoggerMode,
+    deletedChannelViewerOpen,
+    notify,
+    notifySystem,
+    connectVoiceFromGateway,
+  };
+
   useEffect(() => {
     let subscriptionsDisposed = false;
     const unsubs = {
@@ -3247,8 +3287,8 @@ export default function App() {
       "discord:gateway_status",
       ({ payload }) => {
         setGatewayStatus(navigator.onLine ? payload.status : "offline");
-        if (payload.status === "connected") notifySystem("Connected to Discord");
-        else if (payload.status === "reconnecting") notifySystem("Reconnecting to Discord");
+        if (payload.status === "connected") gatewayListenerStateRef.current.notifySystem("Connected to Discord");
+        else if (payload.status === "reconnecting") gatewayListenerStateRef.current.notifySystem("Reconnecting to Discord");
       },
     ).then(unsub => unsubs.push(unsub));
 
@@ -3268,13 +3308,13 @@ export default function App() {
       const eventGuildId = payload?.guild_id == null ? null : String(payload.guild_id);
       if (
         !handshake
-        || payload?.user_id !== me?.id
+        || payload?.user_id !== gatewayListenerStateRef.current.me?.id
         || eventGuildId !== handshake.guildId
         || String(payload?.channel_id || "") !== handshake.channelId
       ) return;
       if (typeof payload.session_id === "string" && payload.session_id) {
         handshake.sessionId = payload.session_id;
-        void connectVoiceFromGateway();
+        void gatewayListenerStateRef.current.connectVoiceFromGateway();
       }
     }).then(unsub => unsubs.push(unsub));
 
@@ -3295,7 +3335,7 @@ export default function App() {
       ) {
         handshake.endpoint = payload.endpoint;
         handshake.token = payload.token;
-        void connectVoiceFromGateway();
+        void gatewayListenerStateRef.current.connectVoiceFromGateway();
       }
     }).then(unsub => unsubs.push(unsub));
 
@@ -3304,7 +3344,7 @@ export default function App() {
       if (!channelId) return;
       setPrivateVoiceCalls(previous => new Set(previous).add(channelId));
       const ringingIds = Array.isArray(payload?.ringing) ? payload.ringing.map((entry: any) => typeof entry === "string" ? entry : String(entry?.id || entry?.user_id || "")) : [];
-      if (me?.id && ringingIds.includes(me.id)) setIncomingCallChannels(previous => ({ ...previous, [channelId]: payload }));
+      if (gatewayListenerStateRef.current.me?.id && ringingIds.includes(gatewayListenerStateRef.current.me.id)) setIncomingCallChannels(previous => ({ ...previous, [channelId]: payload }));
       if (Array.isArray(payload.voice_states)) {
         setGatewayVoiceStates(previous => {
           const states = (payload.voice_states as GatewayVoiceState[])
@@ -3361,7 +3401,7 @@ export default function App() {
         if (payload.status === "disconnected" && voiceHandshakeRef.current) return;
         setVoiceStatus(payload.status);
         if (payload.message) setVoiceStatusMessage(payload.message);
-        if (payload.status === "failed" && payload.message) notify(payload.message);
+        if (payload.status === "failed" && payload.message) gatewayListenerStateRef.current.notify(payload.message);
       },
     ).then(unsub => unsubs.push(unsub));
 
@@ -3375,15 +3415,15 @@ export default function App() {
           );
           messageHistoryRef.current[payload.channel_id] = updatedHistory;
           void writeCachedMessages(payload.channel_id, [payload.message])
-            .catch(error => notify(`Could not cache message: ${error}`));
-          void archiveMessageMedia(payload.message);
+            .catch(error => gatewayListenerStateRef.current.notify(`Could not cache message: ${error}`));
+          void gatewayListenerStateRef.current.archiveMessageMedia(payload.message);
         }
-        if (payload.message?.author?.id === me?.id) {
+        if (payload.message?.author?.id === gatewayListenerStateRef.current.me?.id) {
           setRecentlyMessaged(order => [payload.channel_id, ...order.filter(id => id !== payload.channel_id)]);
-        } else if (payload.channel_id !== selectedChannel?.id || (isDmView && activeDmTab !== "chat")) {
+        } else if (payload.channel_id !== gatewayListenerStateRef.current.selectedChannel?.id || (gatewayListenerStateRef.current.isDmView && gatewayListenerStateRef.current.activeDmTab !== "chat")) {
           const incomingMessage = payload.message as DiscordMessage & { mentions?: DiscordUser[] };
-          const isDirectPing = Array.isArray(incomingMessage.mentions) && incomingMessage.mentions.some(user => user.id === me?.id);
-          const isReplyToMe = incomingMessage.referenced_message?.author?.id === me?.id;
+          const isDirectPing = Array.isArray(incomingMessage.mentions) && incomingMessage.mentions.some(user => user.id === gatewayListenerStateRef.current.me?.id);
+          const isReplyToMe = incomingMessage.referenced_message?.author?.id === gatewayListenerStateRef.current.me?.id;
           if (isDirectPing || isReplyToMe) {
             setUnreadByChannel(previous => {
               const next = { ...previous, [payload.channel_id]: (previous[payload.channel_id] || 0) + 1 };
@@ -3401,12 +3441,12 @@ export default function App() {
           return [targetDm, ...filtered];
         });
 
-        if (payload.channel_id === selectedChannel?.id) {
+        if (payload.channel_id === gatewayListenerStateRef.current.selectedChannel?.id) {
           setMessages(prev => {
             if (prev.some(message => message.id === payload.message.id)) return prev;
             return [...prev, payload.message];
           });
-          if (payload.message?.author?.id === me?.id) scrollToBottom();
+          if (payload.message?.author?.id === gatewayListenerStateRef.current.me?.id) gatewayListenerStateRef.current.scrollToBottom();
         }
       }
     ).then(u => unsubs.push(u));
@@ -3429,8 +3469,8 @@ export default function App() {
           if (previous && changed) {
             const editedAt = payload.message.edited_timestamp ? new Date(payload.message.edited_timestamp).getTime() : Date.now();
             const id = `${payload.message.id}:${editedAt}:${Math.random().toString(36).slice(2, 8)}`;
-            const channel = dmChannels.find(item => item.id === payload.channel_id)
-              || channels.find(item => item.id === payload.channel_id)
+            const channel = gatewayListenerStateRef.current.dmChannels.find(item => item.id === payload.channel_id)
+              || gatewayListenerStateRef.current.channels.find(item => item.id === payload.channel_id)
               || (selectedChannelRef.current?.id === payload.channel_id ? selectedChannelRef.current : undefined);
             const entry: EditedMessageLog = {
               id,
@@ -3441,11 +3481,11 @@ export default function App() {
               message: previous,
             };
             try {
-              await archiveMessageMedia({ ...previous, id });
+              await gatewayListenerStateRef.current.archiveMessageMedia({ ...previous, id });
               await writeEditedMessage(entry);
-              if (messageLoggerOpen && messageLoggerMode === "edited") setEditedLogs(logs => [entry, ...logs.filter(item => item.id !== entry.id)]);
+              if (gatewayListenerStateRef.current.messageLoggerOpen && gatewayListenerStateRef.current.messageLoggerMode === "edited") setEditedLogs(logs => [entry, ...logs.filter(item => item.id !== entry.id)]);
             } catch (error) {
-              notify(`Could not save edited message history: ${error}`);
+              gatewayListenerStateRef.current.notify(`Could not save edited message history: ${error}`);
             }
           }
 
@@ -3457,8 +3497,8 @@ export default function App() {
             ? existing.map(message => message.id === payload.message.id ? nextMessage : message)
             : [...existing, nextMessage].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
           void writeCachedMessages(payload.channel_id, [nextMessage])
-            .catch(error => notify(`Could not cache edited message: ${error}`));
-          void archiveMessageMedia(nextMessage);
+            .catch(error => gatewayListenerStateRef.current.notify(`Could not cache edited message: ${error}`));
+          void gatewayListenerStateRef.current.archiveMessageMedia(nextMessage);
           if (payload.channel_id === selectedChannelRef.current?.id) {
             setMessages(prev => prev.map(message => message.id === payload.message.id ? nextMessage : message));
           }
@@ -3470,7 +3510,7 @@ export default function App() {
       "discord:message_delete",
       ({ payload }) => {
         const deletedAt = Date.now();
-        if (payload.channel_id === selectedChannel?.id) {
+        if (payload.channel_id === gatewayListenerStateRef.current.selectedChannel?.id) {
           setMessages(previous => previous.map(message =>
             message.id === payload.message_id ? { ...message, deleted_at: message.deleted_at || deletedAt } : message
           ));
@@ -3490,10 +3530,10 @@ export default function App() {
           if (deleted) {
             deleted = { ...deleted, deleted_at: deleted.deleted_at || deletedAt };
             if (archivePromise) await archivePromise;
-            else await archiveMessageMedia(deleted);
-            const channel = dmChannels.find(item => item.id === payload.channel_id)
-              || channels.find(item => item.id === payload.channel_id)
-              || (selectedChannel?.id === payload.channel_id ? selectedChannel : undefined);
+            else await gatewayListenerStateRef.current.archiveMessageMedia(deleted);
+            const channel = gatewayListenerStateRef.current.dmChannels.find(item => item.id === payload.channel_id)
+              || gatewayListenerStateRef.current.channels.find(item => item.id === payload.channel_id)
+              || (gatewayListenerStateRef.current.selectedChannel?.id === payload.channel_id ? gatewayListenerStateRef.current.selectedChannel : undefined);
             const entry: DeletedMessageLog = {
               id: deleted.id,
               channelId: payload.channel_id,
@@ -3503,16 +3543,16 @@ export default function App() {
             };
             try {
               await writeDeletedMessage(entry);
-              if (messageLoggerOpen) setDeletedLogs(previous => [entry, ...previous.filter(item => item.id !== entry.id)]);
+              if (gatewayListenerStateRef.current.messageLoggerOpen) setDeletedLogs(previous => [entry, ...previous.filter(item => item.id !== entry.id)]);
             } catch (error) {
-              notify(`Could not save deleted message to the local log: ${error}`);
+              gatewayListenerStateRef.current.notify(`Could not save deleted message to the local log: ${error}`);
             }
             const history = messageHistoryRef.current[payload.channel_id] || [];
             const inHistory = history.some(message => message.id === payload.message_id);
             messageHistoryRef.current[payload.channel_id] = inHistory
               ? history.map(message => message.id === payload.message_id ? deleted! : message)
               : [...history, deleted].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-            if (payload.channel_id === selectedChannel?.id) {
+            if (payload.channel_id === gatewayListenerStateRef.current.selectedChannel?.id) {
               setMessages(previous => {
                 const found = previous.some(message => message.id === payload.message_id);
                 return found
@@ -3521,7 +3561,7 @@ export default function App() {
               });
             }
             await markCachedMessageDeleted(payload.channel_id, payload.message_id, deletedAt, deleted)
-              .catch(error => notify(`Could not mark deleted message in local cache: ${error}`));
+              .catch(error => gatewayListenerStateRef.current.notify(`Could not mark deleted message in local cache: ${error}`));
           } else {
             console.info(`Deleted message ${payload.message_id} was not in local cache; content unavailable to log`);
           }
@@ -3532,7 +3572,7 @@ export default function App() {
     listen<{ channel_id: string; user_id: string }>(
       "discord:typing_start",
       ({ payload }) => {
-        if (payload.channel_id !== selectedChannel?.id) return;
+        if (payload.channel_id !== gatewayListenerStateRef.current.selectedChannel?.id) return;
         setTypingUsers(s => { const n = new Set(s); n.add(payload.user_id); return n; });
         setTimeout(() => {
           setTypingUsers(s => { const n = new Set(s); n.delete(payload.user_id); return n; });
@@ -3542,8 +3582,8 @@ export default function App() {
 
     listen<DiscordChannel>("discord:channel_delete", ({ payload }) => {
       if (!payload?.id) return;
-      const guild = guilds.find(item => item.id === payload.guild_id)
-        || (selectedGuild?.id === payload.guild_id ? selectedGuild : undefined);
+      const guild = gatewayListenerStateRef.current.guilds.find(item => item.id === payload.guild_id)
+        || (gatewayListenerStateRef.current.selectedGuild?.id === payload.guild_id ? gatewayListenerStateRef.current.selectedGuild : undefined);
       const entry: DeletedChannelLog = {
         id: payload.id,
         deletedAt: Date.now(),
@@ -3553,11 +3593,11 @@ export default function App() {
       };
       void writeDeletedChannel(entry)
         .then(() => {
-          if (deletedChannelViewerOpen) {
+          if (gatewayListenerStateRef.current.deletedChannelViewerOpen) {
             setDeletedChannelLogs(previous => [entry, ...previous.filter(item => item.id !== entry.id)]);
           }
         })
-        .catch(error => notify(`Could not save deleted channel metadata: ${error}`));
+        .catch(error => gatewayListenerStateRef.current.notify(`Could not save deleted channel metadata: ${error}`));
       setChannels(previous => previous.filter(channel => channel.id !== payload.id));
     }).then(u => unsubs.push(u));
 
@@ -3585,7 +3625,7 @@ export default function App() {
         return next;
       });
 
-      const ownPresence = updates.find((presence: any) => presence.user.id === me?.id);
+      const ownPresence = updates.find((presence: any) => presence.user.id === gatewayListenerStateRef.current.me?.id);
       if (ownPresence) {
         const customStatus = ownPresence.activities?.find((activity: any) => activity.type === 4)?.state || "";
         setSelfPresence({ status: ownPresence.status, customStatus });
@@ -3600,7 +3640,7 @@ export default function App() {
       if (payload && typeof payload === "object") setInteractionModal(payload);
     }).then(unsub => unsubs.push(unsub));
     listen<any>("discord:interaction_iframe_modal_create", () => {
-      notify("This interaction uses an embedded iframe modal, which VoidCord does not support yet.");
+      gatewayListenerStateRef.current.notify("This interaction uses an embedded iframe modal, which VoidCord does not support yet.");
     }).then(unsub => unsubs.push(unsub));
 
     listen<any>("discord:gateway_ready", ({ payload }) => {
@@ -3610,11 +3650,11 @@ export default function App() {
       }
       const guild = selectedGuildRef.current;
       if (!guild) return;
-      const channelIds = channels
+      const channelIds = gatewayListenerStateRef.current.channels
         .filter(channel => isTextChannel(channel) && getChannelPermissions(
           channel,
           guild.id,
-          me?.id || "",
+          gatewayListenerStateRef.current.me?.id || "",
           currentGuildMemberRolesRef.current,
           guildRoleDataRef.current,
           !!guild.owner
@@ -3648,8 +3688,8 @@ export default function App() {
       guildMembersRef.current = merged;
       setGuildMembers(merged);
       pendingGuildDataRef.current.set(guildId, {
-        channels,
-        roles: guildRoles,
+        gatewayListenerStateRef.current.channels,
+        roles: gatewayListenerStateRef.current.guildRoles,
         memberRoles: currentGuildMemberRolesRef.current,
         guildMembers: merged,
       });
@@ -3732,7 +3772,7 @@ export default function App() {
       unsubs.forEach(unsubscribe => unsubscribe());
       unsubs.registered.length = 0;
     };
-  }, [selectedChannel?.id, scrollToBottom, me?.id, dmChannels, channels, guildRoles, selectedChannel, selectedGuild, guilds, isDmView, activeDmTab, archiveMessageMedia, messageLoggerOpen, messageLoggerMode, deletedChannelViewerOpen, notify, notifySystem, connectVoiceFromGateway]);
+  }, []);
 
   const selectGuild = async (guild: DiscordGuild, preferredChannelId?: string) => {
     if (!guild?.id || typeof guild.name !== "string") {
