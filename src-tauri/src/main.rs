@@ -120,17 +120,21 @@ fn run_console_log_writer(receiver: Receiver<String>, log_path: PathBuf) {
             }
         }
 
-        if let Some(file) = file.as_mut() {
+        let mut write_failed = false;
+        if let Some(writer) = file.as_mut() {
             for line in &batch {
-                if let Err(error) = writeln!(file, "{line}") {
+                if let Err(error) = writeln!(writer, "{line}") {
                     eprintln!("[LOG] Failed writing backend log: {error}");
-                    file.take();
+                    write_failed = true;
                     break;
                 }
             }
-            if let Some(file) = file.as_mut() {
-                let _ = file.flush();
+            if !write_failed {
+                let _ = writer.flush();
             }
+        }
+        if write_failed {
+            file.take();
         }
 
         gpui_console::append_logs(&batch);
