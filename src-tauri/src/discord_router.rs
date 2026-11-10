@@ -1829,12 +1829,21 @@ impl DiscordRouter {
                                 }
                             }
 
-                            log::debug!("GATEWAY dispatching event {event_name} to frontend callback");
+                            let event_name = event_name.to_owned();
+                            log::debug!("GATEWAY callback scheduled: {event_name}");
                             // Spawn the callback so it never blocks the gateway select loop.
-                            // If on_event does heavy work (JSON emit, logging) the heartbeat
-                            // and pong handling remain unaffected.
+                            // Trace scheduling, actual execution, and callback duration separately.
                             let on_event = std::sync::Arc::clone(&on_event);
-                            tokio::spawn(async move { on_event(event); });
+                            let callback_event_name = event_name.clone();
+                            tokio::spawn(async move {
+                                let callback_started = std::time::Instant::now();
+                                log::debug!("GATEWAY callback started: {callback_event_name}");
+                                on_event(event);
+                                log::debug!(
+                                    "GATEWAY callback finished: {callback_event_name} elapsed={:?}",
+                                    callback_started.elapsed()
+                                );
+                            });
                         }
                         WsMessage::Ping(payload) => {
                             log::debug!("GATEWAY WebSocket ping received ({} bytes)", payload.len());
