@@ -1073,6 +1073,98 @@ pub async fn send_message(
         .map_err(map_err)
 }
 
+/// Create a native Discord poll message.
+#[tauri::command]
+pub async fn create_poll(
+    channel_id: String,
+    question: String,
+    answers: Vec<String>,
+    duration: u64,
+    allow_multiselect: bool,
+    as_token: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let valid_id = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    if !valid_id(&channel_id) {
+        return Err("A valid channel ID is required".to_owned());
+    }
+    let question = question.trim();
+    if question.is_empty() || question.chars().count() > 300 {
+        return Err("Poll questions must contain 1–300 characters".to_owned());
+    }
+    if !(2..=10).contains(&answers.len()) {
+        return Err("Polls need between 2 and 10 answers".to_owned());
+    }
+    let answers = answers.into_iter().map(|answer| answer.trim().to_owned()).collect::<Vec<_>>();
+    if answers.iter().any(|answer| answer.is_empty() || answer.chars().count() > 55) {
+        return Err("Each poll answer must contain 1–55 characters".to_owned());
+    }
+    if ![1, 4, 8, 24, 72, 168].contains(&duration) {
+        return Err("Choose a supported poll duration".to_owned());
+    }
+    if let Some(token) = as_token.as_deref() {
+        ensure_credential_available(&state, token).await?;
+    }
+    let payload = json!({
+        "poll": {
+            "question": { "text": question },
+            "answers": answers.into_iter().map(|answer| json!({ "poll_media": { "text": answer } })).collect::<Vec<_>>(),
+            "duration": duration,
+            "allow_multiselect": allow_multiselect,
+            "layout_type": 1
+        }
+    });
+    state.router.rest_with_auth(
+        as_token.as_deref(),
+        AccountIdentity::Primary,
+        Method::POST,
+        &format!("channels/{channel_id}/messages"),
+        Some(payload),
+    ).await.map_err(map_err)
+}
+
+/// Submit the current user's selected answers for a poll.
+#[tauri::command]
+pub async fn vote_poll(
+    channel_id: String,
+    message_id: String,
+    answer_ids: Vec<u64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let valid_id = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    if !valid_id(&channel_id) || !valid_id(&message_id) {
+        return Err("Channel and message IDs must be numeric Discord IDs".to_owned());
+    }
+    if answer_ids.len() > 10 {
+        return Err("Too many poll answers selected".to_owned());
+    }
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::PUT,
+        &format!("channels/{channel_id}/polls/{message_id}/answers/@me"),
+        Some(json!({ "answer_ids": answer_ids })),
+    ).await.map(|_| ()).map_err(map_err)
+}
+
+/// End a poll created by the current user.
+#[tauri::command]
+pub async fn end_poll(
+    channel_id: String,
+    message_id: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let valid_id = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    if !valid_id(&channel_id) || !valid_id(&message_id) {
+        return Err("Channel and message IDs must be numeric Discord IDs".to_owned());
+    }
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::POST,
+        &format!("channels/{channel_id}/polls/{message_id}/expire"),
+        None,
+    ).await.map_err(map_err)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AttachmentSelection {
