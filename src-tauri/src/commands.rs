@@ -735,9 +735,6 @@ fn merge_supplemental_message_requests(channels: &[Value], supplemental: &Value)
     let channels_by_id = channels
         .iter()
         .filter_map(|channel| {
-            if !is_message_request(channel) {
-                return None;
-            }
             Some((channel.get("id")?.as_str()?.to_owned(), channel))
         })
         .collect::<std::collections::HashMap<_, _>>();
@@ -806,9 +803,12 @@ mod message_request_tests {
     }
 
     #[test]
-    fn supplemental_preview_only_includes_flagged_message_requests() {
+    fn supplemental_endpoint_membership_identifies_requests() {
+        // The supplemental-data endpoint is specifically scoped to message requests.
+        // The channel list can omit or stale the request marker, so membership in
+        // this response is the authoritative discriminator; do not pre-filter DMs.
         let channels = vec![
-            json!({ "id": "123", "type": 1, "is_message_request": true, "flags": 0 }),
+            json!({ "id": "123", "type": 1, "is_message_request": false, "flags": 0 }),
             json!({ "id": "456", "type": 1, "is_message_request": false, "flags": 0 }),
         ];
         let supplemental = json!([{
@@ -822,7 +822,6 @@ mod message_request_tests {
         assert_eq!(requests[0]["message_preview"]["content"], "Hello");
         assert!(is_message_request(&requests[0]));
     }
-
     #[test]
     fn surrounding_message_query_selects_the_exact_target() {
         let messages = json!([
@@ -2506,10 +2505,7 @@ pub async fn get_message_requests(state: State<'_, AppState>) -> Result<Value, S
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|channel| {
-            channel.get("type").and_then(Value::as_i64) == Some(1)
-                && is_message_request(channel)
-        })
+        .filter(|channel| channel.get("type").and_then(Value::as_i64) == Some(1))
         .cloned()
         .collect::<Vec<_>>();
     let mut requests = Vec::new();
