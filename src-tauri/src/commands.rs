@@ -3380,7 +3380,14 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                                 "discord:gateway_status",
                                 json!({ "status": "connected" }),
                             );
-                            emit_gateway("discord:gateway_ready", d);
+                            // The frontend only consumes session_id and presences from READY.
+                            // Keep the full payload in the Rust gateway path; send only the
+                            // required fields across the Tauri/WebView boundary.
+                            let ready_payload = json!({
+                                "session_id": d.get("session_id").cloned(),
+                                "presences": d.get("presences").cloned().unwrap_or_else(|| json!([])),
+                            });
+                            emit_gateway("discord:gateway_ready", ready_payload);
                             let presence_app = app2.clone();
                             tauri::async_runtime::spawn(async move {
                                 let state = presence_app.state::<AppState>();
