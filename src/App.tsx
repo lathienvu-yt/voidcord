@@ -7,7 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { load } from "@tauri-apps/plugin-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
+  AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History, LogOut,
   Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
   Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Star, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut
@@ -1788,6 +1788,10 @@ export default function App() {
   const [serverDialogOpen, setServerDialogOpen] = useState(false);
   const [guildSettingsOpen, setGuildSettingsOpen] = useState(false);
   const [serverMenuOpen, setServerMenuOpen] = useState(false);
+  const [leaveServerConfirmOpen, setLeaveServerConfirmOpen] = useState(false);
+  const [leaveServerBusy, setLeaveServerBusy] = useState(false);
+  const [leaveServerError, setLeaveServerError] = useState("");
+  const [settingsMenuInitialTab, setSettingsMenuInitialTab] = useState<"appearance" | "privacy" | "notifications">("appearance");
   const [serverDialogMode, setServerDialogMode] = useState<"join" | "create">("join");
   const [serverInvite, setServerInvite] = useState("");
   const [newServerName, setNewServerName] = useState("");
@@ -2477,6 +2481,40 @@ export default function App() {
     } catch (error) {
       notify(`Could not create or copy server invite: ${error}`);
     }
+  };
+
+  const leaveSelectedGuild = async () => {
+    if (!selectedGuild || leaveServerBusy) return;
+    const guildId = selectedGuild.id;
+    setLeaveServerBusy(true);
+    setLeaveServerError("");
+    try {
+      await invoke("leave_guild", { guildId });
+      setLeaveServerConfirmOpen(false);
+      setServerMenuOpen(false);
+      setGuildSettingsOpen(false);
+      setGuilds(current => current.filter(guild => guild.id !== guildId));
+      ++guildLoadRequest.current;
+      ++channelLoadRequest.current;
+      setIsDmView(true);
+      setSelectedGuild(null);
+      selectedGuildRef.current = null;
+      setChannels([]);
+      setSelectedChannel(null);
+      selectedChannelRef.current = null;
+      setMessages([]);
+      setLeaveServerBusy(false);
+    } catch (error) {
+      setLeaveServerError(String(error).replace(/^Error: /, ""));
+      setLeaveServerBusy(false);
+    }
+  };
+
+  const openUserSettingsTab = (tab: "privacy" | "notifications") => {
+    setServerMenuOpen(false);
+    setSettingsMenuInitialTab(tab);
+    setSettingsTab("discord");
+    setSettingsOpen(true);
   };
 
   const submitServerAction = async (event: React.FormEvent) => {
@@ -6022,8 +6060,22 @@ export default function App() {
                       <button type="button" role="menuitem" onClick={() => { setServerMenuOpen(false); setGuildSettingsOpen(true); }}>
                         <Settings size={15} /><span>Server Settings</span>
                       </button>
+                      <button type="button" role="menuitem" onClick={() => { setServerMenuOpen(false); void createServerInvite(); }}>
+                        <UserPlus size={15} /><span>Invite People</span>
+                      </button>
                       <button type="button" role="menuitem" onClick={() => { setServerMenuOpen(false); void copyContextValue(selectedGuild.id, "Server ID"); }}>
                         <Copy size={15} /><span>Copy Server ID</span>
+                      </button>
+                      <div className="server-heading-menu-divider" role="separator" />
+                      <button type="button" role="menuitem" onClick={() => openUserSettingsTab("privacy")}>
+                        <ShieldCheck size={15} /><span>Privacy & Safety</span>
+                      </button>
+                      <button type="button" role="menuitem" onClick={() => openUserSettingsTab("notifications")}>
+                        <Bell size={15} /><span>Notification Settings</span>
+                      </button>
+                      <div className="server-heading-menu-divider" role="separator" />
+                      <button type="button" role="menuitem" className="danger" onClick={() => { setServerMenuOpen(false); setLeaveServerError(""); setLeaveServerConfirmOpen(true); }}>
+                        <LogOut size={15} /><span>Leave Server</span>
                       </button>
                     </div>
                   )}
@@ -8076,17 +8128,25 @@ export default function App() {
           canManageGuild={hasGuildPermission(5, selectedGuild.id, currentGuildMemberRolesRef.current, guildRoleDataRef.current, !!selectedGuild.owner)}
           invoke={invoke}
           onClose={() => setGuildSettingsOpen(false)}
-          onLeave={() => {
-            setGuildSettingsOpen(false);
-            setGuilds(current => current.filter(guild => guild.id !== selectedGuild.id));
-            setIsDmView(true);
-            setSelectedGuild(null);
-            selectedGuildRef.current = null;
-            setChannels([]);
-            setSelectedChannel(null);
-            setMessages([]);
-          }}
         />
+      )}
+
+      {leaveServerConfirmOpen && selectedGuild && (
+        <div className="feature-modal-backdrop server-leave-backdrop" onMouseDown={event => {
+          if (event.target === event.currentTarget && !leaveServerBusy) setLeaveServerConfirmOpen(false);
+        }}>
+          <section className="feature-modal server-leave-modal" role="alertdialog" aria-modal="true" aria-labelledby="leave-server-title">
+            <button type="button" className="feature-modal-close" aria-label="Close" disabled={leaveServerBusy} onClick={() => setLeaveServerConfirmOpen(false)}>×</button>
+            <div className="server-leave-icon"><AlertTriangle size={22} /></div>
+            <h2 id="leave-server-title">Leave {selectedGuild.name}?</h2>
+            <p>You will need a new invite to rejoin this server. This does not delete the server.</p>
+            {leaveServerError && <div className="guild-settings-error" role="alert">{leaveServerError}</div>}
+            <div className="server-leave-actions">
+              <button type="button" disabled={leaveServerBusy} onClick={() => setLeaveServerConfirmOpen(false)}>Cancel</button>
+              <button type="button" className="danger" disabled={leaveServerBusy} onClick={() => void leaveSelectedGuild()}>{leaveServerBusy ? "Leaving…" : "Leave Server"}</button>
+            </div>
+          </section>
+        </div>
       )}
 
       {serverDialogOpen && (
@@ -8158,6 +8218,7 @@ export default function App() {
             {settingsTab === "discord" ? (
               <SettingsMenu
                 embedded
+                initialTab={settingsMenuInitialTab}
                 onClose={() => setSettingsOpen(false)}
                 onOpenClientSettings={() => setSettingsTab("account")}
                 onThemeChange={setSettingsTheme}
