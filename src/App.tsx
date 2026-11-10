@@ -1753,6 +1753,10 @@ export default function App() {
   const [gifQuery, setGifQuery] = useState("");
   const [gifUrl, setGifUrl] = useState("");
   const [memberOpen, setMemberOpen] = useState(true);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+  const [quickSwitcherQuery, setQuickSwitcherQuery] = useState("");
+  const quickSwitcherInputRef = useRef<HTMLInputElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTheme, setSettingsTheme] = useState<"dark" | "light">("dark");
   const [settingsTab, setSettingsTab] = useState<"account" | "themes" | "notifications" | "plugins" | "discord">("discord");
@@ -1811,6 +1815,15 @@ export default function App() {
   const voiceHandshakeRef = useRef<VoiceHandshake | null>(null);
   const voiceAttemptRef = useRef(0);
   const [query, setQuery] = useState("");
+  const quickSwitchResults = useMemo(() => {
+    const term = quickSwitcherQuery.trim().toLowerCase();
+    const results: Array<{ id: string; kind: "server" | "channel" | "dm"; title: string; subtitle: string; guild?: DiscordGuild; channel?: DiscordChannel }> = [];
+    for (const guild of guilds) results.push({ id: `guild:${guild.id}`, kind: "server", title: guild.name, subtitle: "Server", guild });
+    for (const channel of channels) results.push({ id: `channel:${channel.id}`, kind: "channel", title: channelDisplayName(channel), subtitle: selectedGuild?.name || "Current server", channel });
+    for (const channel of dmChannels) results.push({ id: `dm:${channel.id}`, kind: "dm", title: channelDisplayName(channel), subtitle: channel.type === CHANNEL_TYPE_GROUP_DM ? "Group DM" : "Direct message", channel });
+    const unique = results.filter((item, index) => results.findIndex(other => other.id === item.id) === index);
+    return (term ? unique.filter(item => `${item.title} ${item.subtitle}`.toLowerCase().includes(term)) : unique).slice(0, 40);
+  }, [guilds, channels, dmChannels, selectedGuild?.name, quickSwitcherQuery]);
   const [online, setOnline] = useState(navigator.onLine);
   const [gatewayStatus, setGatewayStatus] = useState<"connecting" | "connected" | "reconnecting" | "offline">(
     navigator.onLine ? "connecting" : "offline",
@@ -2741,12 +2754,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const handleQuickSwitcherShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k" || event.repeat) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      event.preventDefault();
+      setQuickSwitcherQuery("");
+      setQuickSwitcherOpen(true);
+    };
+    window.addEventListener("keydown", handleQuickSwitcherShortcut);
+    return () => window.removeEventListener("keydown", handleQuickSwitcherShortcut);
+  }, []);
+
+  useEffect(() => {
+    if (!quickSwitcherOpen) return;
+    const frame = window.requestAnimationFrame(() => quickSwitcherInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [quickSwitcherOpen]);
+
+  useEffect(() => {
     if (!settingsOpen && !serverDialogOpen && !mediaViewer) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (mediaViewer) setMediaViewer(null);
         else if (serverDialogOpen && !serverActionBusy) setServerDialogOpen(false);
         else setSettingsOpen(false);
+      } else if (event.key === "Escape" && quickSwitcherOpen) {
+        setQuickSwitcherOpen(false);
       } else if (mediaViewer?.kind === "image" && (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "0")) {
         event.preventDefault();
         if (event.key === "0") setMediaZoom(1);
@@ -6720,14 +6754,11 @@ export default function App() {
                   <MessageSquare size={18} />
                 </button>
               )}
-              <button className={`icon-btn ${memberOpen ? "active" : ""}`} title="Member list" onClick={() => setMemberOpen(v => !v)}><Sparkles size={18} /></button>
+              <button className={`icon-btn ${memberOpen ? "active" : ""}`} title="Member list" onClick={() => { setSearchOpen(false); setMemberOpen(v => !v); }}><Sparkles size={18} /></button>
               <button className="icon-btn" title="Deleted message log" aria-label="Deleted message log" onClick={() => void openMessageLogger()}><History size={18} /></button>
               <button className="icon-btn" title="Edited message log" aria-label="Edited message log" onClick={() => void openEditedMessageLogger()}><Edit3 size={17} /></button>
               <button className="icon-btn" title="Deleted channel viewer" aria-label="Deleted channel viewer" onClick={() => void openDeletedChannelViewer()}><Archive size={18} /></button>
-              <div className="search-box">
-                <Search size={13} />
-                <input placeholder="Search" value={query} onChange={e => setQuery(e.target.value)} />
-              </div>
+              <button className={`icon-btn ${searchOpen ? "active" : ""}`} title="Search messages" aria-label="Search messages" onClick={() => { setMemberOpen(false); setSearchOpen(value => !value); }}><Search size={18} /></button>
               <button className="icon-btn" title="More"><MoreHorizontal size={18} /></button>
               <button
                 type="button"
@@ -7555,7 +7586,29 @@ export default function App() {
                 </div>
               </aside>
             )}
-            {memberOpen && !showingDirectory && (
+            {searchOpen && !showingDirectory && (
+              <aside className="member-panel search-panel" aria-label="Search messages">
+                <div className="member-header search-panel-header">
+                  <span>SEARCH MESSAGES</span>
+                  <button type="button" className="search-panel-close" aria-label="Close search" onClick={() => setSearchOpen(false)}><X size={15} /></button>
+                </div>
+                <label className="search-panel-input"><Search size={15} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="Search this conversation…" /></label>
+                <div className="search-panel-results">
+                  {!query.trim() ? <p className="search-panel-hint">Search the messages currently loaded in this conversation.</p> : (() => {
+                    const term = query.trim().toLowerCase();
+                    const matches = messages.filter(message => `${message.content || ""} ${message.author?.username || ""} ${message.author?.global_name || ""}`.toLowerCase().includes(term)).slice(-40).reverse();
+                    return matches.length ? matches.map(message => (
+                      <div className="search-result-item" key={message.id}>
+                        <strong>{displayName(message.author)}</strong>
+                        <small>{formatTimestamp(message.timestamp)}</small>
+                        <p>{message.content || "Attachment or embedded content"}</p>
+                      </div>
+                    )) : <p className="search-panel-hint">No matches in the messages currently loaded.</p>;
+                  })()}
+                </div>
+              </aside>
+            )}
+            {memberOpen && !searchOpen && !showingDirectory && (
           <aside className="member-panel">
             <div className="member-header">
               {isDmView && selectedChannel?.type === CHANNEL_TYPE_DM
@@ -8064,6 +8117,24 @@ export default function App() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {quickSwitcherOpen && (
+        <div className="quick-switcher-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setQuickSwitcherOpen(false); }}>
+          <section className="quick-switcher-window" role="dialog" aria-modal="true" aria-label="Quick switcher">
+            <label className="quick-switcher-search"><Search size={19} /><input ref={quickSwitcherInputRef} value={quickSwitcherQuery} onChange={event => setQuickSwitcherQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") setQuickSwitcherOpen(false); if (event.key === "Enter" && quickSwitchResults[0]) { const item = quickSwitchResults[0]; setQuickSwitcherOpen(false); if (item.kind === "server" && item.guild) { setIsDmView(false); void selectGuild(item.guild); } else if (item.channel) { setIsDmView(item.kind === "dm"); void selectChannel(item.channel); } } }} placeholder="Jump to a server, channel, or DM…" /></label>
+            <div className="quick-switcher-results">
+              {quickSwitchResults.map(item => (
+                <button type="button" className="quick-switcher-result" key={item.id} onClick={() => { setQuickSwitcherOpen(false); if (item.kind === "server" && item.guild) { setIsDmView(false); void selectGuild(item.guild); } else if (item.channel) { setIsDmView(item.kind === "dm"); void selectChannel(item.channel); } }}>
+                  <span className={`quick-switcher-kind quick-switcher-kind-${item.kind}`}>{item.kind === "server" ? "S" : item.kind === "dm" ? "@" : "#"}</span>
+                  <span><strong>{item.title}</strong><small>{item.subtitle}</small></span>
+                </button>
+              ))}
+              {quickSwitchResults.length === 0 && <p className="quick-switcher-empty">No matching servers, channels, or DMs.</p>}
+            </div>
+            <footer><kbd>↑</kbd><kbd>↓</kbd> Navigate <kbd>Enter</kbd> Open <kbd>Esc</kbd> Close</footer>
+          </section>
         </div>
       )}
 
