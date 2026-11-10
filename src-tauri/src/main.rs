@@ -14,6 +14,8 @@ use discord_router::{DiscordRouter, TokenManager};
 use rpc::RpcState;
 use std::{
     collections::HashMap,
+    fs::{self, OpenOptions},
+    io::{BufWriter, Write},
     path::PathBuf,
     sync::{
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError},
@@ -68,19 +70,66 @@ impl log::Log for BackendLogger {
     fn flush(&self) {}
 }
 
-fn run_console_log_writer(receiver: Receiver<String>) {
+fn backend_log_path() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("VoidCord").join("logs").join("voidcord.log")
+}
+
+fn run_console_log_writer(receiver: Receiver<String>, log_path: PathBuf) {
+    let mut file = match log_path.parent() {
+        Some(parent) => {
+            if let Err(error) = fs::create_dir_all(parent) {
+                eprintln!("[LOG] Could not create log directory {}: {error}", parent.display());
+                None
+            } else {
+                match OpenOptions::new().create(true).append(true).open(&log_path) {
+                    Ok(file) => {
+                        eprintln!("[LOG] Writing backend logs to {}", log_path.display());
+                        Some(BufWriter::new(file))
+                    }
+                    Err(error) => {
+                        eprintln!("[LOG] Could not open {}: {error}", log_path.display());
+                        None
+                    }
+                }
+            }
+        }
+        None => None,
+    };
+
     loop {
         let first = match receiver.recv_timeout(Duration::from_millis(50)) {
             Ok(line) => line,
-            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(file) = file.as_mut() {
+                    let _ = file.flush();
+                }
+                continue;
+            }
             Err(RecvTimeoutError::Disconnected) => break,
         };
         let mut batch = vec![first];
-        // Gather queued lines so console writes and flushes are amortized.
+        // Gather queued lines so console and file writes are amortized.
         while batch.len() < 64 {
             match receiver.try_recv() {
                 Ok(line) => batch.push(line),
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+
+        if let Some(file) = file.as_mut() {
+            for line in &batch {
+                if let Err(error) = writeln!(file, "{line}") {
+                    eprintln!("[LOG] Failed writing backend log: {error}");
+                    file.take();
+                    break;
+                }
+            }
+            if let Some(file) = file.as_mut() {
+                let _ = file.flush();
             }
         }
 
@@ -145,9 +194,10 @@ fn main() {
         .set(log_tx)
         .expect("failed to initialize Rust log channel");
 
+    let log_path = backend_log_path();
     std::thread::Builder::new()
         .name("voidcord-log-writer".to_owned())
-        .spawn(move || run_console_log_writer(log_rx))
+        .spawn(move || run_console_log_writer(log_rx, log_path))
         .expect("failed to start Rust console log writer thread");
 
     log::set_logger(&BACKEND_LOGGER).expect("failed to initialize Rust backend logger");
