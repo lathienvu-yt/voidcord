@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 import {
-  avatarDecorationUrl, avatarUrl, bannerUrl, displayName, formatDiscriminator, isVerifiedBot, formatTimestamp, guildIconUrl, primaryGuildBadgeUrl,
+  avatarDecorationUrl, avatarUrl, bannerUrl, displayName, formatDiscriminator, isVerifiedBot, formatTimestamp, guildIconUrl, guildBannerUrl, primaryGuildBadgeUrl,
   DiscordChannel, DiscordGuild, DiscordMessage, DiscordReaction, DiscordRelationship, DiscordUser,
   CHANNEL_TYPE_CATEGORY, CHANNEL_TYPE_DM, CHANNEL_TYPE_GROUP_DM, CHANNEL_TYPE_TEXT, CHANNEL_TYPE_VOICE,
   CHANNEL_TYPE_ANNOUNCEMENT, CHANNEL_TYPE_STAGE, CHANNEL_TYPE_FORUM,
@@ -5867,6 +5867,9 @@ export default function App() {
 
         {/* Sidebar */}
         <aside className={`sidebar ${profileCardOpen ? "profile-open" : ""}`} style={{ width: preferences.channelSidebarWidth }}>
+          {!isDmView && selectedGuild && guildBannerUrl(selectedGuild) && (
+            <div className="server-channel-banner" style={{ backgroundImage: `linear-gradient(180deg, rgba(12,12,16,.08), rgba(12,12,16,.88)), url("${guildBannerUrl(selectedGuild, 600)}")` }} aria-label={`${selectedGuild.name} server banner`}><span>{selectedGuild.name}</span></div>
+          )}
           {isDmView ? (
             <>
               <div className="dm-search-header">
@@ -7969,6 +7972,16 @@ export default function App() {
           canManageGuild={hasGuildPermission(5, selectedGuild.id, currentGuildMemberRolesRef.current, guildRoleDataRef.current, !!selectedGuild.owner)}
           invoke={invoke}
           onClose={() => setGuildSettingsOpen(false)}
+          onLeave={() => {
+            setGuildSettingsOpen(false);
+            setGuilds(current => current.filter(guild => guild.id !== selectedGuild.id));
+            setIsDmView(true);
+            setSelectedGuild(null);
+            selectedGuildRef.current = null;
+            setChannels([]);
+            setSelectedChannel(null);
+            setMessages([]);
+          }}
         />
       )}
 
