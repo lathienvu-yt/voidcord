@@ -414,6 +414,15 @@ pub async fn update_guild_settings(guild_id: String, settings: Value, state: Sta
     state.router.rest(AccountIdentity::Primary, Method::PATCH, &format!("guilds/{guild_id}"), Some(settings)).await.map_err(map_err)
 }
 
+/// Leave a guild for the authenticated current user.
+#[tauri::command]
+pub async fn leave_guild(guild_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    if guild_id.parse::<u64>().is_err() {
+        return Err("A valid server ID is required".to_owned());
+    }
+    state.router.rest(AccountIdentity::Primary, Method::DELETE, &format!("users/@me/guilds/{guild_id}"), None).await.map(|_| ()).map_err(map_err)
+}
+
 /// Fetch all guilds the current user is a member of.
 #[tauri::command]
 pub async fn get_guilds(
