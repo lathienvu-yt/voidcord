@@ -5894,7 +5894,7 @@ export default function App() {
               <div className="server-banner-topline">
                 <div className="server-banner-title-frame">
                   <span>{selectedGuild.name}</span>
-                  {(selectedGuild.premium_tier ?? 0) > 0 && <span className="server-boost-indicator" title={`Server Boost Level ${selectedGuild.premium_tier}`}><Sparkles size={13} /> Level {selectedGuild.premium_tier}</span>}
+                  <span className={`server-boost-indicator ${(selectedGuild.premium_tier ?? 0) > 0 ? "is-boosted" : ""}`} title={`Server Boost Level ${selectedGuild.premium_tier ?? 0}`}><Sparkles size={13} /> Level {selectedGuild.premium_tier ?? 0}</span>
                 </div>
                 <button type="button" className="server-invite-button" title="Create and copy server invite" aria-label="Create and copy server invite" onClick={() => void createServerInvite()}>
                   <UserPlus size={15} />
@@ -5996,8 +5996,8 @@ export default function App() {
                     <UserPlus size={15} />
                   </button>
                 )}
-                {selectedGuild && (selectedGuild.premium_tier ?? 0) > 0 && (
-                  <span className="server-heading-boost" title={`Server Boost Level ${selectedGuild.premium_tier}`}><Sparkles size={14} /><span>Lvl {selectedGuild.premium_tier}</span></span>
+                {selectedGuild && (
+                  <span className={`server-heading-boost ${(selectedGuild.premium_tier ?? 0) > 0 ? "is-boosted" : ""}`} title={`Server Boost Level ${selectedGuild.premium_tier ?? 0}`}><Sparkles size={14} /><span>Lvl {selectedGuild.premium_tier ?? 0}</span></span>
                 )}
               </div>
 
