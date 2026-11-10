@@ -6488,3 +6488,32 @@ input, textarea { font-family: inherit; }
   opacity: 0.85;
   mix-blend-mode: screen;
 }
+
+/* Guild settings and animated server banner */
+.server-heading-row { display:flex; align-items:center; gap:4px; padding-right:8px; }
+.server-heading-row .server-heading { flex:1; min-width:0; }
+.server-heading-settings { width:30px; height:30px; flex:0 0 30px; display:grid; place-items:center; border:0; border-radius:5px; color:var(--text-muted); background:transparent; cursor:pointer; }
+.server-heading-settings:hover { color:var(--text-primary); background:var(--background-modifier-hover); }
+.guild-settings-modal { width:min(760px, calc(100vw - 32px)); max-height:min(820px, calc(100vh - 32px)); display:flex; flex-direction:column; overflow:hidden; }
+.guild-settings-body { min-height:0; overflow:auto; padding:4px 22px 22px; }
+.guild-settings-banner { height:156px; overflow:hidden; position:relative; border-radius:10px; background:var(--background-secondary); margin:8px 0 18px; }
+.guild-settings-banner img { width:100%; height:100%; object-fit:cover; display:block; }
+.guild-settings-banner-empty { height:100%; display:grid; place-items:center; color:var(--text-muted); font-size:13px; }
+.guild-settings-banner-tag { position:absolute; right:10px; bottom:10px; padding:4px 8px; border-radius:5px; background:#111b; color:white; font-size:11px; font-weight:700; letter-spacing:.04em; }
+.guild-settings-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.guild-settings-field { display:flex; flex-direction:column; gap:6px; min-width:0; color:var(--text-secondary); font-size:12px; font-weight:600; }
+.guild-settings-field.full { grid-column:1 / -1; }
+.guild-settings-field input,.guild-settings-field select,.guild-settings-field textarea { width:100%; min-width:0; box-sizing:border-box; border:1px solid var(--border-subtle); border-radius:6px; background:var(--background-tertiary); color:var(--text-primary); padding:10px; font:inherit; font-weight:400; outline:none; }
+.guild-settings-field textarea { min-height:76px; resize:vertical; }
+.guild-settings-field input:focus,.guild-settings-field select:focus,.guild-settings-field textarea:focus { border-color:var(--accent); }
+.guild-settings-section-title { margin:18px 0 10px; color:var(--text-primary); font-size:14px; }
+.guild-settings-meta { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0 18px; }
+.guild-settings-chip { padding:5px 8px; border-radius:5px; background:var(--background-secondary); color:var(--text-secondary); font-size:11px; }
+.guild-settings-note { margin:10px 0; color:var(--text-muted); font-size:12px; line-height:1.5; }
+.guild-settings-error { margin:12px 0; color:var(--status-danger,#ed4245); font-size:12px; }
+.guild-settings-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 22px; border-top:1px solid var(--border-subtle); }
+.guild-settings-footer-actions { display:flex; gap:8px; }
+.guild-settings-footer button { border:0; border-radius:5px; padding:9px 14px; cursor:pointer; color:var(--text-primary); background:var(--background-secondary); }
+.guild-settings-footer button.primary { background:var(--accent); color:white; }
+.guild-settings-footer button:disabled { opacity:.5; cursor:not-allowed; }
+@media (max-width:600px) { .guild-settings-grid { grid-template-columns:1fr; } .guild-settings-field.full { grid-column:auto; } }
