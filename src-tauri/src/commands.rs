@@ -19,6 +19,7 @@ use crate::voice_gateway::{
     VoiceSession,
 };
 use crate::AppState;
+use crate::gateway_ipc::{GatewayIpc, GatewayIpcConfig};
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -3216,6 +3217,15 @@ pub async fn create_report(
 /// - `discord:typing_start`    – { channel_id, user_id }
 /// - `discord:guild_create`    – full guild object
 /// - `discord:presence_update` – presence object
+fn emit_gateway_event(app: &AppHandle, event: &str, payload: Value) {
+    app.state::<GatewayIpc>().publish(event, payload);
+}
+
+#[tauri::command]
+pub fn get_gateway_ipc_config(state: State<'_, GatewayIpc>) -> GatewayIpcConfig {
+    state.config()
+}
+
 #[tauri::command]
 pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     if let Some(gateway_task) = state.gateway_task.lock().await.take() {
