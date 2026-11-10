@@ -4040,6 +4040,9 @@ export default function App() {
   }, [channels, dmChannels, forwardTarget?.channel.id, guilds, me?.id, selectedChannel?.id]);
 
   const selectChannel = async (channel: DiscordChannel) => {
+    // Re-selecting the active channel must be a no-op: clearing/reloading its
+    // messages remounts the message list and replays the channel-entry animation.
+    if (selectedChannelRef.current?.id === channel.id || selectedChannel?.id === channel.id) return;
     if (isVoiceChannel(channel) && voiceHandshakeRef.current?.channelId !== channel.id) {
       void joinVoiceChannel(channel);
     } else if (!isMessageChannel(channel) && !isVoiceChannel(channel) && !isForumChannel(channel)) {
