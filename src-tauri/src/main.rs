@@ -4,12 +4,14 @@ mod cache;
 mod commands;
 mod discord_router;
 mod gpui_console;
+mod gateway_ipc;
 mod rpc;
 mod settings_menu;
 mod settings_proto;
 mod voice_gateway;
 
 use cache::LocalCache;
+use gateway_ipc::GatewayIpc;
 use discord_router::{DiscordRouter, TokenManager};
 use rpc::RpcState;
 use std::{
@@ -255,6 +257,9 @@ fn main() {
             app.on_menu_event(|app, event| {
                 let _ = app.emit("native-menu-action", event.id().as_ref());
             });
+            let gateway_ipc = GatewayIpc::start()?;
+            log::info!("Gateway IPC listening on {}", gateway_ipc.address());
+            app.manage(gateway_ipc);
             let app_data_dir = app.path().app_data_dir()?;
             let cache_path = app_data_dir.join("rocksdb-cache");
             let cache = LocalCache::open(&cache_path)
@@ -352,6 +357,7 @@ fn main() {
             commands::set_guild_channel_locked,
             commands::delete_guild_channel,
             commands::start_gateway,
+            commands::get_gateway_ipc_config,
             commands::toggle_devtools,
             commands::open_rust_console,
             commands::request_guild_member_list,
