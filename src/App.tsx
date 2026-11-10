@@ -5070,12 +5070,14 @@ export default function App() {
   };
 
   const votePoll = async (channelId: string, messageId: string, answerIds: number[]) => {
-    await invoke("vote_poll", { channelId, messageId, answerIds });
+    const asToken = activeComposerAccount.user.id !== me?.id && activeComposerAccount.token ? activeComposerAccount.token : null;
+    await invoke("vote_poll", { channelId, messageId, answerIds, asToken });
     await refreshPollMessage(channelId, messageId);
   };
 
   const endPoll = async (channelId: string, messageId: string) => {
-    await invoke("end_poll", { channelId, messageId });
+    const asToken = activeComposerAccount.user.id !== me?.id && activeComposerAccount.token ? activeComposerAccount.token : null;
+    await invoke("end_poll", { channelId, messageId, asToken });
     await refreshPollMessage(channelId, messageId);
     notify("Poll ended");
   };
