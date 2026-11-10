@@ -6703,7 +6703,7 @@ input, textarea { font-family: inherit; }
 .quick-switcher-search input { flex:1; min-width:0; border:0; outline:0; color:var(--text-primary); background:transparent; font:inherit; font-size:16px; }
 .quick-switcher-results { min-height:0; overflow:auto; padding:8px; }
 .quick-switcher-result { width:100%; display:flex; align-items:center; gap:12px; padding:10px; border:0; border-radius:8px; text-align:left; color:var(--text-primary); background:transparent; cursor:pointer; transition:background .12s ease,transform .12s ease; }
-.quick-switcher-result:hover,.quick-switcher-result:focus-visible { background:var(--background-modifier-hover); transform:translateX(2px); outline:0; }
+.quick-switcher-result:hover,.quick-switcher-result:focus-visible,.quick-switcher-result.active { background:var(--background-modifier-hover); transform:translateX(2px); outline:0; }
 .quick-switcher-result > span:last-child { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .quick-switcher-result strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
 .quick-switcher-result small { color:var(--text-muted); font-size:11px; }
@@ -6724,3 +6724,7 @@ input, textarea { font-family: inherit; }
   .quick-switcher-backdrop,.quick-switcher-window,.feature-modal-backdrop,.feature-modal,.proto-settings-backdrop,.proto-settings-window { animation:none !important; }
   .quick-switcher-result { transition:none; }
 }
+
+@keyframes vc-app-enter { from { opacity:.72; transform:scale(.992); filter:blur(2px); } to { opacity:1; transform:scale(1); filter:blur(0); } }
+.app { animation:vc-app-enter .28s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .app { animation:none !important; } }
