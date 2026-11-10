@@ -25,6 +25,7 @@ import { DiscordEmbedView } from "./DiscordEmbedView";
 import { DiscordComponents } from "./DiscordComponents";
 import InteractionModal from "./InteractionModal";
 import SettingsMenu from "./SettingsMenu";
+import GuildSettings from "./GuildSettings";
 import {
   deleteDeletedMessage, deleteEditedMessage, markCachedMessageDeleted, readArchivedMedia, readCachedAppData, readCachedDraft,
   readCachedMessages, readDeletedChannels, readDeletedMessages, readEditedMessages, writeArchivedMedia, writeCachedAppData,
@@ -1780,6 +1781,7 @@ export default function App() {
   const [captchaPrompt, setCaptchaPrompt] = useState<CaptchaPromptState | null>(null);
   const [mediaLensActive, setMediaLensActive] = useState(false);
   const [serverDialogOpen, setServerDialogOpen] = useState(false);
+  const [guildSettingsOpen, setGuildSettingsOpen] = useState(false);
   const [serverDialogMode, setServerDialogMode] = useState<"join" | "create">("join");
   const [serverInvite, setServerInvite] = useState("");
   const [newServerName, setNewServerName] = useState("");
@@ -5936,10 +5938,17 @@ export default function App() {
             </>
           ) : (
             <>
-              <button className="server-heading">
-                <span>{selectedGuild?.name ?? "—"}</span>
-                <ChevronDown size={14} />
-              </button>
+              <div className="server-heading-row">
+                <button className="server-heading">
+                  <span>{selectedGuild?.name ?? "—"}</span>
+                  <ChevronDown size={14} />
+                </button>
+                {selectedGuild && (
+                  <button type="button" className="server-heading-settings" title="Server settings" aria-label="Open server settings" onClick={() => setGuildSettingsOpen(true)}>
+                    <Settings size={15} />
+                  </button>
+                )}
+              </div>
 
               <div className="sidebar-scroll">
                 {channelTree.uncategorized.map(c => (
@@ -7951,6 +7960,16 @@ export default function App() {
             </div>
           </section>
         </div>
+      )}
+
+      {guildSettingsOpen && selectedGuild && (
+        <GuildSettings
+          guild={selectedGuild}
+          channels={channels}
+          canManageGuild={hasGuildPermission(5, selectedGuild.id, currentGuildMemberRolesRef.current, guildRoleDataRef.current, !!selectedGuild.owner)}
+          invoke={invoke}
+          onClose={() => setGuildSettingsOpen(false)}
+        />
       )}
 
       {serverDialogOpen && (
