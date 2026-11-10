@@ -1890,6 +1890,8 @@ export default function App() {
   const mediaViewerRef = useRef<HTMLDivElement>(null);
   guildMembersRef.current = guildMembers;
   const cachedCommandsRef = useRef<any[]>([]);
+  const applicationCommandCacheRef = useRef(new Map<string, { expiresAt: number; commands: any[] }>());
+  const applicationCommandInFlightRef = useRef(new Map<string, Promise<any[]>>());
   
 
   const invoke = useCallback(async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
@@ -2011,7 +2013,6 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // When opening a bot DM, its bot user ID is also its application ID.
   useEffect(() => {
     if (!selectedChannel || selectedChannel.type !== CHANNEL_TYPE_DM) return;
     const botRecipient = selectedChannel.recipients?.find(user => user.bot && user.id !== me?.id);
@@ -2070,59 +2071,76 @@ export default function App() {
       setSlashCommandSearchStatus("Loading registered slash commands…");
     }
 
+    // Only query applications usable in the selected context: the bot in this DM,
+    // or bots in the currently selected guild. Never sweep all DMs or stale IDs.
     const applicationIds = new Set<string>();
-    // The bot's user ID is its application ID. Discover likely candidates from known bot users.
     if (selectedChannel.type === CHANNEL_TYPE_DM) {
       const bot = selectedChannel.recipients?.find(user => user.bot && user.id !== me?.id);
-      if (bot) applicationIds.add(bot.id);
-    }
-    for (const dm of dmChannels) {
-      if (dm.type === CHANNEL_TYPE_DM) {
-        const bot = dm.recipients?.find(user => user.bot);
-        if (bot?.id) applicationIds.add(bot.id);
+      if (bot?.id) applicationIds.add(String(bot.id));
+    } else if (selectedChannel.guild_id) {
+      for (const member of guildMembers) {
+        const user = (member as any).user || member;
+        if (user?.bot && user?.id) applicationIds.add(String(user.id));
       }
     }
-    for (const member of guildMembers) {
-      const user = (member as any).user || member;
-      if (user?.bot && user?.id) applicationIds.add(String(user.id));
-    }
-    try {
-      const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
-      if (Array.isArray(saved)) saved.forEach((id: unknown) => {
-        if (typeof id === "string" && /^\d{15,22}$/.test(id)) applicationIds.add(id);
-      });
-    } catch {}
-    const ids = [...applicationIds].slice(0, 30);
+    const ids = [...applicationIds].slice(0, 10);
 
     const timer = window.setTimeout(async () => {
       try {
-        const results = await Promise.all(ids.map(async applicationId => {
-          const requests: Promise<any>[] = [
-            invoke<any>("get_global_application_commands", { applicationId, withLocalizations: true })
-              .then(value => ({ value })).catch(() => null),
-          ];
-          if (selectedChannel.guild_id) {
-            requests.push(invoke<any>("get_guild_application_commands", {
-              applicationId, guildId: selectedChannel.guild_id, withLocalizations: true,
-            }).then(value => ({ value })).catch(() => null));
-          }
-          return Promise.all(requests);
-        }));
-        if (cancelled) return;
         const fetched: any[] = [];
-        for (let index = 0; index < results.length; index++) {
-          for (const result of results[index]) {
-            if (!result) continue;
-            const payload = result.value?.data ?? result.value;
-            const entries = Array.isArray(payload) ? payload
-              : Array.isArray(payload?.application_commands) ? payload.application_commands
-              : Array.isArray(payload?.commands) ? payload.commands : [];
-            fetched.push(...entries
-              .filter((entry: any) => entry && typeof entry === "object" && entry.id && typeof entry.name === "string")
-              .filter((entry: any) => entry.type === undefined || entry.type === 1)
-              .map((entry: any) => ({ ...entry, id: String(entry.id), application_id: String(entry.application_id || ids[index]) })));
+        const normalize = (response: any, applicationId: string) => {
+          const payload = response?.data ?? response;
+          const entries = Array.isArray(payload) ? payload
+            : Array.isArray(payload?.application_commands) ? payload.application_commands
+            : Array.isArray(payload?.commands) ? payload.commands : [];
+          return entries
+            .filter((entry: any) => entry && typeof entry === "object" && entry.id && typeof entry.name === "string")
+            .filter((entry: any) => entry.type === undefined || entry.type === 1)
+            .map((entry: any) => ({ ...entry, id: String(entry.id), application_id: String(entry.application_id || applicationId) }));
+        };
+        const fetchScope = (key: string, command: string, args: Record<string, unknown>, applicationId: string) => {
+          const cached = applicationCommandCacheRef.current.get(key);
+          if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.commands);
+          const pending = applicationCommandInFlightRef.current.get(key);
+          if (pending) return pending;
+          const request = invoke<any>(command, args)
+            .then(response => normalize(response, applicationId))
+            .catch(() => [])
+            .then(commands => {
+              // Cache empty/error results briefly too, so inaccessible apps are not hammered on every keystroke.
+              applicationCommandCacheRef.current.set({
+                expiresAt: Date.now() + (commands.length ? 5 * 60_000 : 60_000),
+                commands,
+              });
+              return commands;
+            })
+            .finally(() => applicationCommandInFlightRef.current.delete(key));
+          applicationCommandInFlightRef.current.set(key, request);
+          return request;
+        };
+
+        // One application at a time; at most one global and one selected-guild fetch per app.
+        for (const applicationId of ids) {
+          if (cancelled) return;
+          const globalCommands = await fetchScope(
+            `global:${applicationId}`,
+            "get_global_application_commands",
+            { applicationId, withLocalizations: true },
+            applicationId,
+          );
+          fetched.push(...globalCommands);
+          if (cancelled) return;
+          if (selectedChannel.guild_id) {
+            const guildCommands = await fetchScope(
+              `guild:${selectedChannel.guild_id}:${applicationId}`,
+              "get_guild_application_commands",
+              { applicationId, guildId: selectedChannel.guild_id, withLocalizations: true },
+              applicationId,
+            );
+            fetched.push(...guildCommands);
           }
         }
+        if (cancelled) return;
         const merged = new Map<string, any>();
         for (const command of cachedCommandsRef.current) {
           if (command?.id && command?.application_id) merged.set(command.application_id + ":" + command.id, command);
@@ -2138,7 +2156,7 @@ export default function App() {
           setSlashCommands(cachedHits.slice(0, 50));
           setSlashCommandSearchStatus(cachedHits.length
             ? "⚡ Showing cached commands"
-            : ids.length ? "No matching registered slash commands found." : "No bot application IDs discovered yet. Open a bot DM or use Developer Tools → Application Commands.");
+            : ids.length ? "No matching registered slash commands found." : "No bot applications available in this channel.");
         }
       } catch (error) {
         if (!cancelled) {
@@ -2146,9 +2164,9 @@ export default function App() {
           setSlashCommandSearchStatus(cachedHits.length ? "⚡ Offline — showing cached commands" : "Could not load commands: " + String(error));
         }
       }
-    }, cachedHits.length ? 250 : 120);
+    }, cachedHits.length ? 300 : 350);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [draft, selectedChannel?.id, selectedChannel?.guild_id, selectedChannel?.type, selectedSlashCommand, invoke, dmChannels, guildMembers, me?.id]);
+  }, [draft, selectedChannel?.id, selectedChannel?.guild_id, selectedChannel?.type, selectedSlashCommand, invoke, guildMembers, me?.id]);
 
   const refreshAudioDevices = useCallback(async () => {
     setAudioDevicesLoading(true);
@@ -2622,7 +2640,7 @@ export default function App() {
     };
   }, [gatewayStatus, gameDetectionEnabled, gameProcessMappings, selfPresence.status, selfPresence.customStatus, notify, dmChannels, guilds, relationships, savedAccounts]);
 
-  // Pre-fetch data worker: loads up to 20 channels (top DMs + guild text channels), presences, and application commands
+  // Lightweight background message prefetch; command discovery stays lazy until slash autocomplete is used.
   const prefetchRunningRef = useRef(false);
   useEffect(() => {
     if (!me?.id || prefetchRunningRef.current || !navigator.onLine) return;
@@ -2631,11 +2649,11 @@ export default function App() {
     prefetchRunningRef.current = true;
 
     const runPrefetch = async () => {
-      // 1. Gather up to 20 channels (top DMs + first text channel of top guilds)
+      // 1. Gather up to 5 channels (top DMs + first text channel of top guilds)
       const targetChannels: DiscordChannel[] = [];
-      targetChannels.push(...dmChannels.slice(0, 10));
+      targetChannels.push(...dmChannels.slice(0, 3));
 
-      for (const g of guilds.slice(0, 10)) {
+      for (const g of guilds.slice(0, 2)) {
         try {
           const cached = await readCachedAppData<{ channels: DiscordChannel[] }>(`guild-data:${g.id}`);
           if (cached?.channels) {
@@ -2646,7 +2664,7 @@ export default function App() {
       }
 
       // Pre-fetch messages for gathered channels in the background
-      for (const ch of targetChannels.slice(0, 20)) {
+      for (const ch of targetChannels.slice(0, 5)) {
         try {
           const asToken = ch.account_id
             ? savedAccounts.find(account => account.user.id === ch.account_id)?.token
@@ -2659,36 +2677,15 @@ export default function App() {
             void writeCachedMessages(ch.id, msgs);
           }
         } catch {}
-        await new Promise(r => setTimeout(r, 60));
+        await new Promise(r => setTimeout(r, 180));
       }
 
-      // 2. Discover bot IDs across DMs and relationships for slash commands pre-fetch
-      const botIds = new Set<string>();
-      dmChannels.forEach(dm => dm.recipients?.forEach(u => { if (u.bot) botIds.add(u.id); }));
-      relationships.forEach(rel => { if (rel.user?.bot) botIds.add(rel.user.id); });
 
-      // Add common/popular bots (Pancake, Midjourney, Carl, Dyno, Tupperbox)
-      ["239631525350604801", "936929561302675456", "235148963517071360", "155149108183695360", "431544605203955712"].forEach(id => botIds.add(id));
-
-      try {
-        const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
-        if (Array.isArray(saved)) saved.forEach(id => { if (typeof id === "string") botIds.add(id); });
-      } catch {}
-
-      const allBotIds = [...botIds].slice(0, 15);
-      try {
-        localStorage.setItem("voidcord:application-command-app-ids", JSON.stringify(allBotIds));
-      } catch {}
-
-      // Pre-fetch global application commands for discovered bots
-      await Promise.allSettled(allBotIds.map(appId =>
-        invoke<any>("get_global_application_commands", { applicationId: appId, withLocalizations: true })
-      ));
     };
 
     const timer = setTimeout(() => {
       void runPrefetch();
-    }, 1800);
+    }, 3500);
 
     return () => clearTimeout(timer);
   }, [me?.id, dmChannels.length, guilds.length]);
