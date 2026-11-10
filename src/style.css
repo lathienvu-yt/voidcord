@@ -6517,3 +6517,7 @@ input, textarea { font-family: inherit; }
 .guild-settings-footer button.primary { background:var(--accent); color:white; }
 .guild-settings-footer button:disabled { opacity:.5; cursor:not-allowed; }
 @media (max-width:600px) { .guild-settings-grid { grid-template-columns:1fr; } .guild-settings-field.full { grid-column:auto; } }
+
+.guild-settings-upload { display:flex; flex-direction:column; gap:6px; margin:0 0 14px; padding:12px; border:1px dashed var(--border-subtle); border-radius:8px; color:var(--text-secondary); font-size:12px; font-weight:600; }
+.guild-settings-upload input { margin-top:4px; color:var(--text-primary); font-size:12px; }
+.guild-settings-upload small { color:var(--text-muted); font-weight:400; }
