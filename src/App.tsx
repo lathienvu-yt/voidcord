@@ -2123,7 +2123,7 @@ export default function App() {
         for (const applicationId of ids) {
           if (cancelled) return;
           const globalCommands = await fetchScope(
-            `global:${applicationId}`,
+            `global:${me?.id || "anonymous"}:${applicationId}`,
             "get_global_application_commands",
             { applicationId, withLocalizations: true },
             applicationId,
@@ -2132,7 +2132,7 @@ export default function App() {
           if (cancelled) return;
           if (selectedChannel.guild_id) {
             const guildCommands = await fetchScope(
-              `guild:${selectedChannel.guild_id}:${applicationId}`,
+              `guild:${me?.id || "anonymous"}:${selectedChannel.guild_id}:${applicationId}`,
               "get_guild_application_commands",
               { applicationId, guildId: selectedChannel.guild_id, withLocalizations: true },
               applicationId,
