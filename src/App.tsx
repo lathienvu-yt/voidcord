@@ -5978,7 +5978,7 @@ export default function App() {
                   if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setServerMenuOpen(false);
                 }}>
                   <button type="button" className="server-heading" aria-haspopup="menu" aria-expanded={serverMenuOpen} aria-label={`Server menu for ${selectedGuild?.name ?? "server"}`} onClick={() => setServerMenuOpen(open => !open)}>
-                    {guildBannerUrl(selectedGuild!) ? <><MoreHorizontal size={17} /><span className="server-heading-menu-label">Server menu</span></> : <><span>{selectedGuild?.name ?? "—"}</span><ChevronDown size={14} /></>}
+                    {selectedGuild && guildBannerUrl(selectedGuild) ? <><MoreHorizontal size={17} /><span className="server-heading-menu-label">Server menu</span></> : <><span>{selectedGuild?.name ?? "—"}</span><ChevronDown size={14} /></>}
                   </button>
                   {serverMenuOpen && selectedGuild && (
                     <div className="server-heading-menu" role="menu">
