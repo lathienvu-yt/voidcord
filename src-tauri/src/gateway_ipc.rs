@@ -91,8 +91,9 @@ async fn serve_client(
     let (mut sink, mut incoming) = websocket.split();
 
     let auth = timeout(Duration::from_secs(5), incoming.next())
-        .await??
-        .ok_or("missing IPC authentication frame")??;
+        .await
+        .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "missing IPC authentication frame"))??;
     let authenticated = match auth {
         Message::Text(text) => serde_json::from_str::<Value>(&text)
             .ok()
