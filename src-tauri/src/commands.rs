@@ -720,6 +720,7 @@ fn is_snowflake(value: &str) -> bool {
 fn is_message_request(channel: &Value) -> bool {
     if channel.get("is_spam").and_then(Value::as_bool) == Some(true)
         || (channel.get("flags").and_then(Value::as_i64).unwrap_or(0) & (1 << 5)) != 0
+        || channel.get("consent_status").and_then(Value::as_i64) == Some(1)
     {
         return true;
     }
@@ -732,8 +733,11 @@ fn is_message_request(channel: &Value) -> bool {
 }
 
 fn merge_supplemental_message_requests(channels: &[Value], supplemental: &Value) -> Vec<Value> {
+    // Supplemental data supplies previews; it does NOT establish request status.
+    // Only enrich channels already identified as pending requests by channel metadata.
     let channels_by_id = channels
         .iter()
+        .filter(|channel| is_message_request(channel))
         .filter_map(|channel| {
             Some((channel.get("id")?.as_str()?.to_owned(), channel))
         })
@@ -803,24 +807,27 @@ mod message_request_tests {
     }
 
     #[test]
-    fn supplemental_endpoint_membership_identifies_requests() {
-        // The supplemental-data endpoint is specifically scoped to message requests.
-        // The channel list can omit or stale the request marker, so membership in
-        // this response is the authoritative discriminator; do not pre-filter DMs.
+    fn supplemental_data_never_promotes_an_ordinary_dm_to_a_request() {
         let channels = vec![
             json!({ "id": "123", "type": 1, "is_message_request": false, "flags": 0 }),
-            json!({ "id": "456", "type": 1, "is_message_request": false, "flags": 0 }),
+            json!({ "id": "456", "type": 1, "is_message_request": true, "flags": 0 }),
         ];
-        let supplemental = json!([{
-            "channel_id": "123",
-            "message_preview": { "id": "789", "content": "Hello" }
-        }]);
+        let supplemental = json!([
+            { "channel_id": "123", "message_preview": { "id": "789", "content": "Ordinary DM" } },
+            { "channel_id": "456", "message_preview": { "id": "790", "content": "Pending request" } }
+        ]);
 
         let requests = merge_supplemental_message_requests(&channels, &supplemental);
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0]["id"], "123");
-        assert_eq!(requests[0]["message_preview"]["content"], "Hello");
+        assert_eq!(requests[0]["id"], "456");
+        assert_eq!(requests[0]["message_preview"]["content"], "Pending request");
         assert!(is_message_request(&requests[0]));
+    }
+
+    #[test]
+    fn pending_consent_status_identifies_a_request() {
+        assert!(is_message_request(&json!({ "consent_status": 1 })));
+        assert!(!is_message_request(&json!({ "consent_status": 2, "is_message_request": false })));
     }
     #[test]
     fn surrounding_message_query_selects_the_exact_target() {
@@ -2505,7 +2512,10 @@ pub async fn get_message_requests(state: State<'_, AppState>) -> Result<Value, S
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|channel| channel.get("type").and_then(Value::as_i64) == Some(1))
+        .filter(|channel| {
+            channel.get("type").and_then(Value::as_i64) == Some(1)
+                && is_message_request(channel)
+        })
         .cloned()
         .collect::<Vec<_>>();
     let mut requests = Vec::new();
