@@ -6539,3 +6539,139 @@ input, textarea { font-family: inherit; }
 .guild-settings-confirm button { padding:8px 12px; border:0; border-radius:5px; cursor:pointer; background:var(--background-tertiary); color:var(--text-primary); }
 .guild-settings-confirm button:last-child { background:#ed4245; color:#fff; }
 @media (max-width:600px) { .guild-settings-info-grid { grid-template-columns:1fr; } .guild-settings-info-grid > .full { grid-column:auto; } }
+
+
+/* Server sidebar header actions */
+.server-channel-banner {
+  align-items: flex-start;
+  padding: 10px;
+}
+.server-banner-topline {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.server-banner-title-frame {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: rgba(12, 12, 16, .08);
+  opacity: .72;
+  transition: opacity .18s ease, background .18s ease, border-color .18s ease, transform .18s ease;
+  transform: translateY(-2px);
+}
+.server-channel-banner:hover .server-banner-title-frame,
+.server-channel-banner:focus-within .server-banner-title-frame {
+  opacity: 1;
+  background: rgba(12, 12, 16, .76);
+  border-color: rgba(255,255,255,.24);
+  transform: translateY(0);
+}
+.server-banner-title-frame > span:first-child {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-shadow: 0 1px 5px #000;
+  overflow-wrap: anywhere;
+}
+.server-boost-indicator,
+.server-heading-boost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #f0b8ff;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-shadow: 0 1px 4px rgba(0,0,0,.8);
+}
+.server-invite-button {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 7px;
+  color: #fff;
+  background: rgba(12,12,16,.58);
+  cursor: pointer;
+  transition: background .15s ease, transform .15s ease;
+}
+.server-invite-button:hover {
+  background: var(--accent);
+  transform: translateY(-1px);
+}
+.server-heading-menu-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.server-heading-menu-wrap > .server-heading {
+  width: 100%;
+}
+.server-heading-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.server-heading-menu {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(230px, calc(100vw - 40px));
+  padding: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--background-floating, var(--background-secondary));
+  box-shadow: 0 10px 30px rgba(0,0,0,.38);
+}
+.server-heading-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-primary);
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.server-heading-menu button:hover {
+  background: var(--background-modifier-hover);
+}
+.server-heading-menu button svg {
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+.server-heading-boost {
+  flex: 0 0 auto;
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: rgba(160, 75, 190, .13);
+  text-shadow: none;
+}
+.server-invite-button-inline {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: var(--border-subtle);
+}
+.server-invite-button-inline:hover {
+  color: #fff;
+}
+@media (prefers-reduced-motion: reduce) {
+  .server-banner-title-frame, .server-invite-button { transition: none; }
+}
