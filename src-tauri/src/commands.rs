@@ -408,7 +408,7 @@ pub async fn update_guild_settings(guild_id: String, settings: Value, state: Sta
         if !value.is_null() {
             let image = value.as_str().ok_or("banner must be an image data URI or null")?;
             let valid_prefix = ["data:image/png;base64,", "data:image/jpeg;base64,", "data:image/gif;base64,"].iter().any(|prefix| image.starts_with(prefix));
-            if !valid_prefix || image.len() > 12 * 1024 * 1024 { return Err("Banner must be a PNG, JPEG, or GIF data URI no larger than 10 MB".to_owned()); }
+            if !valid_prefix || image.len() > 14 * 1024 * 1024 { return Err("Banner must be a PNG, JPEG, or GIF data URI no larger than 10 MB".to_owned()); }
         }
     }
     state.router.rest(AccountIdentity::Primary, Method::PATCH, &format!("guilds/{guild_id}"), Some(settings)).await.map_err(map_err)
