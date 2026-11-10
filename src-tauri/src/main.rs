@@ -301,6 +301,7 @@ fn main() {
             commands::get_guilds,
             commands::get_guild_settings,
             commands::update_guild_settings,
+            commands::leave_guild,
             commands::retry_captcha_request,
             commands::join_guild_invite,
             commands::create_guild,
