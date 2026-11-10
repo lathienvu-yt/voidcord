@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, Save, X } from "lucide-react";
+import { Loader2, Save, X } from "lucide-react";
 import { DiscordChannel, DiscordGuild, guildBannerUrl } from "./types";
 
 type GuildSettingsData = DiscordGuild & {
