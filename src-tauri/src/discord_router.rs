@@ -10,7 +10,7 @@ use std::{
     hash::{Hash, Hasher},
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, RwLock as StdRwLock,
     },
     time::Duration,
@@ -1528,6 +1528,7 @@ impl DiscordRouter {
         // Wrap in Arc so the callback can be shared across spawned dispatch tasks
         // without requiring F: Clone.
         let on_event = std::sync::Arc::new(on_event);
+        let callbacks_in_flight = Arc::new(AtomicUsize::new(0));
         let token = {
             let tokens = self.tokens.read().await;
             tokens.get(identity)?.clone()
@@ -1830,17 +1831,26 @@ impl DiscordRouter {
                             }
 
                             let event_name = event_name.to_owned();
-                            log::debug!("GATEWAY callback scheduled: {event_name}");
+                            let active_callbacks =
+                                callbacks_in_flight.fetch_add(1, Ordering::Relaxed) + 1;
+                            log::debug!(
+                                "GATEWAY callback scheduled: {event_name} bytes={event_bytes} active={active_callbacks}"
+                            );
                             // Spawn the callback so it never blocks the gateway select loop.
                             // Trace scheduling, actual execution, and callback duration separately.
                             let on_event = std::sync::Arc::clone(&on_event);
-                            let callback_event_name = event_name.clone();
+                            let callback_counter = Arc::clone(&callbacks_in_flight);
+                            let callback_event_name = event_name.to_owned();
                             tokio::spawn(async move {
                                 let callback_started = std::time::Instant::now();
-                                log::debug!("GATEWAY callback started: {callback_event_name}");
-                                on_event(event);
                                 log::debug!(
-                                    "GATEWAY callback finished: {callback_event_name} elapsed={:?}",
+                                    "GATEWAY callback started: {callback_event_name} bytes={event_bytes} active={}",
+                                    callback_counter.load(Ordering::Relaxed)
+                                );
+                                on_event(event);
+                                let remaining = callback_counter.fetch_sub(1, Ordering::Relaxed) - 1;
+                                log::debug!(
+                                    "GATEWAY callback finished: {callback_event_name} bytes={event_bytes} elapsed={:?} active={remaining}",
                                     callback_started.elapsed()
                                 );
                             });
