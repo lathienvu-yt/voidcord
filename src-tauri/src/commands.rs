@@ -1173,7 +1173,7 @@ pub async fn get_global_application_commands(
     state
         .router
         .rest(
-            AccountIdentity::ReadOnly,
+            AccountIdentity::Primary,
             Method::GET,
             &format!(
                 "applications/{application_id}/commands?with_localizations={with_localizations}"
@@ -1224,7 +1224,7 @@ pub async fn get_guild_application_commands(
     }
     let with_localizations = with_localizations.unwrap_or(true);
     state.router.rest(
-        AccountIdentity::ReadOnly,
+        AccountIdentity::Primary,
         Method::GET,
         &format!("applications/{application_id}/guilds/{guild_id}/commands?with_localizations={with_localizations}"),
         None,
