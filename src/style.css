@@ -6625,15 +6625,19 @@ input, textarea { font-family: inherit; }
 }
 .server-heading-menu {
   position: absolute;
-  z-index: 80;
+  z-index: 5000;
   top: calc(100% + 6px);
   left: 0;
-  width: min(230px, calc(100vw - 40px));
-  padding: 5px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--background-floating, var(--background-secondary));
-  box-shadow: 0 10px 30px rgba(0,0,0,.38);
+  width: min(248px, calc(100vw - 40px));
+  padding: 6px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 9px;
+  background-color: #232428;
+  background-image: linear-gradient(180deg, #2b2d31 0%, #232428 100%);
+  color: #f2f3f5;
+  opacity: 1;
+  isolation: isolate;
+  box-shadow: 0 14px 36px rgba(0,0,0,.62);
 }
 .server-heading-menu button {
   width: 100%;
@@ -6728,3 +6732,36 @@ input, textarea { font-family: inherit; }
 @keyframes vc-app-enter { from { opacity:.72; transform:scale(.992); filter:blur(2px); } to { opacity:1; transform:scale(1); filter:blur(0); } }
 .app { animation:vc-app-enter .28s ease-out both; }
 @media (prefers-reduced-motion: reduce) { .app { animation:none !important; } }
+
+
+/* Server menu: keep the popup opaque even when theme variables are missing. */
+.server-heading-menu-divider {
+  height: 1px;
+  margin: 5px 4px;
+  background: rgba(255,255,255,.12);
+}
+.server-heading-menu button.danger {
+  color: #f38b8b;
+}
+.server-heading-menu button.danger:hover {
+  background: rgba(237,66,69,.16);
+}
+.server-heading-menu button.danger svg {
+  color: #f38b8b;
+}
+.server-leave-backdrop { z-index: 10020; }
+.server-leave-modal { width: min(420px, calc(100vw - 32px)); }
+.server-leave-icon {
+  width: 42px; height: 42px; display: grid; place-items: center;
+  border-radius: 50%; margin-bottom: 12px;
+  color: #f0a0a0; background: rgba(237,66,69,.14);
+}
+.server-leave-modal h2 { margin: 0 0 8px; }
+.server-leave-modal > p { color: var(--text-secondary); line-height: 1.5; }
+.server-leave-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+.server-leave-actions button {
+  border:0; border-radius:6px; padding:9px 14px; font:inherit;
+  color:var(--text-primary); background:var(--background-modifier-hover); cursor:pointer;
+}
+.server-leave-actions button.danger { color:white; background:#da373c; }
+.server-leave-actions button:disabled { opacity:.55; cursor:wait; }
