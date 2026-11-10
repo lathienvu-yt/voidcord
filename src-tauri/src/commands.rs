@@ -3239,7 +3239,7 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
         // Retry loop — reconnect on disconnect
         loop {
             emit_rust_log(&app, "debug", "gateway", "Connecting to Discord gateway");
-            let _ = app.emit("discord:gateway_status", json!({ "status": "connecting" }));
+            emit_gateway_event(&app, "discord:gateway_status", json!({ "status": "connecting" }));
             let app2 = app.clone();
             let result = router
                 .listen_gateway(AccountIdentity::Primary, move |event: serde_json::Value| {
@@ -3253,10 +3253,7 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                                 .and_then(Value::as_str)
                                 .unwrap_or("")
                                 .to_owned();
-                            let _ = app2.emit(
-                                "discord:message_create",
-                                json!({ "channel_id": channel_id, "message": d }),
-                            );
+                            emit_gateway_event(&app2, "discord:message_create", json!({ "channel_id": channel_id, "message": d }),);
                         }
                         "MESSAGE_UPDATE" => {
                             let channel_id = d
@@ -3264,10 +3261,7 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                                 .and_then(Value::as_str)
                                 .unwrap_or("")
                                 .to_owned();
-                            let _ = app2.emit(
-                                "discord:message_update",
-                                json!({ "channel_id": channel_id, "message": d }),
-                            );
+                            emit_gateway_event(&app2, "discord:message_update", json!({ "channel_id": channel_id, "message": d }),);
                         }
                         "MESSAGE_DELETE" => {
                             let channel_id = d
@@ -3280,10 +3274,7 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                                 .and_then(Value::as_str)
                                 .unwrap_or("")
                                 .to_owned();
-                            let _ = app2.emit(
-                                "discord:message_delete",
-                                json!({ "channel_id": channel_id, "message_id": message_id }),
-                            );
+                            emit_gateway_event(&app2, "discord:message_delete", json!({ "channel_id": channel_id, "message_id": message_id }),);
                         }
                         "TYPING_START" => {
                             let channel_id = d
@@ -3296,84 +3287,78 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                                 .and_then(Value::as_str)
                                 .unwrap_or("")
                                 .to_owned();
-                            let _ = app2.emit(
-                                "discord:typing_start",
-                                json!({ "channel_id": channel_id, "user_id": user_id }),
-                            );
+                            emit_gateway_event(&app2, "discord:typing_start", json!({ "channel_id": channel_id, "user_id": user_id }),);
                         }
                         "GUILD_CREATE" => {
-                            let _ = app2.emit("discord:guild_create", d);
+                            emit_gateway_event(&app2, "discord:guild_create", d);
                         }
                         "GUILD_MEMBER_LIST_UPDATE" => {
-                            let _ = app2.emit("discord:guild_member_list_update", d);
+                            emit_gateway_event(&app2, "discord:guild_member_list_update", d);
                         }
                         "GUILD_MEMBER_ADD" => {
-                            let _ = app2.emit("discord:guild_member_add", d);
+                            emit_gateway_event(&app2, "discord:guild_member_add", d);
                         }
                         "GUILD_MEMBER_UPDATE" => {
-                            let _ = app2.emit("discord:guild_member_update", d);
+                            emit_gateway_event(&app2, "discord:guild_member_update", d);
                         }
                         "GUILD_MEMBER_REMOVE" => {
-                            let _ = app2.emit("discord:guild_member_remove", d);
+                            emit_gateway_event(&app2, "discord:guild_member_remove", d);
                         }
                         "CHANNEL_DELETE" => {
-                            let _ = app2.emit("discord:channel_delete", d);
+                            emit_gateway_event(&app2, "discord:channel_delete", d);
                         }
                         "THREAD_CREATE" => {
-                            let _ = app2.emit("discord:thread_create", d);
+                            emit_gateway_event(&app2, "discord:thread_create", d);
                         }
                         "THREAD_UPDATE" => {
-                            let _ = app2.emit("discord:thread_update", d);
+                            emit_gateway_event(&app2, "discord:thread_update", d);
                         }
                         "THREAD_DELETE" => {
-                            let _ = app2.emit("discord:thread_delete", d);
+                            emit_gateway_event(&app2, "discord:thread_delete", d);
                         }
                         "THREAD_LIST_SYNC" => {
-                            let _ = app2.emit("discord:thread_list_sync", d);
+                            emit_gateway_event(&app2, "discord:thread_list_sync", d);
                         }
                         "THREAD_MEMBER_UPDATE" => {
-                            let _ = app2.emit("discord:thread_member_update", d);
+                            emit_gateway_event(&app2, "discord:thread_member_update", d);
                         }
                         "THREAD_MEMBERS_UPDATE" => {
-                            let _ = app2.emit("discord:thread_members_update", d);
+                            emit_gateway_event(&app2, "discord:thread_members_update", d);
                         }
                         "PRESENCE_UPDATE" => {
-                            let _ = app2.emit("discord:presence_update", d);
+                            emit_gateway_event(&app2, "discord:presence_update", d);
                         }
                         "VOICE_STATE_UPDATE" => {
-                            let _ = app2.emit("discord:voice_state_update", d);
+                            emit_gateway_event(&app2, "discord:voice_state_update", d);
                         }
                         "VOICE_SERVER_UPDATE" => {
-                            let _ = app2.emit("discord:voice_server_update", d);
+                            emit_gateway_event(&app2, "discord:voice_server_update", d);
                         }
                         "VOICE_CHANNEL_STATUS_UPDATE" => {
-                            let _ = app2.emit("discord:voice_channel_status_update", d);
+                            emit_gateway_event(&app2, "discord:voice_channel_status_update", d);
                         }
                         "CALL_CREATE" => {
-                            let _ = app2.emit("discord:call_create", d);
+                            emit_gateway_event(&app2, "discord:call_create", d);
                         }
                         "CALL_UPDATE" => {
-                            let _ = app2.emit("discord:call_update", d);
+                            emit_gateway_event(&app2, "discord:call_update", d);
                         }
                         "CALL_DELETE" => {
-                            let _ = app2.emit("discord:call_delete", d);
+                            emit_gateway_event(&app2, "discord:call_delete", d);
                         }
                         "NOTIFICATION_CENTER_ITEM_CREATE" | "NOTIFICATION_CENTER_ITEM_DELETE" | "NOTIFICATION_CENTER_ITEMS_ACK" | "RELATIONSHIP_ADD" | "RELATIONSHIP_REMOVE" => {
-                            let _ = app2.emit("discord:notification_center_update", json!({ "event": t.clone(), "data": d }));
+                            emit_gateway_event(&app2, "discord:notification_center_update", json!({ "event": t.clone(), "data": d }));
                         }
                         "INTERACTION_MODAL_CREATE" => {
-                            let _ = app2.emit("discord:interaction_modal_create", d);
+                            emit_gateway_event(&app2, "discord:interaction_modal_create", d);
                         }
                         "INTERACTION_IFRAME_MODAL_CREATE" => {
-                            let _ = app2.emit("discord:interaction_iframe_modal_create", d);
+                            emit_gateway_event(&app2, "discord:interaction_iframe_modal_create", d);
                         }
                         "READY" => {
                             emit_rust_log(&app2, "info", "gateway", "Gateway READY received");
-                            let _ = app2.emit(
-                                "discord:gateway_status",
-                                json!({ "status": "connected" }),
-                            );
-                            let _ = app2.emit("discord:gateway_ready", d);
+                            emit_gateway_event(&app2, "discord:gateway_status", json!({ "status": "connected" }),);
+                            emit_gateway_event(&app2, "discord:gateway_ready", d);
                             let presence_app = app2.clone();
                             tauri::async_runtime::spawn(async move {
                                 let state = presence_app.state::<AppState>();
@@ -3384,10 +3369,7 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                         }
                         "RESUMED" => {
                             emit_rust_log(&app2, "info", "gateway", "Gateway session resumed");
-                            let _ = app2.emit(
-                                "discord:gateway_status",
-                                json!({ "status": "connected", "resumed": true }),
-                            );
+                            emit_gateway_event(&app2, "discord:gateway_status", json!({ "status": "connected", "resumed": true }),);
                             let presence_app = app2.clone();
                             tauri::async_runtime::spawn(async move {
                                 let state = presence_app.state::<AppState>();
@@ -3409,10 +3391,7 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                     "gateway",
                     format!("Gateway disconnected: {e}; retrying in 5 seconds"),
                 );
-                let _ = app.emit(
-                    "discord:gateway_status",
-                    json!({ "status": "reconnecting", "detail": e.to_string() }),
-                );
+                emit_gateway_event(&app, "discord:gateway_status", json!({ "status": "reconnecting", "detail": e.to_string() }),);
             } else {
                 emit_rust_log(
                     &app,
@@ -3420,10 +3399,7 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                     "gateway",
                     "Gateway listener ended; retrying in 5 seconds",
                 );
-                let _ = app.emit(
-                    "discord:gateway_status",
-                    json!({ "status": "reconnecting" }),
-                );
+                emit_gateway_event(&app, "discord:gateway_status", json!({ "status": "reconnecting" }),);
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
