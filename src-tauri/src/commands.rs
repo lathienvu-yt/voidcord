@@ -384,6 +384,29 @@ pub async fn get_content_inventory(
         .map_err(map_err)
 }
 
+/// Fetch the full guild object for the server settings view.
+#[tauri::command]
+pub async fn get_guild_settings(guild_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    if guild_id.parse::<u64>().is_err() { return Err("A valid server ID is required".to_owned()); }
+    state.router.rest(AccountIdentity::ReadOnly, Method::GET, &format!("guilds/{guild_id}?with_counts=true"), None).await.map_err(map_err)
+}
+
+/// Update a validated subset of documented guild configuration fields.
+#[tauri::command]
+pub async fn update_guild_settings(guild_id: String, settings: Value, state: State<'_, AppState>) -> Result<Value, String> {
+    if guild_id.parse::<u64>().is_err() { return Err("A valid server ID is required".to_owned()); }
+    let object = settings.as_object().ok_or_else(|| "Guild settings must be a JSON object".to_owned())?;
+    const ALLOWED: &[&str] = &["name", "description", "verification_level", "default_message_notifications", "explicit_content_filter", "afk_channel_id", "afk_timeout", "system_channel_id", "system_channel_flags", "rules_channel_id", "public_updates_channel_id", "preferred_locale", "premium_progress_bar_enabled", "safety_alerts_channel_id"];
+    if object.is_empty() || object.keys().any(|key| !ALLOWED.contains(&key.as_str())) { return Err("The settings payload is empty or contains unsupported fields".to_owned()); }
+    if let Some(value) = object.get("name") { let name = value.as_str().ok_or("Server name must be text")?; if name.trim().is_empty() || name.chars().count() > 100 { return Err("Server name must contain 1–100 characters".to_owned()); } }
+    for (field, max) in [("verification_level", 4_i64), ("explicit_content_filter", 2), ("default_message_notifications", 1)] { if let Some(value) = object.get(field) { let number = value.as_i64().ok_or_else(|| format!("{field} must be an integer"))?; if number < 0 || number > max { return Err(format!("{field} is outside the supported range")); } } }
+    if let Some(value) = object.get("afk_timeout") { let timeout = value.as_i64().ok_or("AFK timeout must be an integer")?; if ![60, 300, 900, 1800, 3600].contains(&timeout) { return Err("AFK timeout must be 60, 300, 900, 1800, or 3600 seconds".to_owned()); } }
+    for field in ["description", "preferred_locale"] { if let Some(value) = object.get(field) { if !value.is_null() { let value = value.as_str().ok_or_else(|| format!("{field} must be text or null"))?; let limit = if field == "description" { 120 } else { 16 }; if value.chars().count() > limit { return Err(format!("{field} is too long")); } } } }
+    for field in ["afk_channel_id", "system_channel_id", "rules_channel_id", "public_updates_channel_id", "safety_alerts_channel_id"] { if let Some(value) = object.get(field) { if !value.is_null() && value.as_str().and_then(|id| id.parse::<u64>().ok()).is_none() { return Err(format!("{field} must be a valid channel ID or null")); } } }
+    if let Some(value) = object.get("premium_progress_bar_enabled") { if !value.is_boolean() { return Err("premium_progress_bar_enabled must be a boolean".to_owned()); } }
+    state.router.rest(AccountIdentity::Primary, Method::PATCH, &format!("guilds/{guild_id}"), Some(settings)).await.map_err(map_err)
+}
+
 /// Fetch all guilds the current user is a member of.
 #[tauri::command]
 pub async fn get_guilds(
