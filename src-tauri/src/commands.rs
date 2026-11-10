@@ -734,7 +734,12 @@ fn is_message_request(channel: &Value) -> bool {
 fn merge_supplemental_message_requests(channels: &[Value], supplemental: &Value) -> Vec<Value> {
     let channels_by_id = channels
         .iter()
-        .filter_map(|channel| Some((channel.get("id")?.as_str()?.to_owned(), channel)))
+        .filter_map(|channel| {
+            if !is_message_request(channel) {
+                return None;
+            }
+            Some((channel.get("id")?.as_str()?.to_owned(), channel))
+        })
         .collect::<std::collections::HashMap<_, _>>();
     supplemental
         .as_array()
@@ -801,10 +806,10 @@ mod message_request_tests {
     }
 
     #[test]
-    fn supplemental_preview_includes_unflagged_you_may_know_channel() {
+    fn supplemental_preview_only_includes_flagged_message_requests() {
         let channels = vec![
-            json!({ "id": "123", "type": 1, "flags": 0 }),
-            json!({ "id": "456", "type": 1, "flags": 0 }),
+            json!({ "id": "123", "type": 1, "is_message_request": true, "flags": 0 }),
+            json!({ "id": "456", "type": 1, "is_message_request": false, "flags": 0 }),
         ];
         let supplemental = json!([{
             "channel_id": "123",
@@ -2501,7 +2506,10 @@ pub async fn get_message_requests(state: State<'_, AppState>) -> Result<Value, S
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|channel| channel.get("type").and_then(Value::as_i64) == Some(1))
+        .filter(|channel| {
+            channel.get("type").and_then(Value::as_i64) == Some(1)
+                && is_message_request(channel)
+        })
         .cloned()
         .collect::<Vec<_>>();
     let mut requests = Vec::new();
