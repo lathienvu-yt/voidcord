@@ -115,8 +115,8 @@ async fn serve_client(
         return Err("invalid IPC authentication".into());
     }
 
-    sink.send(Message::Text(json!({ "type": "ready" }).to_string())).await?;
     let mut receiver = events.subscribe();
+    sink.send(Message::Text(json!({ "type": "ready" }).to_string())).await?;
 
     loop {
         tokio::select! {
