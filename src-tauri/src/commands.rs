@@ -396,7 +396,7 @@ pub async fn get_guild_settings(guild_id: String, state: State<'_, AppState>) ->
 pub async fn update_guild_settings(guild_id: String, settings: Value, state: State<'_, AppState>) -> Result<Value, String> {
     if guild_id.parse::<u64>().is_err() { return Err("A valid server ID is required".to_owned()); }
     let object = settings.as_object().ok_or_else(|| "Guild settings must be a JSON object".to_owned())?;
-    const ALLOWED: &[&str] = &["name", "description", "verification_level", "default_message_notifications", "explicit_content_filter", "afk_channel_id", "afk_timeout", "system_channel_id", "system_channel_flags", "rules_channel_id", "public_updates_channel_id", "preferred_locale", "premium_progress_bar_enabled", "safety_alerts_channel_id"];
+    const ALLOWED: &[&str] = &["name", "description", "verification_level", "default_message_notifications", "explicit_content_filter", "afk_channel_id", "afk_timeout", "system_channel_id", "system_channel_flags", "rules_channel_id", "public_updates_channel_id", "preferred_locale", "premium_progress_bar_enabled", "safety_alerts_channel_id", "banner"];
     if object.is_empty() || object.keys().any(|key| !ALLOWED.contains(&key.as_str())) { return Err("The settings payload is empty or contains unsupported fields".to_owned()); }
     if let Some(value) = object.get("name") { let name = value.as_str().ok_or("Server name must be text")?; if name.trim().is_empty() || name.chars().count() > 100 { return Err("Server name must contain 1–100 characters".to_owned()); } }
     for (field, max) in [("verification_level", 4_i64), ("explicit_content_filter", 2), ("default_message_notifications", 1)] { if let Some(value) = object.get(field) { let number = value.as_i64().ok_or_else(|| format!("{field} must be an integer"))?; if number < 0 || number > max { return Err(format!("{field} is outside the supported range")); } } }
@@ -404,6 +404,13 @@ pub async fn update_guild_settings(guild_id: String, settings: Value, state: Sta
     for field in ["description", "preferred_locale"] { if let Some(value) = object.get(field) { if !value.is_null() { let value = value.as_str().ok_or_else(|| format!("{field} must be text or null"))?; let limit = if field == "description" { 120 } else { 16 }; if value.chars().count() > limit { return Err(format!("{field} is too long")); } } } }
     for field in ["afk_channel_id", "system_channel_id", "rules_channel_id", "public_updates_channel_id", "safety_alerts_channel_id"] { if let Some(value) = object.get(field) { if !value.is_null() && value.as_str().and_then(|id| id.parse::<u64>().ok()).is_none() { return Err(format!("{field} must be a valid channel ID or null")); } } }
     if let Some(value) = object.get("premium_progress_bar_enabled") { if !value.is_boolean() { return Err("premium_progress_bar_enabled must be a boolean".to_owned()); } }
+    if let Some(value) = object.get("banner") {
+        if !value.is_null() {
+            let image = value.as_str().ok_or("banner must be an image data URI or null")?;
+            let valid_prefix = ["data:image/png;base64,", "data:image/jpeg;base64,", "data:image/gif;base64,"].iter().any(|prefix| image.starts_with(prefix));
+            if !valid_prefix || image.len() > 12 * 1024 * 1024 { return Err("Banner must be a PNG, JPEG, or GIF data URI no larger than 10 MB".to_owned()); }
+        }
+    }
     state.router.rest(AccountIdentity::Primary, Method::PATCH, &format!("guilds/{guild_id}"), Some(settings)).await.map_err(map_err)
 }
 
