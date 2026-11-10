@@ -130,7 +130,6 @@ export interface DiscordChannel {
   is_message_request?: boolean;
   is_message_request_timestamp?: string | null;
   is_spam?: boolean;
-  consent_status?: number;
   flags?: number;
   message_preview?: DiscordMessage;
   safety_warnings?: Array<{ id: string; type: number; description?: string; dismissed?: boolean }>;
