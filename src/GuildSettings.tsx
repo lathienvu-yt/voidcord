@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, X } from "lucide-react";
+import { AlertTriangle, Loader2, Save, X } from "lucide-react";
 import { DiscordChannel, DiscordGuild, guildBannerUrl } from "./types";
 
 type GuildSettingsData = DiscordGuild & {
@@ -42,17 +42,20 @@ const makeDraft = (guild: GuildSettingsData): Draft => ({
 });
 
 export default function GuildSettings({
-  guild, channels, canManageGuild, invoke, onClose,
+  guild, channels, canManageGuild, invoke, onClose, onLeave,
 }: {
   guild: DiscordGuild;
   channels: DiscordChannel[];
   canManageGuild: boolean;
   invoke: <T,>(command: string, args?: Record<string, unknown>) => Promise<T>;
   onClose: () => void;
+  onLeave: () => void;
 }) {
   const [data, setData] = useState<GuildSettingsData>(guild);
   const [draft, setDraft] = useState<Draft>(() => makeDraft(guild));
-  const [tab, setTab] = useState<"overview" | "moderation">("overview");
+  const [tab, setTab] = useState<"overview" | "moderation" | "privacy" | "info">("overview");
+  const [leaveConfirm, setLeaveConfirm] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -82,6 +85,14 @@ export default function GuildSettings({
   const textChannels = useMemo(() => channels.filter(channel => channel.type === 0 || channel.type === 5), [channels]);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft(current => ({ ...current, [key]: value }));
   const changed = JSON.stringify(draft) !== JSON.stringify(makeDraft(data)) || bannerData !== null;
+
+  const leaveServer = async () => {
+    if (leaving) return;
+    setLeaving(true);
+    setError("");
+    try { await invoke("leave_guild", { guildId: guild.id }); onLeave(); }
+    catch (reason) { setError(String(reason).replace(/^Error: /, "")); setLeaving(false); setLeaveConfirm(false); }
+  };
 
   const save = async () => {
     if (!canManageGuild || saving) return;
@@ -137,7 +148,9 @@ export default function GuildSettings({
         <p className="settings-help">{guild.name} · {canManageGuild ? "You can manage this server" : "Read-only · Manage Server permission required to edit"}</p>
         <div className="feature-modal-tabs">
           <button type="button" className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}>Overview</button>
-          <button type="button" className={tab === "moderation" ? "active" : ""} onClick={() => setTab("moderation")}>Safety & Moderation</button>
+          <button type="button" className={tab === "moderation" ? "active" : ""} onClick={() => setTab("moderation")}>Safety</button>
+          <button type="button" className={tab === "privacy" ? "active" : ""} onClick={() => setTab("privacy")}>Privacy</button>
+          <button type="button" className={tab === "info" ? "active" : ""} onClick={() => setTab("info")}>Server Info</button>
         </div>
         <div className="guild-settings-body">
           {loading ? <div className="settings-loading"><Loader2 size={18} className="spinning" /> Loading server configuration…</div> : (
@@ -204,7 +217,7 @@ export default function GuildSettings({
                   </div>
                   <p className="guild-settings-note">Personal notification overrides are separate from server-wide defaults and belong in your notification preferences.</p>
                 </>
-              ) : (
+              ) : tab === "moderation" ? (
                 <>
                   <h3 className="guild-settings-section-title">Safety & Moderation</h3>
                   <div className="guild-settings-grid">
@@ -222,6 +235,35 @@ export default function GuildSettings({
                   </div>
                   <p className="guild-settings-note">Discord applies the server's verification and content-filter rules. Some community controls may only be available when the server has the corresponding feature enabled.</p>
                 </>
+              ) : tab === "privacy" ? (
+                <>
+                  <h3 className="guild-settings-section-title">Privacy settings</h3>
+                  <p className="guild-settings-note">These are account-level preferences, not server configuration. Manage who can contact you and how your account activity is shared from User Settings → Privacy & Safety.</p>
+                  <div className="guild-settings-info-card"><strong>Direct messages from server members</strong><span>Review whether people in shared servers can send you direct messages.</span></div>
+                  <div className="guild-settings-info-card"><strong>Activity and data controls</strong><span>Review activity status, data personalization, and friend request permissions in your account privacy settings.</span></div>
+                  <button type="button" className="guild-settings-link" onClick={() => { onClose(); document.querySelector<HTMLButtonElement>(".pfp-button")?.click(); }}>Open User Settings</button>
+                </>
+              ) : (
+                <>
+                  <h3 className="guild-settings-section-title">Server information</h3>
+                  <div className="guild-settings-info-grid">
+                    <div><small>Server name</small><strong>{data.name}</strong></div>
+                    <div><small>Server ID</small><strong>{data.id}</strong></div>
+                    <div><small>Owner ID</small><strong>{data.owner_id || "Unavailable"}</strong></div>
+                    <div><small>Preferred locale</small><strong>{data.preferred_locale || "Not set"}</strong></div>
+                    <div><small>Members</small><strong>{data.approximate_member_count?.toLocaleString() ?? "Unavailable"}</strong></div>
+                    <div><small>Online</small><strong>{data.approximate_presence_count?.toLocaleString() ?? "Unavailable"}</strong></div>
+                    <div><small>Boost level</small><strong>{data.premium_tier ?? 0}</strong></div>
+                    <div><small>Boosts</small><strong>{data.premium_subscription_count ?? "Unavailable"}</strong></div>
+                    <div className="full"><small>Features</small><strong>{features.length ? features.join(" · ") : "No special features reported"}</strong></div>
+                  </div>
+                  <button type="button" className="guild-settings-danger" onClick={() => setLeaveConfirm(true)}><AlertTriangle size={15} /> Leave Server</button>
+                  {leaveConfirm && <div className="guild-settings-confirm" role="alertdialog" aria-modal="true" aria-label="Confirm leaving server">
+                    <strong>Leave {guild.name}?</strong>
+                    <p>You will need a new invite to rejoin this server. This does not delete the server.</p>
+                    <div><button type="button" disabled={leaving} onClick={() => setLeaveConfirm(false)}>Cancel</button><button type="button" disabled={leaving} onClick={() => void leaveServer()}>{leaving ? "Leaving…" : "Leave Server"}</button></div>
+                  </div>}
+                </>
               )}
               {error && <div className="guild-settings-error" role="alert">{error}</div>}
               {!loaded && !error && <p className="guild-settings-note">The server settings could not be loaded.</p>}
@@ -229,7 +271,7 @@ export default function GuildSettings({
           )}
         </div>
         <footer className="guild-settings-footer">
-          <span className="guild-settings-note">{canManageGuild ? "Changes are saved directly to Discord." : "You can view settings, but cannot modify them."}</span>
+          <span className="guild-settings-note">{tab === "info" ? "Server details are read from Discord." : tab === "privacy" ? "Privacy controls are managed in your account settings." : canManageGuild ? "Changes are saved directly to Discord." : "You can view settings, but cannot modify them."}</span>
           <div className="guild-settings-footer-actions">
             <button type="button" onClick={onClose} disabled={saving}>Close</button>
             {canManageGuild && <button type="button" className="primary" onClick={() => void save()} disabled={loading || saving || !changed || !draft.name.trim()}>
