@@ -9595,7 +9595,7 @@ function PollCard({
           const chosen = selected.includes(id);
           return (
             <button type="button" key={id} className={`discord-poll-option ${chosen ? "selected" : ""} ${result?.me_voted ? "mine" : ""}`} disabled={closed || busy || !onVote} onClick={() => toggle(id)}>
-              <span className="discord-poll-option-check">{chosen || result?.me_voted ? <Check size={13} /> : null}</span>
+              <span className="discord-poll-option-check">{chosen ? <Check size={13} /> : null}</span>
               {media.emoji?.name && <span className="discord-poll-option-emoji">{media.emoji.id ? <img src={`https://cdn.discordapp.com/emojis/${media.emoji.id}.webp?size=24`} alt="" /> : media.emoji.name}</span>}
               <span className="discord-poll-option-label">{media.text || "Answer"}</span>
               {(poll?.results || closed) && <span className="discord-poll-option-result"><span>{percent}%</span><small>{votes}</small></span>}
@@ -9605,7 +9605,7 @@ function PollCard({
         })}
       </div>
       <div className="discord-poll-footer">
-        <span>{total} {total === 1 ? "vote" : "votes"}{closed ? " · Poll ended" : durationText ? " · Ends " + new Date(poll.expiry).toLocaleString() : ""}</span>
+        <span>{total} {total === 1 ? "vote" : "votes"}{closed ? " · Poll ended" : poll?.expiry ? " · Ends " + new Date(poll.expiry).toLocaleString() : ""}</span>
         {!closed && <div className="discord-poll-actions">
           {selected.length > 0 && <button type="button" onClick={() => void submit(selected)} disabled={busy || !onVote}>{busy ? "Saving…" : "Vote"}</button>}
           {initialVotes.length > 0 && <button type="button" className="poll-remove-vote" onClick={() => { setSelected([]); void submit([]); }} disabled={busy || !onVote}>Remove vote</button>}
