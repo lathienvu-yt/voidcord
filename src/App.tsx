@@ -7,7 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { load } from "@tauri-apps/plugin-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History, LogOut,
+  AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History, ListChecks, LogOut,
   Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
   Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Star, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut
@@ -1735,6 +1735,14 @@ export default function App() {
   const [composerFiles, setComposerFiles] = useState<ComposerAttachment[]>([]);
   const [accountUploadLimitBytes, setAccountUploadLimitBytes] = useState(20 * 1024 * 1024);
   const [composerPicker, setComposerPicker] = useState<"gif" | "emoji" | null>(null);
+  const [composerPlusOpen, setComposerPlusOpen] = useState(false);
+  const [pollComposerOpen, setPollComposerOpen] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollAnswers, setPollAnswers] = useState(["", ""]);
+  const [pollDuration, setPollDuration] = useState(24);
+  const [pollMultiSelect, setPollMultiSelect] = useState(false);
+  const [pollSubmitting, setPollSubmitting] = useState(false);
+  const [pollError, setPollError] = useState("");
   const [composerAccountMenuOpen, setComposerAccountMenuOpen] = useState(false);
   const [composerSendingAccountId, setComposerSendingAccountId] = useState<string | null>(null);
   const [channelLoadedViaAccount, setChannelLoadedViaAccount] = useState<DiscordUser | null>(null);
@@ -4985,6 +4993,64 @@ export default function App() {
     }
   };
 
+  const submitPoll = async () => {
+    if (!selectedChannel || pollSubmitting) return;
+    const question = pollQuestion.trim();
+    const answers = pollAnswers.map(answer => answer.trim()).filter(Boolean);
+    if (!question || answers.length < 2) { setPollError("Add a question and at least two answers."); return; }
+    setPollSubmitting(true);
+    setPollError("");
+    try {
+      const asToken = activeComposerAccount.user.id !== me?.id && activeComposerAccount.token ? activeComposerAccount.token : null;
+      const sent = await invoke<DiscordMessage>("create_poll", {
+        channelId: selectedChannel.id, question, answers, duration: pollDuration,
+        allowMultiselect: pollMultiSelect, asToken,
+      });
+      if (sent?.id && selectedChannelRef.current?.id === selectedChannel.id) {
+        setMessages(previous => previous.some(item => item.id === sent.id) ? previous : [...previous, sent]);
+        messageHistoryRef.current[selectedChannel.id] = [...(messageHistoryRef.current[selectedChannel.id] || []), sent];
+        void writeCachedMessages(selectedChannel.id, messageHistoryRef.current[selectedChannel.id]);
+        scrollToBottom();
+      }
+      setPollComposerOpen(false);
+      setComposerPlusOpen(false);
+      setPollQuestion("");
+      setPollAnswers(["", ""]);
+      setPollDuration(24);
+      setPollMultiSelect(false);
+      notify("Poll posted");
+    } catch (error) {
+      setPollError(String(error));
+    } finally {
+      setPollSubmitting(false);
+    }
+  };
+
+  const refreshPollMessage = async (channelId: string, messageId: string) => {
+    try {
+      const updated = await invoke<DiscordMessage>("get_message", { channelId, messageId });
+      if (updated?.id) {
+        setMessages(previous => previous.map(item => item.id === messageId ? updated : item));
+        const history = messageHistoryRef.current[channelId] || [];
+        messageHistoryRef.current[channelId] = history.map(item => item.id === messageId ? updated : item);
+        void writeCachedMessages(channelId, messageHistoryRef.current[channelId]);
+      }
+    } catch (error) {
+      notify("Poll changed, but results could not be refreshed: " + error);
+    }
+  };
+
+  const votePoll = async (channelId: string, messageId: string, answerIds: number[]) => {
+    await invoke("vote_poll", { channelId, messageId, answerIds });
+    await refreshPollMessage(channelId, messageId);
+  };
+
+  const endPoll = async (channelId: string, messageId: string) => {
+    await invoke("end_poll", { channelId, messageId });
+    await refreshPollMessage(channelId, messageId);
+    notify("Poll ended");
+  };
+
   const toggleMessageReaction = async (
     channelId: string,
     message: DiscordMessage,
@@ -7160,7 +7226,7 @@ export default function App() {
                             {m.edited_timestamp && <span className="msg-time">(edited)</span>}
                             {m.deleted_at && <span className="deleted-message-label">DELETED</span>}
                           </div>
-                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
+                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} onPollVote={votePoll} onPollEnd={endPoll} currentUserId={me?.id} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
                         </div>
                         <MsgActions message={m} onReact={emoji => void toggleMessageReaction(selectedChannel!.id, m, emoji)} />
                       </div>
@@ -7344,7 +7410,13 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <button className="plus-btn" title={`Attach files — ${uploadLimitLabel} account limit`} onClick={() => void chooseComposerFiles()} disabled={!selectedChannel || officialDiscordDm || !canSend}>+</button>
+                <div className="composer-plus-wrap">
+                  <button type="button" className={`plus-btn ${composerPlusOpen ? "open" : ""}`} title="Add to message" aria-label="Add to message" aria-expanded={composerPlusOpen} onClick={() => setComposerPlusOpen(open => !open)} disabled={!selectedChannel || officialDiscordDm || !canSend || !!editingMessageId}>+</button>
+                  {composerPlusOpen && <div className="composer-plus-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { setComposerPlusOpen(false); void chooseComposerFiles(); }}><span className="composer-plus-menu-icon"><Download size={16} /></span><span><strong>Upload a File</strong><small>Attach files to your message</small></span></button>
+                    <button type="button" role="menuitem" onClick={() => { setComposerPlusOpen(false); setPollError(""); setPollComposerOpen(true); }}><span className="composer-plus-menu-icon"><ListChecks size={16} /></span><span><strong>Create Poll</strong><small>Ask a question and collect votes</small></span></button>
+                  </div>}
+                </div>
                 {composerFiles.length > 0 && (
                   <div className="composer-attachments" aria-label={`Attachments to send, up to ${uploadLimitLabel}`}>
                     {composerFiles.map((file, index) => (
@@ -7555,6 +7627,23 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {pollComposerOpen && (
+                <div className="poll-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !pollSubmitting) setPollComposerOpen(false); }}>
+                  <section className="poll-modal" role="dialog" aria-modal="true" aria-labelledby="poll-modal-title">
+                    <header><div><span className="poll-modal-kicker">NEW POLL</span><h2 id="poll-modal-title">Create a poll</h2></div><button type="button" onClick={() => setPollComposerOpen(false)} disabled={pollSubmitting} aria-label="Close poll editor"><X size={18} /></button></header>
+                    <label className="poll-field"><span>Question</span><input maxLength={300} value={pollQuestion} onChange={event => setPollQuestion(event.target.value)} placeholder="What should we do next?" autoFocus /></label>
+                    <div className="poll-answers-editor"><div className="poll-editor-label"><span>Answers</span><small>{pollAnswers.filter(answer => answer.trim()).length}/10</small></div>
+                      {pollAnswers.map((answer, index) => <div className="poll-answer-input" key={index}><span>{index + 1}</span><input maxLength={55} value={answer} onChange={event => setPollAnswers(current => current.map((item, i) => i === index ? event.target.value : item))} placeholder={"Answer " + (index + 1)} /><button type="button" aria-label={"Remove answer " + (index + 1)} disabled={pollAnswers.length <= 2} onClick={() => setPollAnswers(current => current.filter((_, i) => i !== index))}><X size={14} /></button></div>)}
+                      {pollAnswers.length < 10 && <button type="button" className="poll-add-answer" onClick={() => setPollAnswers(current => [...current, ""])}>+ Add answer</button>}
+                    </div>
+                    <div className="poll-editor-row"><label className="poll-field"><span>Poll duration</span><select value={pollDuration} onChange={event => setPollDuration(Number(event.target.value))}><option value={1}>1 hour</option><option value={4}>4 hours</option><option value={8}>8 hours</option><option value={24}>24 hours</option><option value={72}>3 days</option><option value={168}>1 week</option></select></label>
+                      <label className="poll-multiselect"><input type="checkbox" checked={pollMultiSelect} onChange={event => setPollMultiSelect(event.target.checked)} /><span><strong>Multiple answers</strong><small>Allow voters to select more than one</small></span></label>
+                    </div>
+                    {pollError && <p className="poll-form-error" role="alert">{pollError}</p>}
+                    <footer><button type="button" className="poll-cancel-btn" onClick={() => setPollComposerOpen(false)} disabled={pollSubmitting}>Cancel</button><button type="button" className="poll-submit-btn" onClick={() => void submitPoll()} disabled={pollSubmitting || !pollQuestion.trim() || pollAnswers.filter(answer => answer.trim()).length < 2}>{pollSubmitting ? <Loader2 size={15} className="spinning" /> : <ListChecks size={15} />} Post Poll</button></footer>
+                  </section>
+                </div>
+              )}
           </div>
         </section>
         )}
