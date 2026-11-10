@@ -42,20 +42,17 @@ const makeDraft = (guild: GuildSettingsData): Draft => ({
 });
 
 export default function GuildSettings({
-  guild, channels, canManageGuild, invoke, onClose, onLeave,
+  guild, channels, canManageGuild, invoke, onClose,
 }: {
   guild: DiscordGuild;
   channels: DiscordChannel[];
   canManageGuild: boolean;
   invoke: <T,>(command: string, args?: Record<string, unknown>) => Promise<T>;
   onClose: () => void;
-  onLeave: () => void;
 }) {
   const [data, setData] = useState<GuildSettingsData>(guild);
   const [draft, setDraft] = useState<Draft>(() => makeDraft(guild));
   const [tab, setTab] = useState<"overview" | "moderation" | "privacy" | "info">("overview");
-  const [leaveConfirm, setLeaveConfirm] = useState(false);
-  const [leaving, setLeaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -85,14 +82,6 @@ export default function GuildSettings({
   const textChannels = useMemo(() => channels.filter(channel => channel.type === 0 || channel.type === 5), [channels]);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft(current => ({ ...current, [key]: value }));
   const changed = JSON.stringify(draft) !== JSON.stringify(makeDraft(data)) || bannerData !== null;
-
-  const leaveServer = async () => {
-    if (leaving) return;
-    setLeaving(true);
-    setError("");
-    try { await invoke("leave_guild", { guildId: guild.id }); onLeave(); }
-    catch (reason) { setError(String(reason).replace(/^Error: /, "")); setLeaving(false); setLeaveConfirm(false); }
-  };
 
   const save = async () => {
     if (!canManageGuild || saving) return;
@@ -257,12 +246,6 @@ export default function GuildSettings({
                     <div><small>Boosts</small><strong>{data.premium_subscription_count ?? "Unavailable"}</strong></div>
                     <div className="full"><small>Features</small><strong>{features.length ? features.join(" · ") : "No special features reported"}</strong></div>
                   </div>
-                  <button type="button" className="guild-settings-danger" onClick={() => setLeaveConfirm(true)}><AlertTriangle size={15} /> Leave Server</button>
-                  {leaveConfirm && <div className="guild-settings-confirm" role="alertdialog" aria-modal="true" aria-label="Confirm leaving server">
-                    <strong>Leave {guild.name}?</strong>
-                    <p>You will need a new invite to rejoin this server. This does not delete the server.</p>
-                    <div><button type="button" disabled={leaving} onClick={() => setLeaveConfirm(false)}>Cancel</button><button type="button" disabled={leaving} onClick={() => void leaveServer()}>{leaving ? "Leaving…" : "Leave Server"}</button></div>
-                  </div>}
                 </>
               )}
               {error && <div className="guild-settings-error" role="alert">{error}</div>}
