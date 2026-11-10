@@ -775,8 +775,8 @@ mod message_request_tests {
     }
 
     #[test]
-    fn timestamp_is_a_fallback_when_request_status_is_missing() {
-        assert!(is_message_request(&json!({
+    fn timestamp_alone_does_not_identify_a_pending_request() {
+        assert!(!is_message_request(&json!({
             "is_message_request_timestamp": "2026-11-01T00:00:00Z"
         })));
     }
