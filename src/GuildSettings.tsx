@@ -57,6 +57,7 @@ export default function GuildSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [bannerData, setBannerData] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -74,11 +75,13 @@ export default function GuildSettings({
     return () => { active = false; };
   }, [guild.id, invoke]);
 
-  const banner = guildBannerUrl(data);
+  const banner = bannerData || guildBannerUrl(data);
   const features = data.features || [];
+  const canSetBanner = features.includes("BANNER");
+  const canSetAnimatedBanner = features.includes("ANIMATED_BANNER");
   const textChannels = useMemo(() => channels.filter(channel => channel.type === 0 || channel.type === 5), [channels]);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft(current => ({ ...current, [key]: value }));
-  const changed = JSON.stringify(draft) !== JSON.stringify(makeDraft(data));
+  const changed = JSON.stringify(draft) !== JSON.stringify(makeDraft(data)) || bannerData !== null;
 
   const save = async () => {
     if (!canManageGuild || saving) return;
@@ -99,11 +102,13 @@ export default function GuildSettings({
         safety_alerts_channel_id: draft.safety_alerts_channel_id || null,
         preferred_locale: draft.preferred_locale.trim() || "en-US",
         premium_progress_bar_enabled: draft.premium_progress_bar_enabled,
+        banner: bannerData || undefined,
       };
       const updated = await invoke<GuildSettingsData>("update_guild_settings", { guildId: guild.id, settings: payload });
       const next = { ...data, ...updated, ...payload };
       setData(next);
       setDraft(makeDraft(next));
+      setBannerData(null);
     } catch (reason) {
       setError(String(reason).replace(/^Error: /, ""));
     } finally {
@@ -140,6 +145,24 @@ export default function GuildSettings({
                 {banner ? <img src={banner} alt="" /> : <div className="guild-settings-banner-empty">No server banner configured</div>}
                 {banner && data.banner?.startsWith("a_") && <span className="guild-settings-banner-tag">ANIMATED GIF</span>}
               </div>
+              {canManageGuild && canSetBanner && (
+                <label className="guild-settings-upload">
+                  <span>{bannerData ? "Banner image selected · save to apply" : "Change server banner"}</span>
+                  <input type="file" accept="image/png,image/jpeg,image/gif" onChange={event => {
+                    const file = event.currentTarget.files?.[0];
+                    event.currentTarget.value = "";
+                    if (!file) return;
+                    if (!["image/png", "image/jpeg", "image/gif"].includes(file.type)) { setError("Choose a PNG, JPEG, or GIF image."); return; }
+                    if (file.size > 10 * 1024 * 1024) { setError("Banner files must be 10 MB or smaller."); return; }
+                    if (file.type === "image/gif" && !canSetAnimatedBanner) { setError("This server does not have the ANIMATED_BANNER feature."); return; }
+                    const reader = new FileReader();
+                    reader.onload = () => { if (typeof reader.result === "string") { setBannerData(reader.result); setError(""); } };
+                    reader.onerror = () => setError("The selected banner could not be read.");
+                    reader.readAsDataURL(file);
+                  }} />
+                  <small>{canSetAnimatedBanner ? "PNG, JPEG, or animated GIF supported." : "PNG or JPEG supported. Animated GIF requires ANIMATED_BANNER."}</small>
+                </label>
+              )}
               <div className="guild-settings-meta">
                 {typeof data.approximate_member_count === "number" && <span className="guild-settings-chip">{data.approximate_member_count.toLocaleString()} members</span>}
                 {typeof data.approximate_presence_count === "number" && <span className="guild-settings-chip">{data.approximate_presence_count.toLocaleString()} online</span>}
