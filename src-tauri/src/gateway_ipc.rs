@@ -27,11 +27,18 @@ impl GatewayIpc {
         let listener = StdTcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
-        let listener = TcpListener::from_std(listener)?;
         let token = Uuid::new_v4().to_string();
         let (events, _) = broadcast::channel(IPC_QUEUE_CAPACITY);
+        let server_token = token.clone();
+        let server_events = events.clone();
 
-        tokio::spawn(run_server(listener, token.clone(), events.clone()));
+        // Enter Tauri's managed async runtime before converting the std listener.
+        tauri::async_runtime::spawn(async move {
+            match TcpListener::from_std(listener) {
+                Ok(listener) => run_server(listener, server_token, server_events).await,
+                Err(error) => log::error!("Could not initialize Gateway IPC listener: {error}"),
+            }
+        });
         Ok(Self { port, token, events })
     }
 
