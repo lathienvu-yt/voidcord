@@ -1,19 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listenGatewayAware as listen } from "./gatewayIpc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { load } from "@tauri-apps/plugin-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History,
+  AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History, ListChecks, LogOut,
   Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
   Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Star, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut
 } from "lucide-react";
 
 import {
-  avatarDecorationUrl, avatarUrl, bannerUrl, displayName, formatDiscriminator, isVerifiedBot, formatTimestamp, guildIconUrl, primaryGuildBadgeUrl,
+  avatarDecorationUrl, avatarUrl, bannerUrl, displayName, formatDiscriminator, isVerifiedBot, formatTimestamp, guildIconUrl, guildBannerUrl, primaryGuildBadgeUrl,
   DiscordChannel, DiscordGuild, DiscordMessage, DiscordReaction, DiscordRelationship, DiscordUser,
   CHANNEL_TYPE_CATEGORY, CHANNEL_TYPE_DM, CHANNEL_TYPE_GROUP_DM, CHANNEL_TYPE_TEXT, CHANNEL_TYPE_VOICE,
   CHANNEL_TYPE_ANNOUNCEMENT, CHANNEL_TYPE_STAGE, CHANNEL_TYPE_FORUM,
@@ -24,6 +25,7 @@ import { DiscordEmbedView } from "./DiscordEmbedView";
 import { DiscordComponents } from "./DiscordComponents";
 import InteractionModal from "./InteractionModal";
 import SettingsMenu from "./SettingsMenu";
+import GuildSettings from "./GuildSettings";
 import {
   deleteDeletedMessage, deleteEditedMessage, markCachedMessageDeleted, readArchivedMedia, readCachedAppData, readCachedDraft,
   readCachedMessages, readDeletedChannels, readDeletedMessages, readEditedMessages, writeArchivedMedia, writeCachedAppData,
@@ -1733,6 +1735,14 @@ export default function App() {
   const [composerFiles, setComposerFiles] = useState<ComposerAttachment[]>([]);
   const [accountUploadLimitBytes, setAccountUploadLimitBytes] = useState(20 * 1024 * 1024);
   const [composerPicker, setComposerPicker] = useState<"gif" | "emoji" | null>(null);
+  const [composerPlusOpen, setComposerPlusOpen] = useState(false);
+  const [pollComposerOpen, setPollComposerOpen] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollAnswers, setPollAnswers] = useState(["", ""]);
+  const [pollDuration, setPollDuration] = useState(24);
+  const [pollMultiSelect, setPollMultiSelect] = useState(false);
+  const [pollSubmitting, setPollSubmitting] = useState(false);
+  const [pollError, setPollError] = useState("");
   const [composerAccountMenuOpen, setComposerAccountMenuOpen] = useState(false);
   const [composerSendingAccountId, setComposerSendingAccountId] = useState<string | null>(null);
   const [channelLoadedViaAccount, setChannelLoadedViaAccount] = useState<DiscordUser | null>(null);
@@ -1751,6 +1761,11 @@ export default function App() {
   const [gifQuery, setGifQuery] = useState("");
   const [gifUrl, setGifUrl] = useState("");
   const [memberOpen, setMemberOpen] = useState(true);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+  const [quickSwitcherQuery, setQuickSwitcherQuery] = useState("");
+  const [quickSwitcherActiveIndex, setQuickSwitcherActiveIndex] = useState(0);
+  const quickSwitcherInputRef = useRef<HTMLInputElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTheme, setSettingsTheme] = useState<"dark" | "light">("dark");
   const [settingsTab, setSettingsTab] = useState<"account" | "themes" | "notifications" | "plugins" | "discord">("discord");
@@ -1779,6 +1794,12 @@ export default function App() {
   const [captchaPrompt, setCaptchaPrompt] = useState<CaptchaPromptState | null>(null);
   const [mediaLensActive, setMediaLensActive] = useState(false);
   const [serverDialogOpen, setServerDialogOpen] = useState(false);
+  const [guildSettingsOpen, setGuildSettingsOpen] = useState(false);
+  const [serverMenuOpen, setServerMenuOpen] = useState(false);
+  const [leaveServerConfirmOpen, setLeaveServerConfirmOpen] = useState(false);
+  const [leaveServerBusy, setLeaveServerBusy] = useState(false);
+  const [leaveServerError, setLeaveServerError] = useState("");
+  const [settingsMenuInitialTab, setSettingsMenuInitialTab] = useState<"appearance" | "privacy" | "notifications">("appearance");
   const [serverDialogMode, setServerDialogMode] = useState<"join" | "create">("join");
   const [serverInvite, setServerInvite] = useState("");
   const [newServerName, setNewServerName] = useState("");
@@ -1807,6 +1828,15 @@ export default function App() {
   const voiceHandshakeRef = useRef<VoiceHandshake | null>(null);
   const voiceAttemptRef = useRef(0);
   const [query, setQuery] = useState("");
+  const quickSwitchResults = useMemo(() => {
+    const term = quickSwitcherQuery.trim().toLowerCase();
+    const results: Array<{ id: string; kind: "server" | "channel" | "dm"; title: string; subtitle: string; guild?: DiscordGuild; channel?: DiscordChannel }> = [];
+    for (const guild of guilds) results.push({ id: `guild:${guild.id}`, kind: "server", title: guild.name, subtitle: "Server", guild });
+    for (const channel of channels) results.push({ id: `channel:${channel.id}`, kind: "channel", title: channelDisplayName(channel), subtitle: selectedGuild?.name || "Current server", channel });
+    for (const channel of dmChannels) results.push({ id: `dm:${channel.id}`, kind: "dm", title: channelDisplayName(channel), subtitle: channel.type === CHANNEL_TYPE_GROUP_DM ? "Group DM" : "Direct message", channel });
+    const unique = results.filter((item, index) => results.findIndex(other => other.id === item.id) === index);
+    return (term ? unique.filter(item => `${item.title} ${item.subtitle}`.toLowerCase().includes(term)) : unique).slice(0, 40);
+  }, [guilds, channels, dmChannels, selectedGuild?.name, quickSwitcherQuery]);
   const [online, setOnline] = useState(navigator.onLine);
   const [gatewayStatus, setGatewayStatus] = useState<"connecting" | "connected" | "reconnecting" | "offline">(
     navigator.onLine ? "connecting" : "offline",
@@ -1889,6 +1919,8 @@ export default function App() {
   const mediaViewerRef = useRef<HTMLDivElement>(null);
   guildMembersRef.current = guildMembers;
   const cachedCommandsRef = useRef<any[]>([]);
+  const applicationCommandCacheRef = useRef(new Map<string, { expiresAt: number; commands: any[] }>());
+  const applicationCommandInFlightRef = useRef(new Map<string, Promise<any[]>>());
   
 
   const invoke = useCallback(async <T,>(command: string, args?: Record<string, unknown>): Promise<T> => {
@@ -2010,7 +2042,6 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // When opening a bot DM, its bot user ID is also its application ID.
   useEffect(() => {
     if (!selectedChannel || selectedChannel.type !== CHANNEL_TYPE_DM) return;
     const botRecipient = selectedChannel.recipients?.find(user => user.bot && user.id !== me?.id);
@@ -2069,59 +2100,76 @@ export default function App() {
       setSlashCommandSearchStatus("Loading registered slash commands…");
     }
 
+    // Only query applications usable in the selected context: the bot in this DM,
+    // or bots in the currently selected guild. Never sweep all DMs or stale IDs.
     const applicationIds = new Set<string>();
-    // The bot's user ID is its application ID. Discover likely candidates from known bot users.
     if (selectedChannel.type === CHANNEL_TYPE_DM) {
       const bot = selectedChannel.recipients?.find(user => user.bot && user.id !== me?.id);
-      if (bot) applicationIds.add(bot.id);
-    }
-    for (const dm of dmChannels) {
-      if (dm.type === CHANNEL_TYPE_DM) {
-        const bot = dm.recipients?.find(user => user.bot);
-        if (bot?.id) applicationIds.add(bot.id);
+      if (bot?.id) applicationIds.add(String(bot.id));
+    } else if (selectedChannel.guild_id) {
+      for (const member of guildMembers) {
+        const user = (member as any).user || member;
+        if (user?.bot && user?.id) applicationIds.add(String(user.id));
       }
     }
-    for (const member of guildMembers) {
-      const user = (member as any).user || member;
-      if (user?.bot && user?.id) applicationIds.add(String(user.id));
-    }
-    try {
-      const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
-      if (Array.isArray(saved)) saved.forEach((id: unknown) => {
-        if (typeof id === "string" && /^\d{15,22}$/.test(id)) applicationIds.add(id);
-      });
-    } catch {}
-    const ids = [...applicationIds].slice(0, 30);
+    const ids = [...applicationIds].slice(0, 10);
 
     const timer = window.setTimeout(async () => {
       try {
-        const results = await Promise.all(ids.map(async applicationId => {
-          const requests: Promise<any>[] = [
-            invoke<any>("get_global_application_commands", { applicationId, withLocalizations: true })
-              .then(value => ({ value })).catch(() => null),
-          ];
-          if (selectedChannel.guild_id) {
-            requests.push(invoke<any>("get_guild_application_commands", {
-              applicationId, guildId: selectedChannel.guild_id, withLocalizations: true,
-            }).then(value => ({ value })).catch(() => null));
-          }
-          return Promise.all(requests);
-        }));
-        if (cancelled) return;
         const fetched: any[] = [];
-        for (let index = 0; index < results.length; index++) {
-          for (const result of results[index]) {
-            if (!result) continue;
-            const payload = result.value?.data ?? result.value;
-            const entries = Array.isArray(payload) ? payload
-              : Array.isArray(payload?.application_commands) ? payload.application_commands
-              : Array.isArray(payload?.commands) ? payload.commands : [];
-            fetched.push(...entries
-              .filter((entry: any) => entry && typeof entry === "object" && entry.id && typeof entry.name === "string")
-              .filter((entry: any) => entry.type === undefined || entry.type === 1)
-              .map((entry: any) => ({ ...entry, id: String(entry.id), application_id: String(entry.application_id || ids[index]) })));
+        const normalize = (response: any, applicationId: string) => {
+          const payload = response?.data ?? response;
+          const entries = Array.isArray(payload) ? payload
+            : Array.isArray(payload?.application_commands) ? payload.application_commands
+            : Array.isArray(payload?.commands) ? payload.commands : [];
+          return entries
+            .filter((entry: any) => entry && typeof entry === "object" && entry.id && typeof entry.name === "string")
+            .filter((entry: any) => entry.type === undefined || entry.type === 1)
+            .map((entry: any) => ({ ...entry, id: String(entry.id), application_id: String(entry.application_id || applicationId) }));
+        };
+        const fetchScope = (key: string, command: string, args: Record<string, unknown>, applicationId: string) => {
+          const cached = applicationCommandCacheRef.current.get(key);
+          if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.commands);
+          const pending = applicationCommandInFlightRef.current.get(key);
+          if (pending) return pending;
+          const request = invoke<any>(command, args)
+            .then(response => normalize(response, applicationId))
+            .catch(() => [])
+            .then(commands => {
+              // Cache empty/error results briefly too, so inaccessible apps are not hammered on every keystroke.
+              applicationCommandCacheRef.current.set(key, {
+                expiresAt: Date.now() + (commands.length ? 5 * 60_000 : 60_000),
+                commands,
+              });
+              return commands;
+            })
+            .finally(() => applicationCommandInFlightRef.current.delete(key));
+          applicationCommandInFlightRef.current.set(key, request);
+          return request;
+        };
+
+        // One application at a time; at most one global and one selected-guild fetch per app.
+        for (const applicationId of ids) {
+          if (cancelled) return;
+          const globalCommands = await fetchScope(
+            `global:${me?.id || "anonymous"}:${applicationId}`,
+            "get_global_application_commands",
+            { applicationId, withLocalizations: true },
+            applicationId,
+          );
+          fetched.push(...globalCommands);
+          if (cancelled) return;
+          if (selectedChannel.guild_id) {
+            const guildCommands = await fetchScope(
+              `guild:${me?.id || "anonymous"}:${selectedChannel.guild_id}:${applicationId}`,
+              "get_guild_application_commands",
+              { applicationId, guildId: selectedChannel.guild_id, withLocalizations: true },
+              applicationId,
+            );
+            fetched.push(...guildCommands);
           }
         }
+        if (cancelled) return;
         const merged = new Map<string, any>();
         for (const command of cachedCommandsRef.current) {
           if (command?.id && command?.application_id) merged.set(command.application_id + ":" + command.id, command);
@@ -2137,7 +2185,7 @@ export default function App() {
           setSlashCommands(cachedHits.slice(0, 50));
           setSlashCommandSearchStatus(cachedHits.length
             ? "⚡ Showing cached commands"
-            : ids.length ? "No matching registered slash commands found." : "No bot application IDs discovered yet. Open a bot DM or use Developer Tools → Application Commands.");
+            : ids.length ? "No matching registered slash commands found." : "No bot applications available in this channel.");
         }
       } catch (error) {
         if (!cancelled) {
@@ -2145,9 +2193,9 @@ export default function App() {
           setSlashCommandSearchStatus(cachedHits.length ? "⚡ Offline — showing cached commands" : "Could not load commands: " + String(error));
         }
       }
-    }, cachedHits.length ? 250 : 120);
+    }, cachedHits.length ? 300 : 350);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [draft, selectedChannel?.id, selectedChannel?.guild_id, selectedChannel?.type, selectedSlashCommand, invoke, dmChannels, guildMembers, me?.id]);
+  }, [draft, selectedChannel?.id, selectedChannel?.guild_id, selectedChannel?.type, selectedSlashCommand, invoke, guildMembers, me?.id]);
 
   const refreshAudioDevices = useCallback(async () => {
     setAudioDevicesLoading(true);
@@ -2428,6 +2476,55 @@ export default function App() {
     }
   };
 
+  const createServerInvite = async () => {
+    if (!selectedGuild) return;
+    try {
+      const inviteCode = await invoke<string>("get_or_create_guild_invite", {
+        guildId: selectedGuild.id,
+        asToken: null,
+      });
+      const inviteUrl = `https://discord.gg/${inviteCode}`;
+      await navigator.clipboard.writeText(inviteUrl);
+      notify("Server invite copied");
+    } catch (error) {
+      notify(`Could not create or copy server invite: ${error}`);
+    }
+  };
+
+  const leaveSelectedGuild = async () => {
+    if (!selectedGuild || leaveServerBusy) return;
+    const guildId = selectedGuild.id;
+    setLeaveServerBusy(true);
+    setLeaveServerError("");
+    try {
+      await invoke("leave_guild", { guildId });
+      setLeaveServerConfirmOpen(false);
+      setServerMenuOpen(false);
+      setGuildSettingsOpen(false);
+      setGuilds(current => current.filter(guild => guild.id !== guildId));
+      ++guildLoadRequest.current;
+      ++channelLoadRequest.current;
+      setIsDmView(true);
+      setSelectedGuild(null);
+      selectedGuildRef.current = null;
+      setChannels([]);
+      setSelectedChannel(null);
+      selectedChannelRef.current = null;
+      setMessages([]);
+      setLeaveServerBusy(false);
+    } catch (error) {
+      setLeaveServerError(String(error).replace(/^Error: /, ""));
+      setLeaveServerBusy(false);
+    }
+  };
+
+  const openUserSettingsTab = (tab: "privacy" | "notifications") => {
+    setServerMenuOpen(false);
+    setSettingsMenuInitialTab(tab);
+    setSettingsTab("discord");
+    setSettingsOpen(true);
+  };
+
   const submitServerAction = async (event: React.FormEvent) => {
     event.preventDefault();
     setServerActionError("");
@@ -2621,7 +2718,7 @@ export default function App() {
     };
   }, [gatewayStatus, gameDetectionEnabled, gameProcessMappings, selfPresence.status, selfPresence.customStatus, notify, dmChannels, guilds, relationships, savedAccounts]);
 
-  // Pre-fetch data worker: loads up to 20 channels (top DMs + guild text channels), presences, and application commands
+  // Lightweight background message prefetch; command discovery stays lazy until slash autocomplete is used.
   const prefetchRunningRef = useRef(false);
   useEffect(() => {
     if (!me?.id || prefetchRunningRef.current || !navigator.onLine) return;
@@ -2630,11 +2727,11 @@ export default function App() {
     prefetchRunningRef.current = true;
 
     const runPrefetch = async () => {
-      // 1. Gather up to 20 channels (top DMs + first text channel of top guilds)
+      // 1. Gather up to 5 channels (top DMs + first text channel of top guilds)
       const targetChannels: DiscordChannel[] = [];
-      targetChannels.push(...dmChannels.slice(0, 10));
+      targetChannels.push(...dmChannels.slice(0, 3));
 
-      for (const g of guilds.slice(0, 10)) {
+      for (const g of guilds.slice(0, 2)) {
         try {
           const cached = await readCachedAppData<{ channels: DiscordChannel[] }>(`guild-data:${g.id}`);
           if (cached?.channels) {
@@ -2645,7 +2742,7 @@ export default function App() {
       }
 
       // Pre-fetch messages for gathered channels in the background
-      for (const ch of targetChannels.slice(0, 20)) {
+      for (const ch of targetChannels.slice(0, 5)) {
         try {
           const asToken = ch.account_id
             ? savedAccounts.find(account => account.user.id === ch.account_id)?.token
@@ -2658,36 +2755,15 @@ export default function App() {
             void writeCachedMessages(ch.id, msgs);
           }
         } catch {}
-        await new Promise(r => setTimeout(r, 60));
+        await new Promise(r => setTimeout(r, 180));
       }
 
-      // 2. Discover bot IDs across DMs and relationships for slash commands pre-fetch
-      const botIds = new Set<string>();
-      dmChannels.forEach(dm => dm.recipients?.forEach(u => { if (u.bot) botIds.add(u.id); }));
-      relationships.forEach(rel => { if (rel.user?.bot) botIds.add(rel.user.id); });
 
-      // Add common/popular bots (Pancake, Midjourney, Carl, Dyno, Tupperbox)
-      ["239631525350604801", "936929561302675456", "235148963517071360", "155149108183695360", "431544605203955712"].forEach(id => botIds.add(id));
-
-      try {
-        const saved = JSON.parse(localStorage.getItem("voidcord:application-command-app-ids") || "[]");
-        if (Array.isArray(saved)) saved.forEach(id => { if (typeof id === "string") botIds.add(id); });
-      } catch {}
-
-      const allBotIds = [...botIds].slice(0, 15);
-      try {
-        localStorage.setItem("voidcord:application-command-app-ids", JSON.stringify(allBotIds));
-      } catch {}
-
-      // Pre-fetch global application commands for discovered bots
-      await Promise.allSettled(allBotIds.map(appId =>
-        invoke<any>("get_global_application_commands", { applicationId: appId, withLocalizations: true })
-      ));
     };
 
     const timer = setTimeout(() => {
       void runPrefetch();
-    }, 1800);
+    }, 3500);
 
     return () => clearTimeout(timer);
   }, [me?.id, dmChannels.length, guilds.length]);
@@ -2725,12 +2801,32 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const handleQuickSwitcherShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k" || event.repeat) return;
+      event.preventDefault();
+      setQuickSwitcherQuery("");
+      setQuickSwitcherActiveIndex(0);
+      setQuickSwitcherOpen(true);
+    };
+    window.addEventListener("keydown", handleQuickSwitcherShortcut);
+    return () => window.removeEventListener("keydown", handleQuickSwitcherShortcut);
+  }, []);
+
+  useEffect(() => {
+    if (!quickSwitcherOpen) return;
+    const frame = window.requestAnimationFrame(() => quickSwitcherInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [quickSwitcherOpen]);
+
+  useEffect(() => {
     if (!settingsOpen && !serverDialogOpen && !mediaViewer) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         if (mediaViewer) setMediaViewer(null);
         else if (serverDialogOpen && !serverActionBusy) setServerDialogOpen(false);
         else setSettingsOpen(false);
+      } else if (event.key === "Escape" && quickSwitcherOpen) {
+        setQuickSwitcherOpen(false);
       } else if (mediaViewer?.kind === "image" && (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "0")) {
         event.preventDefault();
         if (event.key === "0") setMediaZoom(1);
@@ -3506,6 +3602,35 @@ export default function App() {
       }
     ).then(u => unsubs.push(u));
 
+    const refreshPollFromGateway = async (payload: { channel_id: string; message_id: string }) => {
+      if (!payload?.channel_id || !payload?.message_id || payload.channel_id !== selectedChannelRef.current?.id) return;
+      const cached = messageHistoryRef.current[payload.channel_id] || [];
+      if (!cached.some(message => message.id === payload.message_id && message.poll)) return;
+      try {
+        const updated = await invoke<DiscordMessage>("get_message", {
+          channelId: payload.channel_id,
+          messageId: payload.message_id,
+        });
+        if (!updated?.poll) return;
+        const history = messageHistoryRef.current[payload.channel_id] || [];
+        messageHistoryRef.current[payload.channel_id] = history.map(message => message.id === updated.id ? updated : message);
+        void writeCachedMessages(payload.channel_id, messageHistoryRef.current[payload.channel_id]);
+        if (selectedChannelRef.current?.id === payload.channel_id) {
+          setMessages(previous => previous.map(message => message.id === updated.id ? updated : message));
+        }
+      } catch (error) {
+        console.warn("Could not refresh poll results after a vote event", error);
+      }
+    };
+    listen<{ channel_id: string; message_id: string }>(
+      "discord:message_poll_vote_add",
+      ({ payload }) => { void refreshPollFromGateway(payload); },
+    ).then(u => unsubs.push(u));
+    listen<{ channel_id: string; message_id: string }>(
+      "discord:message_poll_vote_remove",
+      ({ payload }) => { void refreshPollFromGateway(payload); },
+    ).then(u => unsubs.push(u));
+
     listen<{ channel_id: string; message_id: string; message?: DiscordMessage }>(
       "discord:message_delete",
       ({ payload }) => {
@@ -3688,7 +3813,7 @@ export default function App() {
       guildMembersRef.current = merged;
       setGuildMembers(merged);
       pendingGuildDataRef.current.set(guildId, {
-        gatewayListenerStateRef.current.channels,
+        channels: gatewayListenerStateRef.current.channels,
         roles: gatewayListenerStateRef.current.guildRoles,
         memberRoles: currentGuildMemberRolesRef.current,
         guildMembers: merged,
@@ -3787,6 +3912,19 @@ export default function App() {
     setHasOlderMessages(false);
     setSelectedGuild(guild);
     selectedGuildRef.current = guild;
+    // Fetch the authoritative guild payload (including premium_tier) as soon
+    // as this server is opened. Keep navigation responsive while it loads.
+    if (navigator.onLine) {
+      void invoke<DiscordGuild>("get_guild_settings", { guildId: guild.id })
+        .then(details => {
+          if (!details || guildLoadRequest.current !== requestId) return;
+          const refreshedGuild = { ...guild, ...details };
+          selectedGuildRef.current = refreshedGuild;
+          setSelectedGuild(current => current?.id === guild.id ? refreshedGuild : current);
+          setGuilds(current => current.map(item => item.id === guild.id ? { ...item, ...details } : item));
+        })
+        .catch(error => console.warn("Could not refresh server boost metadata", error));
+    }
     setSelectedChannel(null);
     setMessages([]);
     setMsgLoading(false);
@@ -3990,6 +4128,9 @@ export default function App() {
   }, [channels, dmChannels, forwardTarget?.channel.id, guilds, me?.id, selectedChannel?.id]);
 
   const selectChannel = async (channel: DiscordChannel) => {
+    // Re-selecting the active channel must be a no-op: clearing/reloading its
+    // messages remounts the message list and replays the channel-entry animation.
+    if (selectedChannelRef.current?.id === channel.id || selectedChannel?.id === channel.id) return;
     if (isVoiceChannel(channel) && voiceHandshakeRef.current?.channelId !== channel.id) {
       void joinVoiceChannel(channel);
     } else if (!isMessageChannel(channel) && !isVoiceChannel(channel) && !isForumChannel(channel)) {
@@ -4363,7 +4504,13 @@ export default function App() {
   };
 
   const refreshMessageRequests = async () => {
-    const requests = await invoke<DiscordChannel[]>("get_message_requests");
+    const response = await invoke<DiscordChannel[]>("get_message_requests");
+    // Keep the request inbox strict even if an API response includes ordinary DMs.
+    const requests = response.filter(channel =>
+      channel.is_message_request === true ||
+      channel.is_spam === true ||
+      ((channel.flags || 0) & (1 << 5)) !== 0
+    );
     setMessageRequests(requests);
     setMessageRequestsError("");
     return requests;
@@ -4886,6 +5033,66 @@ export default function App() {
       setSending(false);
       if (selectedChannelRef.current?.id === sendingChannel.id) inputRef.current?.focus();
     }
+  };
+
+  const submitPoll = async () => {
+    if (!selectedChannel || pollSubmitting) return;
+    const question = pollQuestion.trim();
+    const answers = pollAnswers.map(answer => answer.trim()).filter(Boolean);
+    if (!question || answers.length < 2) { setPollError("Add a question and at least two answers."); return; }
+    setPollSubmitting(true);
+    setPollError("");
+    try {
+      const asToken = activeComposerAccount.user.id !== me?.id && activeComposerAccount.token ? activeComposerAccount.token : null;
+      const sent = await invoke<DiscordMessage>("create_poll", {
+        channelId: selectedChannel.id, question, answers, duration: pollDuration,
+        allowMultiselect: pollMultiSelect, asToken,
+      });
+      if (sent?.id && selectedChannelRef.current?.id === selectedChannel.id) {
+        setMessages(previous => previous.some(item => item.id === sent.id) ? previous : [...previous, sent]);
+        messageHistoryRef.current[selectedChannel.id] = [...(messageHistoryRef.current[selectedChannel.id] || []), sent];
+        void writeCachedMessages(selectedChannel.id, messageHistoryRef.current[selectedChannel.id]);
+        scrollToBottom();
+      }
+      setPollComposerOpen(false);
+      setComposerPlusOpen(false);
+      setPollQuestion("");
+      setPollAnswers(["", ""]);
+      setPollDuration(24);
+      setPollMultiSelect(false);
+      notify("Poll posted");
+    } catch (error) {
+      setPollError(String(error));
+    } finally {
+      setPollSubmitting(false);
+    }
+  };
+
+  const refreshPollMessage = async (channelId: string, messageId: string) => {
+    try {
+      const updated = await invoke<DiscordMessage>("get_message", { channelId, messageId });
+      if (updated?.id) {
+        setMessages(previous => previous.map(item => item.id === messageId ? updated : item));
+        const history = messageHistoryRef.current[channelId] || [];
+        messageHistoryRef.current[channelId] = history.map(item => item.id === messageId ? updated : item);
+        void writeCachedMessages(channelId, messageHistoryRef.current[channelId]);
+      }
+    } catch (error) {
+      notify("Poll changed, but results could not be refreshed: " + error);
+    }
+  };
+
+  const votePoll = async (channelId: string, messageId: string, answerIds: number[]) => {
+    const asToken = activeComposerAccount.user.id !== me?.id && activeComposerAccount.token ? activeComposerAccount.token : null;
+    await invoke("vote_poll", { channelId, messageId, answerIds, asToken });
+    await refreshPollMessage(channelId, messageId);
+  };
+
+  const endPoll = async (channelId: string, messageId: string) => {
+    const asToken = activeComposerAccount.user.id !== me?.id && activeComposerAccount.token ? activeComposerAccount.token : null;
+    await invoke("end_poll", { channelId, messageId, asToken });
+    await refreshPollMessage(channelId, messageId);
+    notify("Poll ended");
   };
 
   const toggleMessageReaction = async (
@@ -5867,6 +6074,19 @@ export default function App() {
 
         {/* Sidebar */}
         <aside className={`sidebar ${profileCardOpen ? "profile-open" : ""}`} style={{ width: preferences.channelSidebarWidth }}>
+          {!isDmView && selectedGuild && guildBannerUrl(selectedGuild) && (
+            <div className="server-channel-banner" style={{ backgroundImage: `linear-gradient(180deg, rgba(12,12,16,.48), rgba(12,12,16,.12) 52%, rgba(12,12,16,.58)), url("${guildBannerUrl(selectedGuild, 600)}")` }} aria-label={`${selectedGuild.name} server banner`}>
+              <div className="server-banner-topline">
+                <div className="server-banner-title-frame">
+                  <span>{selectedGuild.name}</span>
+                  {(selectedGuild.premium_tier ?? 0) > 0 && <span className="server-boost-indicator is-boosted" title={`Server Boost Level ${selectedGuild.premium_tier}`}><Sparkles size={13} /> Level {selectedGuild.premium_tier}</span>}
+                </div>
+                <button type="button" className="server-invite-button" title="Create and copy server invite" aria-label="Create and copy server invite" onClick={() => void createServerInvite()}>
+                  <UserPlus size={15} />
+                </button>
+              </div>
+            </div>
+          )}
           {isDmView ? (
             <>
               <div className="dm-search-header">
@@ -5938,10 +6158,47 @@ export default function App() {
             </>
           ) : (
             <>
-              <button className="server-heading">
-                <span>{selectedGuild?.name ?? "—"}</span>
-                <ChevronDown size={14} />
-              </button>
+              <div className="server-heading-row">
+                <div className="server-heading-menu-wrap" onBlur={event => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setServerMenuOpen(false);
+                }}>
+                  <button type="button" className="server-heading" aria-haspopup="menu" aria-expanded={serverMenuOpen} aria-label={`Server menu for ${selectedGuild?.name ?? "server"}`} onClick={() => setServerMenuOpen(open => !open)}>
+                    {selectedGuild && guildBannerUrl(selectedGuild) ? <><MoreHorizontal size={17} /><span className="server-heading-menu-label">Server menu</span></> : <><span>{selectedGuild?.name ?? "—"}</span><ChevronDown size={14} /></>}
+                  </button>
+                  {serverMenuOpen && selectedGuild && (
+                    <div className="server-heading-menu" role="menu">
+                      <button type="button" role="menuitem" onClick={() => { setServerMenuOpen(false); setGuildSettingsOpen(true); }}>
+                        <Settings size={15} /><span>Server Settings</span>
+                      </button>
+                      <button type="button" role="menuitem" onClick={() => { setServerMenuOpen(false); void createServerInvite(); }}>
+                        <UserPlus size={15} /><span>Invite People</span>
+                      </button>
+                      <button type="button" role="menuitem" onClick={() => { setServerMenuOpen(false); void copyContextValue(selectedGuild.id, "Server ID"); }}>
+                        <Copy size={15} /><span>Copy Server ID</span>
+                      </button>
+                      <div className="server-heading-menu-divider" role="separator" />
+                      <button type="button" role="menuitem" onClick={() => openUserSettingsTab("privacy")}>
+                        <ShieldCheck size={15} /><span>Privacy & Safety</span>
+                      </button>
+                      <button type="button" role="menuitem" onClick={() => openUserSettingsTab("notifications")}>
+                        <Bell size={15} /><span>Notification Settings</span>
+                      </button>
+                      <div className="server-heading-menu-divider" role="separator" />
+                      <button type="button" role="menuitem" className="danger" onClick={() => { setServerMenuOpen(false); setLeaveServerError(""); setLeaveServerConfirmOpen(true); }}>
+                        <LogOut size={15} /><span>Leave Server</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {selectedGuild && !guildBannerUrl(selectedGuild) && (
+                  <button type="button" className="server-invite-button server-invite-button-inline" title="Create and copy server invite" aria-label="Create and copy server invite" onClick={() => void createServerInvite()}>
+                    <UserPlus size={15} />
+                  </button>
+                )}
+                {selectedGuild && (selectedGuild.premium_tier ?? 0) > 0 && (
+                  <span className="server-heading-boost is-boosted" title={`Server Boost Level ${selectedGuild.premium_tier}`}><Sparkles size={14} /><span>Lvl {selectedGuild.premium_tier}</span></span>
+                )}
+              </div>
 
               <div className="sidebar-scroll">
                 {channelTree.uncategorized.map(c => (
@@ -6662,14 +6919,11 @@ export default function App() {
                   <MessageSquare size={18} />
                 </button>
               )}
-              <button className={`icon-btn ${memberOpen ? "active" : ""}`} title="Member list" onClick={() => setMemberOpen(v => !v)}><Sparkles size={18} /></button>
+              <button className={`icon-btn ${memberOpen ? "active" : ""}`} title="Member list" onClick={() => { setSearchOpen(false); setMemberOpen(v => !v); }}><Sparkles size={18} /></button>
               <button className="icon-btn" title="Deleted message log" aria-label="Deleted message log" onClick={() => void openMessageLogger()}><History size={18} /></button>
               <button className="icon-btn" title="Edited message log" aria-label="Edited message log" onClick={() => void openEditedMessageLogger()}><Edit3 size={17} /></button>
               <button className="icon-btn" title="Deleted channel viewer" aria-label="Deleted channel viewer" onClick={() => void openDeletedChannelViewer()}><Archive size={18} /></button>
-              <div className="search-box">
-                <Search size={13} />
-                <input placeholder="Search" value={query} onChange={e => setQuery(e.target.value)} />
-              </div>
+              <button className={`icon-btn ${searchOpen ? "active" : ""}`} title="Search messages" aria-label="Search messages" onClick={() => { setMemberOpen(false); setSearchOpen(value => !value); }}><Search size={18} /></button>
               <button className="icon-btn" title="More"><MoreHorizontal size={18} /></button>
               <button
                 type="button"
@@ -7016,7 +7270,7 @@ export default function App() {
                             {m.edited_timestamp && <span className="msg-time">(edited)</span>}
                             {m.deleted_at && <span className="deleted-message-label">DELETED</span>}
                           </div>
-                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
+                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} onPollVote={votePoll} onPollEnd={endPoll} currentUserId={me?.id} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
                         </div>
                         <MsgActions message={m} onReact={emoji => void toggleMessageReaction(selectedChannel!.id, m, emoji)} />
                       </div>
@@ -7025,7 +7279,7 @@ export default function App() {
                         <span className="compact-ts">{formatTimestamp(m.timestamp)}</span>
                         <div className="msg-body">
                           {m.deleted_at && <span className="deleted-message-label">DELETED</span>}
-                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
+                          <MessageContent message={m} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(message, emoji) => void toggleMessageReaction(selectedChannel!.id, message, emoji)} onPollVote={votePoll} onPollEnd={endPoll} currentUserId={me?.id} autoplayVideos={preferences.autoplayVideos} sessionId={gatewaySessionId} channelId={selectedChannel?.id} guildId={selectedChannel?.guild_id} onNotify={notify} />
                         </div>
                         <MsgActions message={m} onReact={emoji => void toggleMessageReaction(selectedChannel!.id, m, emoji)} />
                       </div>
@@ -7200,7 +7454,13 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <button className="plus-btn" title={`Attach files — ${uploadLimitLabel} account limit`} onClick={() => void chooseComposerFiles()} disabled={!selectedChannel || officialDiscordDm || !canSend}>+</button>
+                <div className="composer-plus-wrap">
+                  <button type="button" className={`plus-btn ${composerPlusOpen ? "open" : ""}`} title="Add to message" aria-label="Add to message" aria-expanded={composerPlusOpen} onClick={() => setComposerPlusOpen(open => !open)} disabled={!selectedChannel || officialDiscordDm || !canSend || !!editingMessageId}>+</button>
+                  {composerPlusOpen && <div className="composer-plus-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { setComposerPlusOpen(false); void chooseComposerFiles(); }}><span className="composer-plus-menu-icon"><Download size={16} /></span><span><strong>Upload a File</strong><small>Attach files to your message</small></span></button>
+                    <button type="button" role="menuitem" onClick={() => { setComposerPlusOpen(false); setPollError(""); setPollComposerOpen(true); }}><span className="composer-plus-menu-icon"><ListChecks size={16} /></span><span><strong>Create Poll</strong><small>Ask a question and collect votes</small></span></button>
+                  </div>}
+                </div>
                 {composerFiles.length > 0 && (
                   <div className="composer-attachments" aria-label={`Attachments to send, up to ${uploadLimitLabel}`}>
                     {composerFiles.map((file, index) => (
@@ -7411,6 +7671,23 @@ export default function App() {
                   </div>
                 )}
               </div>
+              {pollComposerOpen && (
+                <div className="poll-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !pollSubmitting) setPollComposerOpen(false); }}>
+                  <section className="poll-modal" role="dialog" aria-modal="true" aria-labelledby="poll-modal-title">
+                    <header><div><span className="poll-modal-kicker">NEW POLL</span><h2 id="poll-modal-title">Create a poll</h2></div><button type="button" onClick={() => setPollComposerOpen(false)} disabled={pollSubmitting} aria-label="Close poll editor"><X size={18} /></button></header>
+                    <label className="poll-field"><span>Question</span><input maxLength={300} value={pollQuestion} onChange={event => setPollQuestion(event.target.value)} placeholder="What should we do next?" autoFocus /></label>
+                    <div className="poll-answers-editor"><div className="poll-editor-label"><span>Answers</span><small>{pollAnswers.filter(answer => answer.trim()).length}/10</small></div>
+                      {pollAnswers.map((answer, index) => <div className="poll-answer-input" key={index}><span>{index + 1}</span><input maxLength={55} value={answer} onChange={event => setPollAnswers(current => current.map((item, i) => i === index ? event.target.value : item))} placeholder={"Answer " + (index + 1)} /><button type="button" aria-label={"Remove answer " + (index + 1)} disabled={pollAnswers.length <= 2} onClick={() => setPollAnswers(current => current.filter((_, i) => i !== index))}><X size={14} /></button></div>)}
+                      {pollAnswers.length < 10 && <button type="button" className="poll-add-answer" onClick={() => setPollAnswers(current => [...current, ""])}>+ Add answer</button>}
+                    </div>
+                    <div className="poll-editor-row"><label className="poll-field"><span>Poll duration</span><select value={pollDuration} onChange={event => setPollDuration(Number(event.target.value))}><option value={1}>1 hour</option><option value={4}>4 hours</option><option value={8}>8 hours</option><option value={24}>24 hours</option><option value={72}>3 days</option><option value={168}>1 week</option></select></label>
+                      <label className="poll-multiselect"><input type="checkbox" checked={pollMultiSelect} onChange={event => setPollMultiSelect(event.target.checked)} /><span><strong>Multiple answers</strong><small>Allow voters to select more than one</small></span></label>
+                    </div>
+                    {pollError && <p className="poll-form-error" role="alert">{pollError}</p>}
+                    <footer><button type="button" className="poll-cancel-btn" onClick={() => setPollComposerOpen(false)} disabled={pollSubmitting}>Cancel</button><button type="button" className="poll-submit-btn" onClick={() => void submitPoll()} disabled={pollSubmitting || !pollQuestion.trim() || pollAnswers.filter(answer => answer.trim()).length < 2}>{pollSubmitting ? <Loader2 size={15} className="spinning" /> : <ListChecks size={15} />} Post Poll</button></footer>
+                  </section>
+                </div>
+              )}
           </div>
         </section>
         )}
@@ -7431,7 +7708,7 @@ export default function App() {
                   <img src={avatarUrl(message.author, 32)} alt="" />
                   <div>
                     <header><strong><StyledDisplayName user={message.author} /> <PlatformIndicators platforms={memberPlatforms[message.author.id] || []} /></strong><time>{formatTimestamp(message.timestamp)}</time></header>
-                    <MessageContent message={message} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(target, emoji) => void toggleMessageReaction(selectedVoiceChannel.id, target, emoji)} autoplayVideos={preferences.autoplayVideos} />
+                    <MessageContent message={message} channels={channels} users={mentionUsers} onChannelClick={jumpToChannel} onMediaOpen={showMedia} onReactionToggle={(target, emoji) => void toggleMessageReaction(selectedVoiceChannel.id, target, emoji)} onPollVote={votePoll} onPollEnd={endPoll} currentUserId={me?.id} autoplayVideos={preferences.autoplayVideos} channelId={selectedVoiceChannel.id} />
                   </div>
                 </article>
               ))}
@@ -7497,7 +7774,29 @@ export default function App() {
                 </div>
               </aside>
             )}
-            {memberOpen && !showingDirectory && (
+            {searchOpen && !showingDirectory && (
+              <aside className="member-panel search-panel" aria-label="Search messages">
+                <div className="member-header search-panel-header">
+                  <span>SEARCH MESSAGES</span>
+                  <button type="button" className="search-panel-close" aria-label="Close search" onClick={() => setSearchOpen(false)}><X size={15} /></button>
+                </div>
+                <label className="search-panel-input"><Search size={15} /><input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="Search this conversation…" /></label>
+                <div className="search-panel-results">
+                  {!query.trim() ? <p className="search-panel-hint">Search the messages currently loaded in this conversation.</p> : (() => {
+                    const term = query.trim().toLowerCase();
+                    const matches = messages.filter(message => `${message.content || ""} ${message.author?.username || ""} ${message.author?.global_name || ""}`.toLowerCase().includes(term)).slice(-40).reverse();
+                    return matches.length ? matches.map(message => (
+                      <div className="search-result-item" key={message.id}>
+                        <strong>{displayName(message.author)}</strong>
+                        <small>{formatTimestamp(message.timestamp)}</small>
+                        <p>{message.content || "Attachment or embedded content"}</p>
+                      </div>
+                    )) : <p className="search-panel-hint">No matches in the messages currently loaded.</p>;
+                  })()}
+                </div>
+              </aside>
+            )}
+            {memberOpen && !searchOpen && !showingDirectory && (
           <aside className="member-panel">
             <div className="member-header">
               {isDmView && selectedChannel?.type === CHANNEL_TYPE_DM
@@ -7955,6 +8254,34 @@ export default function App() {
         </div>
       )}
 
+      {guildSettingsOpen && selectedGuild && (
+        <GuildSettings
+          guild={selectedGuild}
+          channels={channels}
+          canManageGuild={hasGuildPermission(5, selectedGuild.id, currentGuildMemberRolesRef.current, guildRoleDataRef.current, !!selectedGuild.owner)}
+          invoke={invoke}
+          onClose={() => setGuildSettingsOpen(false)}
+        />
+      )}
+
+      {leaveServerConfirmOpen && selectedGuild && (
+        <div className="feature-modal-backdrop server-leave-backdrop" onMouseDown={event => {
+          if (event.target === event.currentTarget && !leaveServerBusy) setLeaveServerConfirmOpen(false);
+        }}>
+          <section className="feature-modal server-leave-modal" role="alertdialog" aria-modal="true" aria-labelledby="leave-server-title">
+            <button type="button" className="feature-modal-close" aria-label="Close" disabled={leaveServerBusy} onClick={() => setLeaveServerConfirmOpen(false)}>×</button>
+            <div className="server-leave-icon"><AlertTriangle size={22} /></div>
+            <h2 id="leave-server-title">Leave {selectedGuild.name}?</h2>
+            <p>You will need a new invite to rejoin this server. This does not delete the server.</p>
+            {leaveServerError && <div className="guild-settings-error" role="alert">{leaveServerError}</div>}
+            <div className="server-leave-actions">
+              <button type="button" disabled={leaveServerBusy} onClick={() => setLeaveServerConfirmOpen(false)}>Cancel</button>
+              <button type="button" className="danger" disabled={leaveServerBusy} onClick={() => void leaveSelectedGuild()}>{leaveServerBusy ? "Leaving…" : "Leave Server"}</button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {serverDialogOpen && (
         <div className="feature-modal-backdrop" onMouseDown={event => {
           if (event.target === event.currentTarget && !serverActionBusy) setServerDialogOpen(false);
@@ -7989,6 +8316,24 @@ export default function App() {
         </div>
       )}
 
+      {quickSwitcherOpen && (
+        <div className="quick-switcher-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setQuickSwitcherOpen(false); }}>
+          <section className="quick-switcher-window" role="dialog" aria-modal="true" aria-label="Quick switcher">
+            <label className="quick-switcher-search"><Search size={19} /><input ref={quickSwitcherInputRef} value={quickSwitcherQuery} onChange={event => { setQuickSwitcherQuery(event.target.value); setQuickSwitcherActiveIndex(0); }} onKeyDown={event => { if (event.key === "Escape") { setQuickSwitcherOpen(false); return; } if (event.key === "ArrowDown") { event.preventDefault(); setQuickSwitcherActiveIndex(index => Math.min(index + 1, Math.max(0, quickSwitchResults.length - 1))); } else if (event.key === "ArrowUp") { event.preventDefault(); setQuickSwitcherActiveIndex(index => Math.max(0, index - 1)); } else if (event.key === "Enter" && quickSwitchResults[quickSwitcherActiveIndex]) { const item = quickSwitchResults[quickSwitcherActiveIndex]; setQuickSwitcherOpen(false); if (item.kind === "server" && item.guild) { setIsDmView(false); void selectGuild(item.guild); } else if (item.channel) { setIsDmView(item.kind === "dm"); void selectChannel(item.channel); } } }} placeholder="Jump to a server, channel, or DM…" /></label>
+            <div className="quick-switcher-results">
+              {quickSwitchResults.map((item, index) => (
+                <button type="button" className={`quick-switcher-result ${quickSwitcherActiveIndex === index ? "active" : ""}`} key={item.id} onMouseEnter={() => setQuickSwitcherActiveIndex(index)} onClick={() => { setQuickSwitcherOpen(false); if (item.kind === "server" && item.guild) { setIsDmView(false); void selectGuild(item.guild); } else if (item.channel) { setIsDmView(item.kind === "dm"); void selectChannel(item.channel); } }}>
+                  <span className={`quick-switcher-kind quick-switcher-kind-${item.kind}`}>{item.kind === "server" ? "S" : item.kind === "dm" ? "@" : "#"}</span>
+                  <span><strong>{item.title}</strong><small>{item.subtitle}</small></span>
+                </button>
+              ))}
+              {quickSwitchResults.length === 0 && <p className="quick-switcher-empty">No matching servers, channels, or DMs.</p>}
+            </div>
+            <footer><kbd>↑</kbd><kbd>↓</kbd> Navigate <kbd>Enter</kbd> Open <kbd>Esc</kbd> Close · Ctrl+K to open</footer>
+          </section>
+        </div>
+      )}
+
       {settingsOpen && (
         <div className="feature-modal-backdrop" onMouseDown={event => {
           if (event.target === event.currentTarget) setSettingsOpen(false);
@@ -8006,6 +8351,7 @@ export default function App() {
             {settingsTab === "discord" ? (
               <SettingsMenu
                 embedded
+                initialTab={settingsMenuInitialTab}
                 onClose={() => setSettingsOpen(false)}
                 onOpenClientSettings={() => setSettingsTab("account")}
                 onThemeChange={setSettingsTheme}
@@ -9240,6 +9586,81 @@ function CachedAttachmentLink({ mediaId, url, filename }: { mediaId: string; url
   );
 }
 
+function PollCard({
+  poll,
+  message,
+  channelId,
+  currentUserId,
+  onVote,
+  onEnd,
+}: {
+  poll: any;
+  message: DiscordMessage;
+  channelId: string;
+  currentUserId?: string;
+  onVote?: (channelId: string, messageId: string, answerIds: number[]) => Promise<void>;
+  onEnd?: (channelId: string, messageId: string) => Promise<void>;
+}) {
+  const answers = Array.isArray(poll?.answers) ? poll.answers : [];
+  const counts = Array.isArray(poll?.results?.answer_counts) ? poll.results.answer_counts : [];
+  const countFor = (id: number) => counts.find((item: any) => Number(item.id) === id);
+  const initialVotes = answers.filter((answer: any) => countFor(Number(answer.answer_id))?.me_voted).map((answer: any) => Number(answer.answer_id));
+  const [selected, setSelected] = useState<number[]>(initialVotes);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setSelected(answers.filter((answer: any) => countFor(Number(answer.answer_id))?.me_voted).map((answer: any) => Number(answer.answer_id)));
+  }, [message.id, poll?.results?.answer_counts]);
+  const finalized = !!poll?.results?.is_finalized;
+  const expired = !!poll?.expiry && new Date(poll.expiry).getTime() <= Date.now();
+  const closed = finalized || expired;
+  const total = counts.reduce((sum: number, item: any) => sum + Number(item.count || 0), 0);
+  const canEnd = !!currentUserId && message.author?.id === currentUserId && !closed && !!onEnd;
+  const toggle = (id: number) => setSelected(current => current.includes(id)
+    ? current.filter(value => value !== id)
+    : poll.allow_multiselect ? [...current, id] : [id]);
+  const submit = async (ids: number[]) => {
+    if (!onVote || busy) return;
+    setBusy(true); setError("");
+    try { await onVote(channelId || message.channel_id, message.id, ids); }
+    catch (reason) { setError(String(reason)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <section className={`discord-poll-card ${closed ? "poll-closed" : ""}`} aria-label="Poll">
+      <div className="discord-poll-heading"><span className="discord-poll-icon"><ListChecks size={17} /></span><div><strong>{poll?.question?.text || "Poll"}</strong><small>{poll?.allow_multiselect ? "Select one or more answers" : "Select one answer"}</small></div></div>
+      <div className="discord-poll-options">
+        {answers.map((answer: any) => {
+          const id = Number(answer.answer_id);
+          const result = countFor(id);
+          const votes = Number(result?.count || 0);
+          const percent = total > 0 ? Math.round(votes / total * 100) : 0;
+          const media = answer.poll_media || {};
+          const chosen = selected.includes(id);
+          return (
+            <button type="button" key={id} className={`discord-poll-option ${chosen ? "selected" : ""} ${result?.me_voted ? "mine" : ""}`} disabled={closed || busy || !onVote} onClick={() => toggle(id)}>
+              <span className="discord-poll-option-check">{chosen ? <Check size={13} /> : null}</span>
+              {media.emoji?.name && <span className="discord-poll-option-emoji">{media.emoji.id ? <img src={`https://cdn.discordapp.com/emojis/${media.emoji.id}.webp?size=24`} alt="" /> : media.emoji.name}</span>}
+              <span className="discord-poll-option-label">{media.text || "Answer"}</span>
+              {(poll?.results || closed) && <span className="discord-poll-option-result"><span>{percent}%</span><small>{votes}</small></span>}
+              {(poll?.results || closed) && <span className="discord-poll-option-bar" style={{ width: percent + "%" }} />}
+            </button>
+          );
+        })}
+      </div>
+      <div className="discord-poll-footer">
+        <span>{total} {total === 1 ? "vote" : "votes"}{closed ? " · Poll ended" : poll?.expiry ? " · Ends " + new Date(poll.expiry).toLocaleString() : ""}</span>
+        {!closed && <div className="discord-poll-actions">
+          {selected.length > 0 && <button type="button" onClick={() => void submit(selected)} disabled={busy || !onVote}>{busy ? "Saving…" : "Vote"}</button>}
+          {initialVotes.length > 0 && <button type="button" className="poll-remove-vote" onClick={() => { setSelected([]); void submit([]); }} disabled={busy || !onVote}>Remove vote</button>}
+          {canEnd && <button type="button" className="poll-end-btn" onClick={async () => { if (!busy && onEnd) { setBusy(true); try { await onEnd(channelId || message.channel_id, message.id); } catch (reason) { setError(String(reason)); } finally { setBusy(false); } } }} disabled={busy}>End poll</button>}
+        </div>}
+      </div>
+      {error && <p className="discord-poll-error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 function MessageContent({
   message: m,
   channels,
@@ -9247,6 +9668,9 @@ function MessageContent({
   onChannelClick,
   onMediaOpen,
   onReactionToggle,
+  onPollVote,
+  onPollEnd,
+  currentUserId,
   autoplayVideos = false,
   sessionId,
   channelId,
@@ -9259,6 +9683,9 @@ function MessageContent({
   onChannelClick?: (channelId: string) => void;
   onMediaOpen?: (url: string, kind: "image" | "video", name?: string) => void;
   onReactionToggle?: (message: DiscordMessage, emoji: string) => void;
+  onPollVote?: (channelId: string, messageId: string, answerIds: number[]) => Promise<void>;
+  onPollEnd?: (channelId: string, messageId: string) => Promise<void>;
+  currentUserId?: string;
   autoplayVideos?: boolean;
   sessionId?: string;
   channelId?: string;
@@ -9352,6 +9779,10 @@ function MessageContent({
         <div className="msg-text">
           <DiscordMarkdown content={m.content} channels={channels} users={users} onChannelClick={onChannelClick} />
         </div>
+      )}
+
+      {m.poll && typeof m.poll === "object" && (
+        <PollCard poll={m.poll} message={m} channelId={channelId || m.channel_id} currentUserId={currentUserId} onVote={onPollVote} onEnd={onPollEnd} />
       )}
 
       {m.embeds && m.embeds.length > 0 && (
