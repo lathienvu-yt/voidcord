@@ -170,6 +170,7 @@ export default function GuildSettings({
                 {typeof data.approximate_member_count === "number" && <span className="guild-settings-chip">{data.approximate_member_count.toLocaleString()} members</span>}
                 {typeof data.approximate_presence_count === "number" && <span className="guild-settings-chip">{data.approximate_presence_count.toLocaleString()} online</span>}
                 {typeof data.premium_tier === "number" && <span className="guild-settings-chip">Boost level {data.premium_tier}</span>}
+                {typeof data.premium_subscription_count === "number" && <span className="guild-settings-chip">{data.premium_subscription_count.toLocaleString()} boosts</span>}
                 {features.includes("ANIMATED_BANNER") && <span className="guild-settings-chip">Animated banners enabled</span>}
               </div>
               {tab === "overview" ? (
