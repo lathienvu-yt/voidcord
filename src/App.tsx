@@ -3912,6 +3912,19 @@ export default function App() {
     setHasOlderMessages(false);
     setSelectedGuild(guild);
     selectedGuildRef.current = guild;
+    // Fetch the authoritative guild payload (including premium_tier) as soon
+    // as this server is opened. Keep navigation responsive while it loads.
+    if (navigator.onLine) {
+      void invoke<DiscordGuild>("get_guild_settings", { guildId: guild.id })
+        .then(details => {
+          if (!details || guildLoadRequest.current !== requestId) return;
+          const refreshedGuild = { ...guild, ...details };
+          selectedGuildRef.current = refreshedGuild;
+          setSelectedGuild(current => current?.id === guild.id ? refreshedGuild : current);
+          setGuilds(current => current.map(item => item.id === guild.id ? { ...item, ...details } : item));
+        })
+        .catch(error => console.warn("Could not refresh server boost metadata", error));
+    }
     setSelectedChannel(null);
     setMessages([]);
     setMsgLoading(false);
@@ -6066,7 +6079,7 @@ export default function App() {
               <div className="server-banner-topline">
                 <div className="server-banner-title-frame">
                   <span>{selectedGuild.name}</span>
-                  <span className={`server-boost-indicator ${(selectedGuild.premium_tier ?? 0) > 0 ? "is-boosted" : ""}`} title={`Server Boost Level ${selectedGuild.premium_tier ?? 0}`}><Sparkles size={13} /> Level {selectedGuild.premium_tier ?? 0}</span>
+                  {(selectedGuild.premium_tier ?? 0) > 0 && <span className="server-boost-indicator is-boosted" title={`Server Boost Level ${selectedGuild.premium_tier}`}><Sparkles size={13} /> Level {selectedGuild.premium_tier}</span>}
                 </div>
                 <button type="button" className="server-invite-button" title="Create and copy server invite" aria-label="Create and copy server invite" onClick={() => void createServerInvite()}>
                   <UserPlus size={15} />
@@ -6182,8 +6195,8 @@ export default function App() {
                     <UserPlus size={15} />
                   </button>
                 )}
-                {selectedGuild && (
-                  <span className={`server-heading-boost ${(selectedGuild.premium_tier ?? 0) > 0 ? "is-boosted" : ""}`} title={`Server Boost Level ${selectedGuild.premium_tier ?? 0}`}><Sparkles size={14} /><span>Lvl {selectedGuild.premium_tier ?? 0}</span></span>
+                {selectedGuild && (selectedGuild.premium_tier ?? 0) > 0 && (
+                  <span className="server-heading-boost is-boosted" title={`Server Boost Level ${selectedGuild.premium_tier}`}><Sparkles size={14} /><span>Lvl {selectedGuild.premium_tier}</span></span>
                 )}
               </div>
 
