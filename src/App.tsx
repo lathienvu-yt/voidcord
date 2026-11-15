@@ -1896,6 +1896,8 @@ export default function App() {
   }, []);
 
   const listRef = useRef<HTMLDivElement>(null);
+  const touchDraggedGuildRef = useRef<string | null>(null);
+  const touchDragTimerRef = useRef<number | null>(null);
   const isNearBottomRef = useRef(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const directorySearchRef = useRef<HTMLInputElement>(null);
@@ -5790,7 +5792,36 @@ export default function App() {
     setDraggedGuildId(null);
   }, [orderedGuilds, folderNameForGuild]);
 
+
+
   useEffect(() => {
+    const clearTouchDrag = () => {
+      if (touchDragTimerRef.current !== null) window.clearTimeout(touchDragTimerRef.current);
+      touchDragTimerRef.current = null;
+      touchDraggedGuildRef.current = null;
+    };
+    const onTouchEnd = (event: TouchEvent) => {
+      const source = touchDraggedGuildRef.current;
+      if (!source) { clearTouchDrag(); return; }
+      const touch = event.changedTouches[0];
+      const target = touch ? document.elementFromPoint(touch.clientX, touch.clientY) : null;
+      const guildTarget = target?.closest<HTMLElement>("[data-guild-drop]");
+      const folderTarget = target?.closest<HTMLElement>("[data-folder-drop]");
+      if (guildTarget?.dataset.guildDrop) moveGuildInLayout(source, guildTarget.dataset.guildDrop);
+      else if (folderTarget?.dataset.folderDrop) moveGuildInLayout(source, undefined, folderTarget.dataset.folderDrop);
+      clearTouchDrag();
+    };
+    const onTouchCancel = () => clearTouchDrag();
+    document.addEventListener("touchend", onTouchEnd, { passive: true });
+    document.addEventListener("touchcancel", onTouchCancel, { passive: true });
+    return () => {
+      document.removeEventListener("touchend", onTouchEnd);
+      document.removeEventListener("touchcancel", onTouchCancel);
+      clearTouchDrag();
+    };
+  }, [moveGuildInLayout]);
+
+  const moveGuildInLayout = useCallback  useEffect(() => {
     if (!me?.id || guilds.length === 0) return;
     const timer = window.setTimeout(async () => {
       const groups = new Map<string, string[]>();
@@ -5815,7 +5846,7 @@ export default function App() {
       }
     }, 10_000);
     return () => window.clearTimeout(timer);
-  }, [preferences.serverOrder, preferences.serverFolders, guilds, me?.id, orderedGuilds, folderNameForGuild, discordGuildFolders, preferences.cachedDiscordFolders, invoke]);
+  }, [preferences.serverOrder, preferences.serverFolders, guilds, me?.id, invoke]);
 
   const activeComposerAccount = useMemo(() => {
     if (composerSendingAccountId) {
@@ -6120,6 +6151,7 @@ export default function App() {
                         title={g.name}
                         style={{ animationDelay: `${(groupIndex + index) * 30}ms` } as React.CSSProperties}
                         onDragStart={event => { setDraggedGuildId(g.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", g.id); }}
+                        onTouchStart={() => { if (touchDragTimerRef.current !== null) window.clearTimeout(touchDragTimerRef.current); touchDragTimerRef.current = window.setTimeout(() => { touchDraggedGuildRef.current = g.id; }, 350); }}
                         onDragEnd={() => setDraggedGuildId(null)}
                         onDragOver={event => event.preventDefault()}
                         onDrop={event => { event.preventDefault(); event.stopPropagation(); const source = event.dataTransfer.getData("text/plain") || draggedGuildId; if (source) moveGuildInLayout(source, g.id); }}
@@ -6138,6 +6170,7 @@ export default function App() {
                   className={`server-icon ${!isDmView && selectedGuild?.id === group.guilds[0].id ? "active" : ""} ${draggedGuildId === group.guilds[0].id ? "is-dragging" : ""}`}
                   title={group.guilds[0].name}
                   onDragStart={event => { setDraggedGuildId(group.guilds[0].id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", group.guilds[0].id); }}
+                  onTouchStart={() => { if (touchDragTimerRef.current !== null) window.clearTimeout(touchDragTimerRef.current); touchDragTimerRef.current = window.setTimeout(() => { touchDraggedGuildRef.current = group.guilds[0].id; }, 350); }}
                   onDragEnd={() => setDraggedGuildId(null)}
                   onDragOver={event => event.preventDefault()}
                   onDrop={event => { event.preventDefault(); const source = event.dataTransfer.getData("text/plain") || draggedGuildId; if (source) moveGuildInLayout(source, group.guilds[0].id); }}
