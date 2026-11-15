@@ -5729,8 +5729,8 @@ export default function App() {
   const orderedGuilds = useMemo(() => {
     const localOrder = new Map(preferences.serverOrder.map((id, index) => [id, index]));
     const remoteOrder = new Map<string, number>(); let next = 0;
-    for (const folder of (discordGuildFolders?.folders || preferences.cachedDiscordFolders)) for (const id of folder.guildIds) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
     for (const id of (discordGuildFolders?.positions || preferences.cachedServerOrder)) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
+    for (const folder of (discordGuildFolders?.folders || preferences.cachedDiscordFolders)) for (const id of folder.guildIds) if (!remoteOrder.has(id)) remoteOrder.set(id, next++);
     const original = new Map(guilds.map((guild, index) => [guild.id, index]));
     return [...guilds].sort((a,b) => { const la=localOrder.get(a.id),lb=localOrder.get(b.id); if(la!==undefined||lb!==undefined){if(la===undefined)return 1;if(lb===undefined)return -1;if(la!==lb)return la-lb;}return (remoteOrder.get(a.id)??(next+(original.get(a.id)||0)))-(remoteOrder.get(b.id)??(next+(original.get(b.id)||0))); });
   }, [guilds, preferences.serverOrder, preferences.cachedServerOrder, preferences.cachedDiscordFolders, discordGuildFolders]);
@@ -5836,12 +5836,12 @@ export default function App() {
     const remoteOrder = new Map<string, number>();
     let remotePosition = 0;
     for (const folder of sourceFolders) {
-      for (const id of folder.guildIds) {
-        remoteFolderNames.set(id, folder.name);
-        if (!remoteOrder.has(id)) remoteOrder.set(id, remotePosition++);
-      }
+      for (const id of folder.guildIds) remoteFolderNames.set(id, folder.name);
     }
     for (const id of sourcePositions) if (!remoteOrder.has(id)) remoteOrder.set(id, remotePosition++);
+    for (const folder of sourceFolders) {
+      for (const id of folder.guildIds) if (!remoteOrder.has(id)) remoteOrder.set(id, remotePosition++);
+    }
     const originalOrder = new Map(guilds.map((guild, index) => [guild.id, index]));
     const remoteGuildOrder = [...guilds].sort((a, b) =>
       (remoteOrder.get(a.id) ?? (remotePosition + (originalOrder.get(a.id) || 0)))
@@ -8761,7 +8761,7 @@ export default function App() {
                     const old = sourceFolders.find(folder => folder.name === name);
                     return { id: old?.id || null, name, color: old?.color ?? null, guildIds: groups.get(name) || [] };
                   });
-                  const positions = [...(groups.get("") || []), ...names.flatMap(name => groups.get(name) || [])];
+                  const positions = orderedGuilds.map(guild => guild.id);
                   try {
                     await invoke("sync_settings_proto_v1", { settingsPayload: encodeGuildFolderSettings({ folders, positions }) });
                     setDiscordGuildFolders({ folders, positions });
