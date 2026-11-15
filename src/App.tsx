@@ -1531,7 +1531,14 @@ export default function App() {
 
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [discordGuildFolders, setDiscordGuildFolders] = useState<DiscordGuildFolderSettings | null>(null);
-  const [collapsedServerFolders, setCollapsedServerFolders] = useState<Set<string>>(() => new Set());
+  const [collapsedServerFolders, setCollapsedServerFolders] = useState<Set<string>>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("voidcord:collapsed-server-folders") || "[]");
+      return new Set(Array.isArray(saved) ? saved.filter((name): name is string => typeof name === "string") : []);
+    } catch {
+      return new Set();
+    }
+  });
   const [draggedGuildId, setDraggedGuildId] = useState<string | null>(null);
   const [selectedGuild, setSelectedGuild] = useState<DiscordGuild | null>(null);
   const [dmChannels, setDmChannels] = useState<DiscordChannel[]>([]);
@@ -2566,6 +2573,14 @@ export default function App() {
       preferenceSaveFailedRef.current = true;
     }
   }, [preferences, notify]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("voidcord:collapsed-server-folders", JSON.stringify([...collapsedServerFolders]));
+    } catch (error) {
+      console.warn("Could not persist collapsed server folders", error);
+    }
+  }, [collapsedServerFolders]);
 
   useEffect(() => {
     const existing = document.getElementById("voidcord-custom-theme") as HTMLStyleElement | null;
