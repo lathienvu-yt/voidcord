@@ -1898,6 +1898,7 @@ export default function App() {
   const listRef = useRef<HTMLDivElement>(null);
   const touchDraggedGuildRef = useRef<string | null>(null);
   const touchDragTimerRef = useRef<number | null>(null);
+  const lastSyncedGuildLayoutRef = useRef<string>("");
   const isNearBottomRef = useRef(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const directorySearchRef = useRef<HTMLInputElement>(null);
@@ -5823,6 +5824,11 @@ export default function App() {
 
   useEffect(() => {
     if (!me?.id || guilds.length === 0) return;
+    const layoutSignature = JSON.stringify({
+      order: orderedGuilds.map(guild => guild.id),
+      folders: orderedGuilds.map(guild => [guild.id, folderNameForGuild(guild.id)]),
+    });
+    if (layoutSignature === lastSyncedGuildLayoutRef.current) return;
     const timer = window.setTimeout(async () => {
       const groups = new Map<string, string[]>();
       for (const guild of orderedGuilds) {
@@ -5839,6 +5845,7 @@ export default function App() {
       const positions = orderedGuilds.map(guild => guild.id);
       try {
         await invoke("sync_settings_proto_v1", { settingsPayload: encodeGuildFolderSettings({ folders, positions }) });
+        lastSyncedGuildLayoutRef.current = layoutSignature;
         setDiscordGuildFolders({ folders, positions });
         setPreferences(current => ({ ...current, cachedServerOrder: positions, cachedDiscordFolders: folders }));
       } catch (error) {
@@ -5846,7 +5853,7 @@ export default function App() {
       }
     }, 10_000);
     return () => window.clearTimeout(timer);
-  }, [preferences.serverOrder, preferences.serverFolders, guilds, me?.id, invoke]);
+  }, [preferences.serverOrder, preferences.serverFolders, preferences.cachedDiscordFolders, discordGuildFolders, guilds, me?.id, orderedGuilds, folderNameForGuild, invoke]);
 
   const activeComposerAccount = useMemo(() => {
     if (composerSendingAccountId) {
