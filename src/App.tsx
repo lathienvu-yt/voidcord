@@ -5809,8 +5809,10 @@ export default function App() {
       const target = touch ? document.elementFromPoint(touch.clientX, touch.clientY) : null;
       const guildTarget = target?.closest<HTMLElement>("[data-guild-drop]");
       const folderTarget = target?.closest<HTMLElement>("[data-folder-drop]");
+      const rootTarget = target?.closest<HTMLElement>("[data-root-drop]");
       if (guildTarget?.dataset.guildDrop) moveGuildInLayout(source, guildTarget.dataset.guildDrop);
       else if (folderTarget?.dataset.folderDrop) moveGuildInLayout(source, undefined, folderTarget.dataset.folderDrop);
+      else if (rootTarget) moveGuildInLayout(source, undefined, "");
       clearTouchDrag();
     };
     const onTouchCancel = () => clearTouchDrag();
@@ -6127,6 +6129,14 @@ export default function App() {
             </button>
 
             <div className="rail-sep" />
+            {draggedGuildId && (
+              <div
+                className="server-root-drop-zone"
+                data-root-drop="true"
+                onDragOver={event => event.preventDefault()}
+                onDrop={event => { event.preventDefault(); const source = event.dataTransfer.getData("text/plain") || draggedGuildId; if (source) moveGuildInLayout(source, undefined, ""); }}
+              >Move out of folder</div>
+            )}
 
             {guildRailGroups.map((group, groupIndex) => {
               const folder = group.name;
@@ -6164,7 +6174,7 @@ export default function App() {
                         title={g.name}
                         style={{ animationDelay: `${(groupIndex + index) * 30}ms` } as React.CSSProperties}
                         onDragStart={event => { setDraggedGuildId(g.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", g.id); }}
-                        onTouchStart={() => { if (touchDragTimerRef.current !== null) window.clearTimeout(touchDragTimerRef.current); touchDragTimerRef.current = window.setTimeout(() => { touchDraggedGuildRef.current = g.id; }, 350); }}
+                        onTouchStart={() => { if (touchDragTimerRef.current !== null) window.clearTimeout(touchDragTimerRef.current); touchDragTimerRef.current = window.setTimeout(() => { touchDraggedGuildRef.current = g.id; setDraggedGuildId(g.id); }, 350); }}
                         onDragEnd={() => setDraggedGuildId(null)}
                         onDragOver={event => event.preventDefault()}
                         onDrop={event => { event.preventDefault(); event.stopPropagation(); const source = event.dataTransfer.getData("text/plain") || draggedGuildId; if (source) moveGuildInLayout(source, g.id); }}
@@ -6183,7 +6193,7 @@ export default function App() {
                   className={`server-icon ${!isDmView && selectedGuild?.id === group.guilds[0].id ? "active" : ""} ${draggedGuildId === group.guilds[0].id ? "is-dragging" : ""}`}
                   title={group.guilds[0].name}
                   onDragStart={event => { setDraggedGuildId(group.guilds[0].id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", group.guilds[0].id); }}
-                  onTouchStart={() => { if (touchDragTimerRef.current !== null) window.clearTimeout(touchDragTimerRef.current); touchDragTimerRef.current = window.setTimeout(() => { touchDraggedGuildRef.current = group.guilds[0].id; }, 350); }}
+                  onTouchStart={() => { if (touchDragTimerRef.current !== null) window.clearTimeout(touchDragTimerRef.current); touchDragTimerRef.current = window.setTimeout(() => { touchDraggedGuildRef.current = group.guilds[0].id; setDraggedGuildId(group.guilds[0].id); }, 350); }}
                   onDragEnd={() => setDraggedGuildId(null)}
                   onDragOver={event => event.preventDefault()}
                   onDrop={event => { event.preventDefault(); const source = event.dataTransfer.getData("text/plain") || draggedGuildId; if (source) moveGuildInLayout(source, group.guilds[0].id); }}
