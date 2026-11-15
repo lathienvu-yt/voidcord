@@ -185,6 +185,7 @@ input, textarea { font-family: inherit; }
 .server-folder-header small { font-size: 8px; opacity: .7; }
 .server-folder-header:hover, .server-folder-header.collapsed { color: var(--text-primary); background: var(--background-modifier-hover); }
 .server-folder-contents { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 5px 0; border-radius: 10px; background: rgba(0,0,0,.12); }
+.server-root-drop-zone { width: 48px; padding: 5px 2px; border: 1px dashed var(--accent); border-radius: 8px; color: var(--text-dim); font-size: 8px; line-height: 1.2; text-align: center; background: var(--bg-elevated); }
 .server-icon.is-dragging { opacity: .35; transform: scale(.92); }
 .server-folder-container .server-icon { touch-action: none; }
 
