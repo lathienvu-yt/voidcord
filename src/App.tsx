@@ -5883,7 +5883,7 @@ export default function App() {
       try {
         await invoke("sync_settings_proto_v1", { settingsPayload: encodeGuildFolderSettings({ folders, positions }) });
         setDiscordGuildFolders({ folders, positions });
-        setPreferences(current => ({ ...current, cachedServerOrder: positions, cachedDiscordFolders: folders }));
+        setPreferences(current => ({ ...current, serverOrder: [], cachedServerOrder: positions, cachedDiscordFolders: folders }));
       } catch (error) {
         console.warn("Could not sync server organization after debounce", error);
       }
@@ -8780,7 +8780,7 @@ export default function App() {
                   try {
                     await invoke("sync_settings_proto_v1", { settingsPayload: encodeGuildFolderSettings({ folders, positions }) });
                     setDiscordGuildFolders({ folders, positions });
-                    setPreferences(current => ({ ...current, cachedServerOrder: positions, cachedDiscordFolders: folders }));
+                    setPreferences(current => ({ ...current, serverOrder: [], cachedServerOrder: positions, cachedDiscordFolders: folders }));
                     window.alert("Guild folder layout synced to Discord.");
                   } catch (error) { window.alert("Couldn't sync guild folders to Discord: " + String(error)); }
                 }}>Sync layout to Discord</button>
