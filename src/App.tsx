@@ -1899,6 +1899,7 @@ export default function App() {
   const touchDraggedGuildRef = useRef<string | null>(null);
   const touchDragTimerRef = useRef<number | null>(null);
   const lastSyncedGuildLayoutRef = useRef<string>("");
+  const hasInitialGuildLayoutRef = useRef(false);
   const isNearBottomRef = useRef(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const directorySearchRef = useRef<HTMLInputElement>(null);
@@ -5828,6 +5829,11 @@ export default function App() {
       order: orderedGuilds.map(guild => guild.id),
       folders: orderedGuilds.map(guild => [guild.id, folderNameForGuild(guild.id)]),
     });
+    if (!hasInitialGuildLayoutRef.current) {
+      hasInitialGuildLayoutRef.current = true;
+      lastSyncedGuildLayoutRef.current = layoutSignature;
+      return;
+    }
     if (layoutSignature === lastSyncedGuildLayoutRef.current) return;
     const timer = window.setTimeout(async () => {
       const groups = new Map<string, string[]>();
