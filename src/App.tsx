@@ -1898,8 +1898,6 @@ export default function App() {
   const listRef = useRef<HTMLDivElement>(null);
   const touchDraggedGuildRef = useRef<string | null>(null);
   const touchDragTimerRef = useRef<number | null>(null);
-  const lastSyncedGuildLayoutRef = useRef<string>("");
-  const hasInitialGuildLayoutRef = useRef(false);
   const isNearBottomRef = useRef(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const directorySearchRef = useRef<HTMLInputElement>(null);
@@ -5832,12 +5830,28 @@ export default function App() {
       order: orderedGuilds.map(guild => guild.id),
       folders: orderedGuilds.map(guild => [guild.id, folderNameForGuild(guild.id)]),
     });
-    if (!hasInitialGuildLayoutRef.current) {
-      hasInitialGuildLayoutRef.current = true;
-      lastSyncedGuildLayoutRef.current = layoutSignature;
-      return;
+    const sourceFolders = discordGuildFolders?.folders ?? preferences.cachedDiscordFolders;
+    const sourcePositions = discordGuildFolders?.positions ?? preferences.cachedServerOrder;
+    const remoteFolderNames = new Map<string, string>();
+    const remoteOrder = new Map<string, number>();
+    let remotePosition = 0;
+    for (const folder of sourceFolders) {
+      for (const id of folder.guildIds) {
+        remoteFolderNames.set(id, folder.name);
+        if (!remoteOrder.has(id)) remoteOrder.set(id, remotePosition++);
+      }
     }
-    if (layoutSignature === lastSyncedGuildLayoutRef.current) return;
+    for (const id of sourcePositions) if (!remoteOrder.has(id)) remoteOrder.set(id, remotePosition++);
+    const originalOrder = new Map(guilds.map((guild, index) => [guild.id, index]));
+    const remoteGuildOrder = [...guilds].sort((a, b) =>
+      (remoteOrder.get(a.id) ?? (remotePosition + (originalOrder.get(a.id) || 0)))
+      - (remoteOrder.get(b.id) ?? (remotePosition + (originalOrder.get(b.id) || 0)))
+    );
+    const remoteSignature = JSON.stringify({
+      order: remoteGuildOrder.map(guild => guild.id),
+      folders: remoteGuildOrder.map(guild => [guild.id, remoteFolderNames.get(guild.id) || ""]),
+    });
+    if (layoutSignature === remoteSignature) return;
     const timer = window.setTimeout(async () => {
       const groups = new Map<string, string[]>();
       for (const guild of orderedGuilds) {
@@ -5845,7 +5859,6 @@ export default function App() {
         if (!groups.has(name)) groups.set(name, []);
         groups.get(name)!.push(guild.id);
       }
-      const sourceFolders = discordGuildFolders?.folders || preferences.cachedDiscordFolders;
       const names = [...groups.keys()].filter(Boolean);
       const folders = names.map(name => {
         const old = sourceFolders.find(folder => folder.name === name);
@@ -5854,7 +5867,6 @@ export default function App() {
       const positions = orderedGuilds.map(guild => guild.id);
       try {
         await invoke("sync_settings_proto_v1", { settingsPayload: encodeGuildFolderSettings({ folders, positions }) });
-        lastSyncedGuildLayoutRef.current = layoutSignature;
         setDiscordGuildFolders({ folders, positions });
         setPreferences(current => ({ ...current, cachedServerOrder: positions, cachedDiscordFolders: folders }));
       } catch (error) {
