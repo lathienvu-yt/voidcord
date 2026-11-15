@@ -8741,12 +8741,12 @@ export default function App() {
                 <h3 className="settings-section-title">Server folders and order</h3>
                 <p className="settings-help">Group servers by folder name. Use arrows to change their order in the server rail.</p>
                 <div className="server-folder-order-list">
-                  {[...new Set(orderedGuilds.map(guild => remoteFolderByGuild.get(guild.id)?.name || preferences.serverFolders[guild.id]?.trim()).filter((name): name is string => !!name))].map((folderName, folderIndex, folderNames) => (
+                  {[...new Set(orderedGuilds.map(guild => folderNameForGuild(guild.id)).filter((name): name is string => !!name))].map((folderName, folderIndex, folderNames) => (
                     <div className="server-organize-row server-folder-order-row" key={folderName}>
                       <strong>📁 {folderName}</strong>
                       <button type="button" aria-label={"Move folder " + folderName + " up"} disabled={folderIndex === 0} onClick={() => setPreferences(current => {
                         const groups = new Map<string, string[]>();
-                        for (const guild of orderedGuilds) { const key = remoteFolderByGuild.get(guild.id)?.name || current.serverFolders[guild.id]?.trim() || ""; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(guild.id); }
+                        for (const guild of orderedGuilds) { const key = (Object.prototype.hasOwnProperty.call(current.serverFolders, guild.id) ? current.serverFolders[guild.id]?.trim() || "" : remoteFolderByGuild.get(guild.id)?.name || ""); if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(guild.id); }
                         const order = [...folderNames]; [order[folderIndex - 1], order[folderIndex]] = [order[folderIndex], order[folderIndex - 1]];
                         const ids = [...(groups.get("") || [])]; for (const key of order) ids.push(...(groups.get(key) || []));
                         for (const [key, value] of groups) if (key && !order.includes(key)) ids.push(...value);
@@ -8767,7 +8767,7 @@ export default function App() {
                   const sourceFolders = discordGuildFolders?.folders || preferences.cachedDiscordFolders;
                   const groups = new Map<string, string[]>();
                   for (const guild of orderedGuilds) {
-                    const name = remoteFolderByGuild.get(guild.id)?.name || preferences.serverFolders[guild.id]?.trim() || "";
+                    const name = folderNameForGuild(guild.id);
                     if (!groups.has(name)) groups.set(name, []);
                     groups.get(name)!.push(guild.id);
                   }
