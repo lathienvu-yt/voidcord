@@ -5821,7 +5821,7 @@ export default function App() {
     };
   }, [moveGuildInLayout]);
 
-  const moveGuildInLayout = useCallback  useEffect(() => {
+  useEffect(() => {
     if (!me?.id || guilds.length === 0) return;
     const timer = window.setTimeout(async () => {
       const groups = new Map<string, string[]>();
