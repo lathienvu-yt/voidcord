@@ -8754,7 +8754,7 @@ export default function App() {
                       })}>↑</button>
                       <button type="button" aria-label={"Move folder " + folderName + " down"} disabled={folderIndex === folderNames.length - 1} onClick={() => setPreferences(current => {
                         const groups = new Map<string, string[]>();
-                        for (const guild of orderedGuilds) { const key = remoteFolderByGuild.get(guild.id)?.name || current.serverFolders[guild.id]?.trim() || ""; if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(guild.id); }
+                        for (const guild of orderedGuilds) { const key = (Object.prototype.hasOwnProperty.call(current.serverFolders, guild.id) ? current.serverFolders[guild.id]?.trim() || "" : remoteFolderByGuild.get(guild.id)?.name || ""); if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(guild.id); }
                         const order = [...folderNames]; [order[folderIndex + 1], order[folderIndex]] = [order[folderIndex], order[folderIndex + 1]];
                         const ids = [...(groups.get("") || [])]; for (const key of order) ids.push(...(groups.get(key) || []));
                         for (const [key, value] of groups) if (key && !order.includes(key)) ids.push(...value);
@@ -8788,7 +8788,7 @@ export default function App() {
                   {orderedGuilds.map((guild, index) => (
                     <div className="server-organize-row" key={guild.id}>
                       <span title={guild.name}>{guild.name}</span>
-                      <input aria-label={`Folder for ${guild.name}`} placeholder="Folder" value={preferences.serverFolders[guild.id] || ""} onChange={event => setPreferences(current => ({ ...current, serverFolders: { ...current.serverFolders, [guild.id]: event.target.value } }))} />
+                      <input aria-label={`Folder for ${guild.name}`} placeholder="Folder" value={Object.prototype.hasOwnProperty.call(preferences.serverFolders, guild.id) ? preferences.serverFolders[guild.id] : remoteFolderByGuild.get(guild.id)?.name || ""} onChange={event => setPreferences(current => ({ ...current, serverFolders: { ...current.serverFolders, [guild.id]: event.target.value } }))} />
                       <button type="button" aria-label={`Move ${guild.name} up`} disabled={index === 0} onClick={() => setPreferences(current => {
                         const ids = orderedGuilds.map(item => item.id);
                         [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]];
