@@ -10,7 +10,7 @@ import {
   AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History, ListChecks, LogOut,
   Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
   Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Star, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
-  ZoomIn, ZoomOut
+  ZoomIn, ZoomOut, Folder
 } from "lucide-react";
 
 import {
@@ -1532,6 +1532,7 @@ export default function App() {
   const [guilds, setGuilds] = useState<DiscordGuild[]>([]);
   const [discordGuildFolders, setDiscordGuildFolders] = useState<DiscordGuildFolderSettings | null>(null);
   const [collapsedServerFolders, setCollapsedServerFolders] = useState<Set<string>>(() => new Set());
+  const [draggedGuildId, setDraggedGuildId] = useState<string | null>(null);
   const [selectedGuild, setSelectedGuild] = useState<DiscordGuild | null>(null);
   const [dmChannels, setDmChannels] = useState<DiscordChannel[]>([]);
   const [recentlyMessaged, setRecentlyMessaged] = useState<string[]>(() => {
@@ -5732,6 +5733,90 @@ export default function App() {
     return [...guilds].sort((a,b) => { const la=localOrder.get(a.id),lb=localOrder.get(b.id); if(la!==undefined||lb!==undefined){if(la===undefined)return 1;if(lb===undefined)return -1;if(la!==lb)return la-lb;}return (remoteOrder.get(a.id)??(next+(original.get(a.id)||0)))-(remoteOrder.get(b.id)??(next+(original.get(b.id)||0))); });
   }, [guilds, preferences.serverOrder, preferences.cachedServerOrder, preferences.cachedDiscordFolders, discordGuildFolders]);
   const remoteFolderByGuild = useMemo(() => { const map=new Map<string,DiscordGuildFolder>(); for(const folder of (discordGuildFolders?.folders || preferences.cachedDiscordFolders))for(const id of folder.guildIds)map.set(id,folder);return map; },[discordGuildFolders, preferences.cachedDiscordFolders]);
+
+  const folderNameForGuild = useCallback((guildId: string) => {
+    if (Object.prototype.hasOwnProperty.call(preferences.serverFolders, guildId)) {
+      return preferences.serverFolders[guildId]?.trim() || "";
+    }
+    return remoteFolderByGuild.get(guildId)?.name || "";
+  }, [preferences.serverFolders, remoteFolderByGuild]);
+
+  const guildRailGroups = useMemo(() => {
+    const groups: Array<{ name: string | null; guilds: DiscordGuild[]; color?: number | null }> = [];
+    const folderGroups = new Map<string, { name: string | null; guilds: DiscordGuild[]; color?: number | null }>();
+    for (const guild of orderedGuilds) {
+      const name = folderNameForGuild(guild.id);
+      if (!name) {
+        groups.push({ name: null, guilds: [guild] });
+        continue;
+      }
+      let group = folderGroups.get(name);
+      if (!group) {
+        group = { name, guilds: [], color: remoteFolderByGuild.get(guild.id)?.color };
+        folderGroups.set(name, group);
+        groups.push(group);
+      }
+      group.guilds.push(guild);
+    }
+    return groups;
+  }, [orderedGuilds, folderNameForGuild, remoteFolderByGuild]);
+
+  const moveGuildInLayout = useCallback((sourceId: string, targetId?: string, targetFolder?: string) => {
+    if (!sourceId || sourceId === targetId) return;
+    setPreferences(current => {
+      const ids = orderedGuilds.map(guild => guild.id);
+      const sourceIndex = ids.indexOf(sourceId);
+      if (sourceIndex < 0) return current;
+      ids.splice(sourceIndex, 1);
+      let insertAt = ids.length;
+      if (targetId) {
+        const targetIndex = ids.indexOf(targetId);
+        if (targetIndex >= 0) insertAt = targetIndex;
+      } else if (targetFolder) {
+        const members = ids.map((id, index) => folderNameForGuild(id) === targetFolder ? index : -1).filter(index => index >= 0);
+        if (members.length) insertAt = members[members.length - 1] + 1;
+      }
+      ids.splice(insertAt, 0, sourceId);
+      const serverFolders = { ...current.serverFolders };
+      if (targetFolder !== undefined) serverFolders[sourceId] = targetFolder;
+      else if (targetId) {
+        const targetFolderName = folderNameForGuild(targetId);
+        serverFolders[sourceId] = targetFolderName;
+      } else {
+        serverFolders[sourceId] = "";
+      }
+      return { ...current, serverOrder: ids, serverFolders };
+    });
+    setDraggedGuildId(null);
+  }, [orderedGuilds, folderNameForGuild]);
+
+  useEffect(() => {
+    if (!me?.id || guilds.length === 0) return;
+    const timer = window.setTimeout(async () => {
+      const groups = new Map<string, string[]>();
+      for (const guild of orderedGuilds) {
+        const name = folderNameForGuild(guild.id);
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name)!.push(guild.id);
+      }
+      const sourceFolders = discordGuildFolders?.folders || preferences.cachedDiscordFolders;
+      const names = [...groups.keys()].filter(Boolean);
+      const folders = names.map(name => {
+        const old = sourceFolders.find(folder => folder.name === name);
+        return { id: old?.id || null, name, color: old?.color ?? null, guildIds: groups.get(name) || [] };
+      });
+      const positions = orderedGuilds.map(guild => guild.id);
+      try {
+        await invoke("sync_settings_proto_v1", { settingsPayload: encodeGuildFolderSettings({ folders, positions }) });
+        setDiscordGuildFolders({ folders, positions });
+        setPreferences(current => ({ ...current, cachedServerOrder: positions, cachedDiscordFolders: folders }));
+      } catch (error) {
+        console.warn("Could not sync server organization after debounce", error);
+      }
+    }, 10_000);
+    return () => window.clearTimeout(timer);
+  }, [preferences.serverOrder, preferences.serverFolders, guilds, me?.id, orderedGuilds, folderNameForGuild, discordGuildFolders, preferences.cachedDiscordFolders, invoke]);
+
   const activeComposerAccount = useMemo(() => {
     if (composerSendingAccountId) {
       const found = savedAccounts.find(a => a.user.id === composerSendingAccountId);
@@ -5999,33 +6084,66 @@ export default function App() {
 
             <div className="rail-sep" />
 
-            {orderedGuilds.map((g, i) => {
-              const isActive = !isDmView && selectedGuild?.id === g.id;
-              const remoteFolder = remoteFolderByGuild.get(g.id);
-              const folder = remoteFolder?.name || preferences.serverFolders[g.id]?.trim();
-              const previousGuild = i > 0 ? orderedGuilds[i - 1] : undefined;
-              const previous = (previousGuild && remoteFolderByGuild.get(previousGuild.id)?.name) || (previousGuild ? preferences.serverFolders[previousGuild.id]?.trim() : undefined);
-              const folderColor = remoteFolder?.color ? `#${remoteFolder.color.toString(16).padStart(6, "0").slice(-6)}` : undefined;
-              return (
-                <React.Fragment key={g.id}>
-                  {folder && folder !== previous && <button type="button" className="server-folder-label" title={`${folder} · click to ${collapsedServerFolders.has(folder) ? "expand" : "collapse"}`} style={folderColor ? { borderLeft: `3px solid ${folderColor}` } : undefined} onClick={() => setCollapsedServerFolders(current => { const next = new Set(current); if (next.has(folder)) next.delete(folder); else next.add(folder); return next; })}><span>{collapsedServerFolders.has(folder) ? "▸" : "▾"} {folder}</span></button>}
-                  {folder && collapsedServerFolders.has(folder) ? null : <button
-                    className={`server-icon ${isActive ? "active" : ""}`}
-                    title={`${folder ? `${folder} · ` : ""}${g.name} (right-click to organize)`}
-                    style={{ animationDelay: `${i * 30}ms` } as React.CSSProperties}
-                    onContextMenu={event => {
-                      event.preventDefault();
-                      const nextFolder = window.prompt("Folder name (leave blank for no folder):", preferences.serverFolders[g.id] || "");
-                      if (nextFolder !== null) setPreferences(current => ({ ...current, serverFolders: { ...current.serverFolders, [g.id]: nextFolder.trim() } }));
-                    }}
-                    onClick={() => {
-                      setIsDmView(false);
-                      void selectGuild(g);
-                    }}
+            {guildRailGroups.map((group, groupIndex) => {
+              const folder = group.name;
+              const folderColor = group.color ? `#${group.color.toString(16).padStart(6, "0").slice(-6)}` : undefined;
+              const collapsed = !!folder && collapsedServerFolders.has(folder);
+              return folder ? (
+                <div
+                  className={`server-folder-container ${draggedGuildId ? "is-drop-ready" : ""}`}
+                  key={`folder:${folder}`}
+                  data-folder-drop={folder}
+                  onDragOver={event => event.preventDefault()}
+                  onDrop={event => { event.preventDefault(); const source = event.dataTransfer.getData("text/plain") || draggedGuildId; if (source) moveGuildInLayout(source, undefined, folder); }}
+                >
+                  <button
+                    type="button"
+                    className={`server-folder-header ${collapsed ? "collapsed" : ""}`}
+                    title={`${folder} · click to ${collapsed ? "expand" : "collapse"}`}
+                    style={folderColor ? { borderLeft: `3px solid ${folderColor}` } : undefined}
+                    onClick={() => setCollapsedServerFolders(current => { const next = new Set(current); if (next.has(folder)) next.delete(folder); else next.add(folder); return next; })}
                   >
-                    <GuildIcon guild={g} />
-                  </button>}
-                </React.Fragment>
+                    <Folder size={16} />
+                    <span>{folder}</span>
+                    <small>{group.guilds.length}</small>
+                    {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                  </button>
+                  {!collapsed && <div className="server-folder-contents">
+                    {group.guilds.map((g, index) => {
+                      const isActive = !isDmView && selectedGuild?.id === g.id;
+                      return <button
+                        key={g.id}
+                        type="button"
+                        draggable
+                        data-guild-drop={g.id}
+                        className={`server-icon ${isActive ? "active" : ""} ${draggedGuildId === g.id ? "is-dragging" : ""}`}
+                        title={g.name}
+                        style={{ animationDelay: `${(groupIndex + index) * 30}ms` } as React.CSSProperties}
+                        onDragStart={event => { setDraggedGuildId(g.id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", g.id); }}
+                        onDragEnd={() => setDraggedGuildId(null)}
+                        onDragOver={event => event.preventDefault()}
+                        onDrop={event => { event.preventDefault(); event.stopPropagation(); const source = event.dataTransfer.getData("text/plain") || draggedGuildId; if (source) moveGuildInLayout(source, g.id); }}
+                        onContextMenu={event => { event.preventDefault(); const nextFolder = window.prompt("Folder name (leave blank for no folder):", folderNameForGuild(g.id)); if (nextFolder !== null) setPreferences(current => ({ ...current, serverFolders: { ...current.serverFolders, [g.id]: nextFolder.trim() } })); }}
+                        onClick={() => { setIsDmView(false); void selectGuild(g); }}
+                      ><GuildIcon guild={g} /></button>;
+                    })}
+                  </div>}
+                </div>
+              ) : (
+                <button
+                  key={group.guilds[0].id}
+                  type="button"
+                  draggable
+                  data-guild-drop={group.guilds[0].id}
+                  className={`server-icon ${!isDmView && selectedGuild?.id === group.guilds[0].id ? "active" : ""} ${draggedGuildId === group.guilds[0].id ? "is-dragging" : ""}`}
+                  title={group.guilds[0].name}
+                  onDragStart={event => { setDraggedGuildId(group.guilds[0].id); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", group.guilds[0].id); }}
+                  onDragEnd={() => setDraggedGuildId(null)}
+                  onDragOver={event => event.preventDefault()}
+                  onDrop={event => { event.preventDefault(); const source = event.dataTransfer.getData("text/plain") || draggedGuildId; if (source) moveGuildInLayout(source, group.guilds[0].id); }}
+                  onContextMenu={event => { event.preventDefault(); const nextFolder = window.prompt("Folder name (leave blank for no folder):", ""); if (nextFolder !== null) setPreferences(current => ({ ...current, serverFolders: { ...current.serverFolders, [group.guilds[0].id]: nextFolder.trim() } })); }}
+                  onClick={() => { setIsDmView(false); void selectGuild(group.guilds[0]); }}
+                ><GuildIcon guild={group.guilds[0]} /></button>
               );
             })}
 
