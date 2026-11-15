@@ -5801,6 +5801,7 @@ export default function App() {
       if (touchDragTimerRef.current !== null) window.clearTimeout(touchDragTimerRef.current);
       touchDragTimerRef.current = null;
       touchDraggedGuildRef.current = null;
+      setDraggedGuildId(null);
     };
     const onTouchEnd = (event: TouchEvent) => {
       const source = touchDraggedGuildRef.current;
