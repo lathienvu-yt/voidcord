@@ -380,7 +380,7 @@ mod app {
     }
 
     fn channel_icon(kind: u64) -> &'static str {
-        match kind { 2 | 13 => "◖", 4 => "▾", 5 => "◉", 15 | 16 => "▤",  announcement if announcement == 0 => "#", _ => "#" }
+        match kind { 2 | 13 => "◖", 4 => "▾", 5 => "◉", 15 | 16 => "▤", 0 => "#", _ => "#" }
     }
 
     fn channel_button(name: String, kind: u64, index: usize, selected: bool, cx: &mut Context<DesktopShell>) -> impl IntoElement {
