@@ -1,402 +1,284 @@
 #[cfg(windows)]
 mod app {
-    use gpui::{
-        div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Render,
-        TitlebarOptions, Window, WindowBounds, WindowOptions,
-    };
+    use gpui::{div, ease_in_out, millis, prelude::*, px, rgb, size, Animation, AnimationExt, App, Application, Bounds, Context, Render, TitlebarOptions, Window, WindowBounds, WindowOptions};
+    use serde_json::Value;
+    use std::path::PathBuf;
+    use voidcord_core::discord_router::{AccountIdentity, DiscordRouter, TokenManager};
 
-    const BACKGROUND: u32 = 0x17151e;
+    const BG: u32 = 0x17151e;
     const PANEL: u32 = 0x201d29;
-    const PANEL_HOVER: u32 = 0x302b3b;
+    const HOVER: u32 = 0x302b3b;
     const ACCENT: u32 = 0x8b7cf6;
-    const TEXT: u32 = 0xe9e5f2;
+    const FG: u32 = 0xe9e5f2;
     const MUTED: u32 = 0x9993a8;
     const DIVIDER: u32 = 0x302c39;
 
+    #[derive(Clone)]
+    struct Guild { id: String, name: String }
+
+    #[derive(Clone)]
+    struct Channel { name: String, kind: u64 }
+
+    struct Account { username: String, token: String }
+
     pub struct DesktopShell {
-        active_server: usize,
-        active_channel: usize,
-        text_channels_open: bool,
-        voice_channels_open: bool,
+        guilds: Vec<Guild>,
+        channels: Vec<Channel>,
+        active_server: Option<usize>,
+        active_channel: Option<usize>,
+        username: String,
+        loading_guilds: bool,
+        loading_channels: bool,
+        started: bool,
+        error: Option<String>,
+        channel_error: Option<String>,
     }
 
     impl Default for DesktopShell {
         fn default() -> Self {
             Self {
-                active_server: 0,
-                active_channel: 0,
-                text_channels_open: true,
-                voice_channels_open: true,
+                guilds: Vec::new(), channels: Vec::new(), active_server: None,
+                active_channel: None, username: "Not connected".into(),
+                loading_guilds: false, loading_channels: false, started: false,
+                error: None, channel_error: None,
             }
+        }
+    }
+
+    impl DesktopShell {
+        fn load_guilds(&mut self, cx: &mut Context<Self>) {
+            self.loading_guilds = true;
+            self.error = None;
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = smol::unblock(fetch_guilds).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.loading_guilds = false;
+                    match result {
+                        Ok((account, guilds)) => {
+                            this.username = account.username;
+                            this.guilds = guilds;
+                            this.active_server = if this.guilds.is_empty() { None } else { Some(0) };
+                            if let Some(guild) = this.guilds.first() {
+                                this.load_channels(guild.id.clone(), cx);
+                            }
+                        }
+                        Err(error) => {
+                            this.error = Some(error);
+                            this.guilds.clear();
+                            this.channels.clear();
+                            this.active_server = None;
+                        }
+                    }
+                    cx.notify();
+                });
+            }).detach();
+        }
+
+        fn load_channels(&mut self, guild_id: String, cx: &mut Context<Self>) {
+            self.loading_channels = true;
+            self.channel_error = None;
+            self.channels.clear();
+            self.active_channel = None;
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = smol::unblock(move || fetch_channels(guild_id)).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.loading_channels = false;
+                    match result {
+                        Ok(channels) => {
+                            this.channels = channels;
+                            this.active_channel = if this.channels.is_empty() { None } else { Some(0) };
+                        }
+                        Err(error) => this.channel_error = Some(error),
+                    }
+                    cx.notify();
+                });
+            }).detach();
         }
     }
 
     impl Render for DesktopShell {
         fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let server_name = match self.active_server {
-                0 => "VoidCord HQ",
-                1 => "Creator Hub",
-                2 => "Rustaceans",
-                3 => "Game Dev",
-                _ => "Community",
-            };
-            let channel_name = match self.active_channel {
-                0 => "general",
-                1 => "development",
-                2 => "showcase",
-                3 => "Lounge",
-                _ => "Co-working",
-            };
+            if !self.started {
+                self.started = true;
+                self.load_guilds(cx);
+            }
 
-            div()
-                .size_full()
-                .flex()
-                .bg(rgb(BACKGROUND))
-                .text_color(rgb(TEXT))
-                // Server rail
+            let server_name = self.active_server
+                .and_then(|i| self.guilds.get(i))
+                .map(|g| g.name.clone())
+                .unwrap_or_else(|| "Servers".into());
+            let channel_name = self.active_channel
+                .and_then(|i| self.channels.get(i))
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| "Select a channel".into());
+
+            let server_items = self.guilds.iter().enumerate().map(|(i, guild)| {
+                server_button(guild.name.clone(), i, self.active_server == Some(i), cx)
+            }).collect::<Vec<_>>();
+            let channel_items = self.channels.iter().enumerate().map(|(i, channel)| {
+                channel_button(channel.name.clone(), i, self.active_channel == Some(i), cx)
+            }).collect::<Vec<_>>();
+
+            div().size_full().flex().bg(rgb(BG)).text_color(rgb(FG))
+                .with_animation("voidcord-shell-enter", Animation::new(millis(280)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
                 .child(
-                    div()
-                        .w(px(76.0))
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .py_3()
-                        .gap_2()
-                        .bg(rgb(PANEL))
-                        .child(
-                            div()
-                                .w(px(44.0))
-                                .h(px(44.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_sm()
-                                .bg(rgb(ACCENT))
-                                .text_color(rgb(0xffffff))
-                                .child("V"),
-                        )
+                    div().w(px(76.0)).h_full().flex().flex_col().items_center().py_3().gap_2().bg(rgb(PANEL))
+                        .child(div().w(px(44.0)).h(px(44.0)).flex().items_center().justify_center().rounded_sm().bg(rgb(ACCENT)).text_color(rgb(0xffffff)).child("V"))
                         .child(div().h(px(8.0)))
-                        .child(server_button("V", 0, self.active_server == 0, cx))
-                        .child(server_button("C", 1, self.active_server == 1, cx))
-                        .child(server_button("R", 2, self.active_server == 2, cx))
-                        .child(server_button("G", 3, self.active_server == 3, cx))
-                        .child(server_button("…", 4, self.active_server == 4, cx))
+                        .children(server_items)
                         .child(div().flex_1())
-                        .child(
-                            div()
-                                .w(px(38.0))
-                                .h(px(38.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .bg(rgb(0x3a3547))
-                                .text_size(px(12.0))
-                                .child("LV"),
-                        ),
+                        .child(div().w(px(38.0)).h(px(38.0)).flex().items_center().justify_center().rounded_full().bg(rgb(HOVER)).text_size(px(10.0)).child(initials(&self.username)))
                 )
-                // Channel list
                 .child(
-                    div()
-                        .w(px(248.0))
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .bg(rgb(0x1c1924))
-                        .child(
-                            div()
-                                .h(px(58.0))
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .px_4()
-                                .bg(rgb(PANEL))
-                                .child(server_name)
-                                .child(div().flex_1())
-                                .child(div().text_color(rgb(MUTED)).child("⌄")),
-                        )
+                    div().w(px(248.0)).h_full().flex().flex_col().bg(rgb(0x1c1924))
+                        .child(div().h(px(58.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child(server_name.clone()).child(div().flex_1()).child("⌄"))
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
-                        .child(category_header("TEXT CHANNELS", self.text_channels_open, true, cx))
-                        .when(self.text_channels_open, |this| {
-                            this.child(channel_button("#", "general", 0, self.active_channel, cx))
-                                .child(channel_button("#", "development", 1, self.active_channel, cx))
-                                .child(channel_button("#", "showcase", 2, self.active_channel, cx))
-                        })
-                        .child(category_header("VOICE CHANNELS", self.voice_channels_open, false, cx))
-                        .when(self.voice_channels_open, |this| {
-                            this.child(channel_button("◖", "Lounge", 3, self.active_channel, cx))
-                                .child(channel_button("◖", "Co-working", 4, self.active_channel, cx))
-                        })
+                        .child(div().px_3().py_3().text_size(px(10.0)).text_color(rgb(MUTED)).child("CHANNELS"))
+                        .when(self.loading_channels, |el| el.child(status("Loading channels…")).child(skeleton()).child(skeleton()).child(skeleton()))
+                        .when(self.channel_error.is_some(), |el| el.child(status(self.channel_error.clone().unwrap_or_default())))
+                        .when(!self.loading_channels && self.channels.is_empty() && self.channel_error.is_none(), |el| el.child(status("No channels to display")))
+                        .children(channel_items)
                         .child(div().flex_1())
-                        .child(
-                            div()
-                                .h(px(1.0))
-                                .w_full()
-                                .bg(rgb(DIVIDER)),
-                        )
-                        .child(
-                            div()
-                                .px_3()
-                                .py_3()
-                                .text_size(px(11.0))
-                                .text_color(rgb(MUTED))
-                                .child("EXPERIMENTAL GPUI CLIENT"),
-                        ),
+                        .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
+                        .child(div().px_3().py_3().text_size(px(10.0)).text_color(rgb(MUTED)).child("EXPERIMENTAL GPUI CLIENT"))
                 )
-                // Main conversation area
                 .child(
-                    div()
-                        .flex_1()
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .h(px(58.0))
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .px_4()
-                                .bg(rgb(PANEL))
-                                .child(div().text_color(rgb(ACCENT)).child(if self.active_channel < 3 { "#" } else { "◖" }))
-                                .child(div().w(px(8.0)))
-                                .child(channel_name)
-                                .child(div().flex_1())
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(rgb(MUTED))
-                                        .child("GPUI native preview"),
-                                ),
-                        )
+                    div().flex_1().h_full().flex().flex_col()
+                        .child(div().h(px(58.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child("#").child(div().w(px(8.0))).child(channel_name.clone()).child(div().flex_1()).child(div().text_size(px(11.0)).text_color(rgb(MUTED)).child(self.username.clone())))
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
                         .child(
-                            div()
-                                .flex_1()
-                                .w_full()
-                                .flex()
-                                .flex_col()
-                                .justify_center()
-                                .items_center()
-                                .px_6()
-                                .child(
-                                    div()
-                                        .text_size(px(24.0))
-                                        .text_color(rgb(TEXT))
-                                        .child(format!("#{channel_name}")),
-                                )
-                                .child(div().h(px(12.0)))
-                                .child(
-                                    div()
-                                        .text_size(px(13.0))
-                                        .text_color(rgb(MUTED))
-                                        .child(format!("You're viewing {channel_name} in {server_name}.")),
-                                )
-                                .child(div().h(px(24.0)))
-                                .child(
-                                    div()
-                                        .px_3()
-                                        .py_2()
-                                        .rounded_sm()
-                                        .bg(rgb(PANEL_HOVER))
-                                        .text_size(px(12.0))
-                                        .text_color(rgb(ACCENT))
-                                        .child("Native window · no WebView"),
-                                ),
+                            div().flex_1().w_full().flex().flex_col().justify_center().items_center().px_6()
+                                .when(self.loading_guilds, |el| el.child(status("Connecting to Discord…")).child(skeleton()).child(skeleton()))
+                                .when(self.error.is_some(), |el| el.child(div().text_color(rgb(0xff8b8b)).child(self.error.clone().unwrap_or_default())).child(retry_button(cx)))
+                                .when(!self.loading_guilds && self.error.is_none() && self.guilds.is_empty(), |el| el.child("No Discord servers found").child(status("Sign in using the stable VoidCord client, then retry.")))
+                                .when(!self.loading_guilds && self.error.is_none() && !self.guilds.is_empty(), |el| el.child(div().text_size(px(24.0)).child(format!("#{channel_name}"))).child(div().h(px(12.0))).child(div().text_size(px(13.0)).text_color(rgb(MUTED)).child(format!("You're viewing {channel_name} in {server_name}."))).child(div().h(px(24.0))).child(div().px_3().py_2().rounded_sm().bg(rgb(HOVER)).text_size(px(12.0)).text_color(rgb(ACCENT)).child("Native window · live Discord navigation")))
                         )
-                        .child(
-                            div()
-                                .h(px(64.0))
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .px_4()
-                                .bg(rgb(PANEL))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .px_3()
-                                        .py_3()
-                                        .rounded_sm()
-                                        .bg(rgb(BACKGROUND))
-                                        .text_size(px(12.0))
-                                        .text_color(rgb(MUTED))
-                                        .child("Messaging is the next subsystem to port…"),
-                                ),
-                        ),
+                        .child(div().h(px(64.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child(div().flex_1().px_3().py_3().rounded_sm().bg(rgb(BG)).text_size(px(12.0)).text_color(rgb(MUTED)).child("Message history and composer are next…")))
                 )
-                // Right-hand context panel
                 .child(
-                    div()
-                        .w(px(224.0))
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .bg(rgb(0x1c1924))
-                        .child(
-                            div()
-                                .h(px(58.0))
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .px_3()
-                                .bg(rgb(PANEL))
-                                .text_size(px(12.0))
-                                .child("CHANNEL DETAILS"),
-                        )
+                    div().w(px(224.0)).h_full().flex().flex_col().bg(rgb(0x1c1924))
+                        .child(div().h(px(58.0)).w_full().flex().items_center().px_3().bg(rgb(PANEL)).text_size(px(12.0)).child("CHANNEL DETAILS"))
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
-                        .child(
-                            div()
-                                .px_3()
-                                .py_3()
-                                .text_size(px(13.0))
-                                .text_color(rgb(TEXT))
-                                .child(channel_name),
-                        )
-                        .child(
-                            div()
-                                .px_3()
-                                .text_size(px(11.0))
-                                .text_color(rgb(MUTED))
-                                .child(server_name),
-                        )
+                        .child(div().px_3().py_3().text_size(px(13.0)).child(channel_name))
+                        .child(div().px_3().text_size(px(11.0)).text_color(rgb(MUTED)).child(server_name))
                         .child(div().h(px(20.0)))
-                        .child(
-                            div()
-                                .px_3()
-                                .text_size(px(11.0))
-                                .text_color(rgb(MUTED))
-                                .child("MIGRATION STATUS"),
-                        )
-                        .child(
-                            div()
-                                .px_3()
-                                .py_2()
-                                .text_size(px(12.0))
-                                .text_color(rgb(ACCENT))
-                                .child("Milestone 2 · Navigation"),
-                        )
-                        .child(
-                            div()
-                                .px_3()
-                                .text_size(px(11.0))
-                                .text_color(rgb(MUTED))
-                                .child("Server and channel navigation are interactive. Discord data is not connected yet."),
-                        ),
+                        .child(div().px_3().text_size(px(11.0)).text_color(rgb(MUTED)).child("ACCOUNT"))
+                        .child(div().px_3().py_2().text_size(px(12.0)).text_color(rgb(ACCENT)).child(self.username.clone()))
+                        .child(div().px_3().text_size(px(11.0)).text_color(rgb(MUTED)).child(format!("Guilds: {}", self.guilds.len())))
                 )
         }
     }
 
-    fn server_button(
-        label: &'static str,
-        index: usize,
-        selected: bool,
-        cx: &mut Context<DesktopShell>,
-    ) -> impl IntoElement {
-        div()
-            .id(("server", index))
-            .w(px(44.0))
-            .h(px(44.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded_sm()
-            .bg(rgb(if selected { ACCENT } else { PANEL_HOVER }))
-            .text_color(rgb(TEXT))
-            .child(label)
+    fn fetch_guilds() -> Result<(Account, Vec<Guild>), String> {
+        let account = load_account()?;
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()
+            .map_err(|e| format!("Could not start Discord runtime: {e}"))?;
+        let router = DiscordRouter::new(TokenManager::default());
+        let response = runtime.block_on(router.rest_with_auth(Some(&account.token), AccountIdentity::Primary, reqwest::Method::GET, "users/@me/guilds", None))
+            .map_err(|e| format!("Could not load Discord servers: {e}"))?;
+        let entries = response.as_array().ok_or_else(|| "Discord returned an unexpected server list.".to_owned())?;
+        let guilds = entries.iter().filter_map(|item| Some(Guild {
+            id: item.get("id")?.as_str()?.to_owned(),
+            name: item.get("name")?.as_str()?.to_owned(),
+        })).collect();
+        Ok((account, guilds))
+    }
+
+    fn fetch_channels(guild_id: String) -> Result<Vec<Channel>, String> {
+        let account = load_account()?;
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()
+            .map_err(|e| format!("Could not start Discord runtime: {e}"))?;
+        let router = DiscordRouter::new(TokenManager::default());
+        let path = format!("guilds/{guild_id}/channels");
+        let response = runtime.block_on(router.rest_with_auth(Some(&account.token), AccountIdentity::Primary, reqwest::Method::GET, &path, None))
+            .map_err(|e| format!("Could not load channels: {e}"))?;
+        let entries = response.as_array().ok_or_else(|| "Discord returned an unexpected channel list.".to_owned())?;
+        let mut channels = entries.iter().filter_map(|item| Some(Channel {
+            name: item.get("name")?.as_str()?.to_owned(),
+            kind: item.get("type")?.as_u64()?,
+        })).collect::<Vec<_>>();
+        channels.sort_by_key(|channel| (channel.kind == 4, channel.kind == 2 || channel.kind == 13));
+        Ok(channels)
+    }
+
+    fn load_account() -> Result<Account, String> {
+        let app_data = std::env::var_os("APPDATA").map(PathBuf::from)
+            .ok_or_else(|| "Windows APPDATA directory is unavailable.".to_owned())?;
+        let path = app_data.join("app.voidcord.desktop").join("voidcord-v1.json");
+        let raw = std::fs::read_to_string(path)
+            .map_err(|_| "No saved VoidCord account found. Sign in using the stable client first.".to_owned())?;
+        let store: Value = serde_json::from_str(&raw).map_err(|_| "VoidCord account settings could not be read.".to_owned())?;
+        let accounts = store.get("accounts").and_then(Value::as_array).ok_or_else(|| "No saved Discord accounts found.".to_owned())?;
+        let active_id = store.get("active_account_id").and_then(Value::as_str);
+        let selected = active_id.and_then(|id| accounts.iter().find(|a| a.pointer("/user/id").and_then(Value::as_str) == Some(id)))
+            .or_else(|| accounts.iter().find(|a| a.get("role").and_then(Value::as_str) == Some("primary")))
+            .or_else(|| accounts.first()).ok_or_else(|| "No saved Discord accounts found.".to_owned())?;
+        let user = selected.get("user").ok_or_else(|| "Saved account metadata is incomplete.".to_owned())?;
+        let id = user.get("id").and_then(Value::as_str).ok_or_else(|| "Saved account ID is missing.".to_owned())?;
+        let username = user.get("global_name").and_then(Value::as_str)
+            .or_else(|| user.get("username").and_then(Value::as_str)).unwrap_or("Discord account").to_owned();
+        let entry = keyring::Entry::new("voidcord", &format!("discord_token_{id}"))
+            .map_err(|e| format!("Could not access Windows credential storage: {e}"))?;
+        let token = entry.get_password().map_err(|_| "The account token is missing from Windows Credential Manager. Sign in again in the stable client.".to_owned())?;
+        Ok(Account { username, token })
+    }
+
+    fn initials(name: &str) -> String {
+        name.split(|c: char| c.is_whitespace() || c == '_' || c == '-')
+            .filter_map(|part| part.chars().next()).take(2).collect::<String>().to_uppercase()
+    }
+
+    fn server_button(name: String, index: usize, selected: bool, cx: &mut Context<DesktopShell>) -> impl IntoElement {
+        div().id(("server", index)).w(px(44.0)).h(px(44.0)).flex().items_center().justify_center().rounded_sm()
+            .bg(rgb(if selected { ACCENT } else { HOVER })).text_color(rgb(FG)).child(initials(&name))
+            .hover(|style| style.bg(rgb(if selected { 0x9a8cff } else { 0x40394f })))
+            .with_animation(("server-entry", index), Animation::new(millis(220)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.active_server = index;
-                this.active_channel = 0;
+                this.active_server = Some(index);
+                if let Some(guild) = this.guilds.get(index) { this.load_channels(guild.id.clone(), cx); }
                 cx.notify();
             }))
     }
 
-    fn category_header(
-        label: &'static str,
-        expanded: bool,
-        is_text: bool,
-        cx: &mut Context<DesktopShell>,
-    ) -> impl IntoElement {
-        div()
-            .id(if is_text { "text-category" } else { "voice-category" })
-            .w_full()
-            .px_3()
-            .py_3()
-            .flex()
-            .items_center()
-            .text_size(px(11.0))
-            .text_color(rgb(MUTED))
-            .child(if expanded { "⌄" } else { "›" })
-            .child(div().w(px(6.0)))
-            .child(label)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if is_text {
-                    this.text_channels_open = !this.text_channels_open;
-                } else {
-                    this.voice_channels_open = !this.voice_channels_open;
-                }
-                cx.notify();
-            }))
+    fn channel_button(name: String, index: usize, selected: bool, cx: &mut Context<DesktopShell>) -> impl IntoElement {
+        div().id(("channel", index)).w_full().px_3().py_2().flex().items_center().rounded_sm()
+            .bg(rgb(if selected { HOVER } else { 0x1c1924 })).text_size(px(13.0))
+            .text_color(rgb(if selected { FG } else { MUTED })).child("#").child(div().w(px(8.0))).child(name)
+            .hover(|style| style.bg(rgb(HOVER)))
+            .with_animation(("channel-entry", index), Animation::new(millis(180)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
+            .on_click(cx.listener(move |this, _, _, cx| { this.active_channel = Some(index); cx.notify(); }))
     }
 
-    fn channel_button(
-        prefix: &'static str,
-        name: &'static str,
-        index: usize,
-        active_channel: usize,
-        cx: &mut Context<DesktopShell>,
-    ) -> impl IntoElement {
-        let selected = index == active_channel;
-        div()
-            .id(("channel", index))
-            .w_full()
-            .px_3()
-            .py_2()
-            .flex()
-            .items_center()
-            .rounded_sm()
-            .bg(rgb(if selected { PANEL_HOVER } else { 0x1c1924 }))
-            .text_size(px(13.0))
-            .text_color(rgb(if selected { TEXT } else { MUTED }))
-            .child(div().text_color(rgb(MUTED)).child(prefix))
-            .child(div().w(px(8.0)))
-            .child(name)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.active_channel = index;
-                cx.notify();
-            }))
+    fn status(message: impl Into<String>) -> impl IntoElement {
+        div().px_3().py_2().text_size(px(11.0)).text_color(rgb(MUTED)).child(message.into())
+    }
+
+    fn skeleton() -> impl IntoElement {
+        div().mx_3().my_1().h(px(28.0)).w(px(180.0)).rounded_sm().bg(rgb(HOVER))
+            .with_animation("voidcord-loading-pulse", Animation::new(millis(850)).with_easing(ease_in_out), |element, progress| element.opacity(0.45 + progress * 0.55))
+    }
+
+    fn retry_button(cx: &mut Context<DesktopShell>) -> impl IntoElement {
+        div().id("retry-discord").px_3().py_2().rounded_sm().bg(rgb(ACCENT)).text_color(rgb(0xffffff)).text_size(px(12.0)).child("Retry connection")
+            .on_click(cx.listener(|this, _, _, cx| this.load_guilds(cx)))
     }
 
     pub fn run() {
         Application::new().run(|cx: &mut App| {
             let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
-            let titlebar = TitlebarOptions {
-                title: Some("VoidCord · GPUI".into()),
-                ..Default::default()
-            };
-
+            let titlebar = TitlebarOptions { title: Some("VoidCord · GPUI".into()), ..Default::default() };
             cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(titlebar),
-                    show: true,
-                    focus: true,
-                    ..Default::default()
-                },
+                WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), titlebar: Some(titlebar), show: true, focus: true, ..Default::default() },
                 |_, cx| cx.new(|_| DesktopShell::default()),
-            )
-            .expect("Could not open the VoidCord GPUI window");
+            ).expect("Could not open the VoidCord GPUI window");
         });
     }
 }
 
 #[cfg(windows)]
-pub fn run() {
-    app::run();
-}
+pub fn run() { app::run(); }
 
 #[cfg(not(windows))]
-pub fn run() {
-    eprintln!("The experimental GPUI desktop shell currently targets Windows only.");
-}
+pub fn run() { eprintln!("The experimental GPUI desktop shell currently targets Windows only."); }
