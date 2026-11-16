@@ -23,31 +23,37 @@ mod app {
     #[derive(Clone)]
     struct Message { author: String, content: String, timestamp: String }
 
+    #[derive(Clone)]
+    struct Member { name: String, nickname: Option<String> }
+
     struct Account { username: String, token: String }
 
     pub struct DesktopShell {
         guilds: Vec<Guild>,
         channels: Vec<Channel>,
         messages: Vec<Message>,
+        members: Vec<Member>,
         active_server: Option<usize>,
         active_channel: Option<usize>,
         username: String,
         loading_guilds: bool,
         loading_channels: bool,
         loading_messages: bool,
+        loading_members: bool,
         started: bool,
         error: Option<String>,
         channel_error: Option<String>,
         message_error: Option<String>,
+        member_error: Option<String>,
     }
 
     impl Default for DesktopShell {
         fn default() -> Self {
             Self {
                 guilds: Vec::new(), channels: Vec::new(), messages: Vec::new(), active_server: None,
-                active_channel: None, username: "Not connected".into(),
-                loading_guilds: false, loading_channels: false, loading_messages: false, started: false,
-                error: None, channel_error: None, message_error: None,
+                active_channel: None, username: "Not connected".into(), members: Vec::new(),
+                loading_guilds: false, loading_channels: false, loading_messages: false, loading_members: false, started: false,
+                error: None, channel_error: None, message_error: None, member_error: None,
             }
         }
     }
@@ -68,6 +74,7 @@ mod app {
                             this.active_server = if this.guilds.is_empty() { None } else { Some(0) };
                             if let Some(guild) = this.guilds.first() {
                                 this.load_channels(guild.id.clone(), cx);
+                                this.load_members(guild.id.clone(), cx);
                             }
                         }
                         Err(error) => {
@@ -104,6 +111,24 @@ mod app {
                             }
                         }
                         Err(error) => this.channel_error = Some(error),
+                    }
+                    cx.notify();
+                });
+            }).detach();
+        }
+
+        fn load_members(&mut self, guild_id: String, cx: &mut Context<Self>) {
+            self.loading_members = true;
+            self.member_error = None;
+            self.members.clear();
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = smol::unblock(move || fetch_members(guild_id)).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.loading_members = false;
+                    match result {
+                        Ok(members) => this.members = members,
+                        Err(error) => this.member_error = Some(error),
                     }
                     cx.notify();
                 });
@@ -152,6 +177,7 @@ mod app {
                 channel_button(channel.name.clone(), i, self.active_channel == Some(i), cx)
             }).collect::<Vec<_>>();
             let message_items = self.messages.iter().map(|message| message_row(message.clone())).collect::<Vec<_>>();
+            let member_items = self.members.iter().map(|member| member_row(member.clone())).collect::<Vec<_>>();
 
             div().size_full().flex().bg(rgb(BG)).text_color(rgb(FG))
                 .child(
@@ -201,6 +227,12 @@ mod app {
                         .child(div().px_3().text_size(px(11.0)).text_color(rgb(MUTED)).child("ACCOUNT"))
                         .child(div().px_3().py_2().text_size(px(12.0)).text_color(rgb(ACCENT)).child(self.username.clone()))
                         .child(div().px_3().text_size(px(11.0)).text_color(rgb(MUTED)).child(format!("Guilds: {}", self.guilds.len())))
+                        .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
+                        .child(div().px_3().py_3().text_size(px(11.0)).text_color(rgb(MUTED)).child(format!("MEMBERS · {}", self.members.len())))
+                        .when(self.loading_members, |el| el.child(status("Loading members…")).child(skeleton()).child(skeleton()))
+                        .when(self.member_error.is_some(), |el| el.child(status(self.member_error.clone().unwrap_or_default())))
+                        .when(!self.loading_members && self.member_error.is_none() && self.members.is_empty(), |el| el.child(status("No members to show")))
+                        .children(member_items)
                 )
                 .with_animation("voidcord-shell-enter", Animation::new(Duration::from_millis(280)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
         }
@@ -239,6 +271,26 @@ mod app {
         Ok(channels)
     }
 
+    fn fetch_members(guild_id: String) -> Result<Vec<Member>, String> {
+        let account = load_account()?;
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()
+            .map_err(|e| format!("Could not start Discord runtime: {e}"))?;
+        let router = DiscordRouter::new(TokenManager::default());
+        let path = format!("guilds/{guild_id}/members?limit=100");
+        let response = runtime.block_on(router.rest_with_auth(
+            Some(&account.token), AccountIdentity::ReadOnly, reqwest::Method::GET, &path, None
+        )).map_err(|e| format!("Could not load server members: {e}"))?;
+        let entries = response.as_array().ok_or_else(|| "Discord returned an unexpected member list.".to_owned())?;
+        let mut members = entries.iter().filter_map(|item| {
+            let user = item.get("user")?;
+            let name = user.get("global_name").and_then(Value::as_str)
+                .or_else(|| user.get("username").and_then(Value::as_str))?.to_owned();
+            Some(Member { name, nickname: item.get("nick").and_then(Value::as_str).map(str::to_owned) })
+        }).collect::<Vec<_>>();
+        members.sort_by(|a, b| a.nickname.as_deref().unwrap_or(&a.name).to_lowercase().cmp(&b.nickname.as_deref().unwrap_or(&b.name).to_lowercase()));
+        Ok(members)
+    }
+
     fn fetch_messages(channel_id: String) -> Result<Vec<Message>, String> {
         let account = load_account()?;
         let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()
@@ -261,6 +313,14 @@ mod app {
         }).collect::<Vec<_>>();
         messages.reverse();
         Ok(messages)
+    }
+
+    fn member_row(member: Member) -> impl IntoElement {
+        let label = member.nickname.unwrap_or_else(|| member.name.clone());
+        div().w_full().px_3().py_2().flex().items_center().gap_2()
+            .hover(|style| style.bg(rgb(HOVER)))
+            .child(div().w(px(26.0)).h(px(26.0)).rounded_full().flex().items_center().justify_center().bg(rgb(HOVER)).text_size(px(9.0)).text_color(rgb(ACCENT)).child(initials(&label)))
+            .child(div().flex_1().text_size(px(12.0)).text_color(rgb(FG)).child(label))
     }
 
     fn message_row(message: Message) -> impl IntoElement {
@@ -306,7 +366,10 @@ mod app {
             .hover(|style| style.bg(rgb(if selected { 0x9a8cff } else { 0x40394f })))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.active_server = Some(index);
-                if let Some(guild) = this.guilds.get(index) { this.load_channels(guild.id.clone(), cx); }
+                if let Some(guild) = this.guilds.get(index) {
+                    this.load_channels(guild.id.clone(), cx);
+                    this.load_members(guild.id.clone(), cx);
+                }
                 cx.notify();
             }))
             .with_animation(("server-entry", index), Animation::new(Duration::from_millis(220)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
