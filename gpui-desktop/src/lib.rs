@@ -18,30 +18,36 @@ mod app {
     struct Guild { id: String, name: String }
 
     #[derive(Clone)]
-    struct Channel { name: String, kind: u64 }
+    struct Channel { id: String, name: String, kind: u64 }
+
+    #[derive(Clone)]
+    struct Message { author: String, content: String, timestamp: String }
 
     struct Account { username: String, token: String }
 
     pub struct DesktopShell {
         guilds: Vec<Guild>,
         channels: Vec<Channel>,
+        messages: Vec<Message>,
         active_server: Option<usize>,
         active_channel: Option<usize>,
         username: String,
         loading_guilds: bool,
         loading_channels: bool,
+        loading_messages: bool,
         started: bool,
         error: Option<String>,
         channel_error: Option<String>,
+        message_error: Option<String>,
     }
 
     impl Default for DesktopShell {
         fn default() -> Self {
             Self {
-                guilds: Vec::new(), channels: Vec::new(), active_server: None,
+                guilds: Vec::new(), channels: Vec::new(), messages: Vec::new(), active_server: None,
                 active_channel: None, username: "Not connected".into(),
-                loading_guilds: false, loading_channels: false, started: false,
-                error: None, channel_error: None,
+                loading_guilds: false, loading_channels: false, loading_messages: false, started: false,
+                error: None, channel_error: None, message_error: None,
             }
         }
     }
@@ -80,7 +86,10 @@ mod app {
             self.loading_channels = true;
             self.channel_error = None;
             self.channels.clear();
+            self.messages.clear();
             self.active_channel = None;
+            self.loading_messages = false;
+            self.message_error = None;
             cx.notify();
             cx.spawn(async move |this, cx| {
                 let result = smol::unblock(move || fetch_channels(guild_id)).await;
@@ -90,8 +99,29 @@ mod app {
                         Ok(channels) => {
                             this.channels = channels;
                             this.active_channel = if this.channels.is_empty() { None } else { Some(0) };
+                            if let Some(channel) = this.channels.first() {
+                                if channel.kind == 0 { this.load_messages(channel.id.clone(), cx); }
+                            }
                         }
                         Err(error) => this.channel_error = Some(error),
+                    }
+                    cx.notify();
+                });
+            }).detach();
+        }
+
+        fn load_messages(&mut self, channel_id: String, cx: &mut Context<Self>) {
+            self.loading_messages = true;
+            self.message_error = None;
+            self.messages.clear();
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = smol::unblock(move || fetch_messages(channel_id)).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.loading_messages = false;
+                    match result {
+                        Ok(messages) => this.messages = messages,
+                        Err(error) => this.message_error = Some(error),
                     }
                     cx.notify();
                 });
@@ -121,6 +151,7 @@ mod app {
             let channel_items = self.channels.iter().enumerate().map(|(i, channel)| {
                 channel_button(channel.name.clone(), i, self.active_channel == Some(i), cx)
             }).collect::<Vec<_>>();
+            let message_items = self.messages.iter().map(|message| message_row(message.clone())).collect::<Vec<_>>();
 
             div().size_full().flex().bg(rgb(BG)).text_color(rgb(FG))
                 .child(
@@ -149,13 +180,16 @@ mod app {
                         .child(div().h(px(58.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child("#").child(div().w(px(8.0))).child(channel_name.clone()).child(div().flex_1()).child(div().text_size(px(11.0)).text_color(rgb(MUTED)).child(self.username.clone())))
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
                         .child(
-                            div().flex_1().w_full().flex().flex_col().justify_center().items_center().px_6()
+                            div().flex_1().w_full().flex().flex_col().px_5().py_4().gap_3().overflow_y_scroll()
                                 .when(self.loading_guilds, |el| el.child(status("Connecting to Discord…")).child(skeleton()).child(skeleton()))
                                 .when(self.error.is_some(), |el| el.child(div().text_color(rgb(0xff8b8b)).child(self.error.clone().unwrap_or_default())).child(retry_button(cx)))
                                 .when(!self.loading_guilds && self.error.is_none() && self.guilds.is_empty(), |el| el.child("No Discord servers found").child(status("Sign in using the stable VoidCord client, then retry.")))
-                                .when(!self.loading_guilds && self.error.is_none() && !self.guilds.is_empty(), |el| el.child(div().text_size(px(24.0)).child(format!("#{channel_name}"))).child(div().h(px(12.0))).child(div().text_size(px(13.0)).text_color(rgb(MUTED)).child(format!("You're viewing {channel_name} in {server_name}."))).child(div().h(px(24.0))).child(div().px_3().py_2().rounded_sm().bg(rgb(HOVER)).text_size(px(12.0)).text_color(rgb(ACCENT)).child("Native window · live Discord navigation")))
+                                .when(self.loading_messages, |el| el.child(status("Loading messages…")).child(skeleton()).child(skeleton()).child(skeleton()))
+                                .when(self.message_error.is_some(), |el| el.child(div().text_color(rgb(0xff8b8b)).child(self.message_error.clone().unwrap_or_default())))
+                                .when(!self.loading_messages && self.message_error.is_none() && self.messages.is_empty() && !self.guilds.is_empty(), |el| el.child(status("No messages yet — start the conversation.")))
+                                .children(message_items)
                         )
-                        .child(div().h(px(64.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child(div().flex_1().px_3().py_3().rounded_sm().bg(rgb(BG)).text_size(px(12.0)).text_color(rgb(MUTED)).child("Message history and composer are next…")))
+                        .child(div().h(px(64.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child(div().flex_1().px_3().py_3().rounded_sm().bg(rgb(BG)).text_size(px(12.0)).text_color(rgb(MUTED)).child("Message composer is the next slice…")))
                 )
                 .child(
                     div().w(px(224.0)).h_full().flex().flex_col().bg(rgb(0x1c1924))
@@ -197,11 +231,46 @@ mod app {
             .map_err(|e| format!("Could not load channels: {e}"))?;
         let entries = response.as_array().ok_or_else(|| "Discord returned an unexpected channel list.".to_owned())?;
         let mut channels = entries.iter().filter_map(|item| Some(Channel {
+            id: item.get("id")?.as_str()?.to_owned(),
             name: item.get("name")?.as_str()?.to_owned(),
             kind: item.get("type")?.as_u64()?,
         })).collect::<Vec<_>>();
         channels.sort_by_key(|channel| (channel.kind == 4, channel.kind == 2 || channel.kind == 13));
         Ok(channels)
+    }
+
+    fn fetch_messages(channel_id: String) -> Result<Vec<Message>, String> {
+        let account = load_account()?;
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()
+            .map_err(|e| format!("Could not start Discord runtime: {e}"))?;
+        let router = DiscordRouter::new(TokenManager::default());
+        let path = format!("channels/{channel_id}/messages?limit=50");
+        let response = runtime.block_on(router.rest_with_auth(
+            Some(&account.token), AccountIdentity::ReadOnly, reqwest::Method::GET, &path, None
+        )).map_err(|e| format!("Could not load messages: {e}"))?;
+        let entries = response.as_array().ok_or_else(|| "Discord returned an unexpected message list.".to_owned())?;
+        let mut messages = entries.iter().filter_map(|item| {
+            let author = item.get("author")?;
+            Some(Message {
+                author: author.get("global_name").and_then(Value::as_str)
+                    .or_else(|| author.get("username").and_then(Value::as_str))
+                    .unwrap_or("Unknown user").to_owned(),
+                content: item.get("content").and_then(Value::as_str).unwrap_or("").to_owned(),
+                timestamp: item.get("timestamp").and_then(Value::as_str).unwrap_or("").to_owned(),
+            })
+        }).collect::<Vec<_>>();
+        messages.reverse();
+        Ok(messages)
+    }
+
+    fn message_row(message: Message) -> impl IntoElement {
+        let stamp = message.timestamp.get(0..16).unwrap_or(&message.timestamp).replace('T', " ");
+        div().w_full().flex().flex_col().gap_1().px_3().py_2().rounded_sm()
+            .hover(|style| style.bg(rgb(0x211e2a)))
+            .child(div().flex().items_center().gap_2()
+                .child(div().text_size(px(13.0)).text_color(rgb(ACCENT)).child(message.author))
+                .child(div().text_size(px(10.0)).text_color(rgb(MUTED)).child(stamp)))
+            .child(div().text_size(px(13.0)).text_color(rgb(FG)).child(if message.content.is_empty() { "[Attachment or embedded message]".to_owned() } else { message.content }))
     }
 
     fn load_account() -> Result<Account, String> {
@@ -248,7 +317,14 @@ mod app {
             .bg(rgb(if selected { HOVER } else { 0x1c1924 })).text_size(px(13.0))
             .text_color(rgb(if selected { FG } else { MUTED })).child("#").child(div().w(px(8.0))).child(name)
             .hover(|style| style.bg(rgb(HOVER)))
-            .on_click(cx.listener(move |this, _, _, cx| { this.active_channel = Some(index); cx.notify(); }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.active_channel = Some(index);
+                if let Some(channel) = this.channels.get(index) {
+                    if channel.kind == 0 { this.load_messages(channel.id.clone(), cx); }
+                    else { this.messages.clear(); this.message_error = Some("Message history is available for text channels.".into()); }
+                }
+                cx.notify();
+            }))
             .with_animation(("channel-entry", index), Animation::new(Duration::from_millis(180)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
     }
 
