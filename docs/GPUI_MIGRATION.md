@@ -20,6 +20,7 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 | Guild/channel selection | Live data foundation | Fetches guilds and channel lists through the shared DiscordRouter; selection is session-local |
 | Channel list | Live data foundation | Fetches real guild channels and handles loading, empty, and error states |
 | Message history | Initial REST slice | Loads the latest 50 text-channel messages through the shared DiscordRouter; loading, empty, and error states are rendered. Pagination and gateway updates remain pending |
+| Guild member sidebar | Initial REST slice | Loads up to 100 members for the selected guild, displays nicknames/global names, and includes loading, empty, and error states |
 | Message composer | Not started | Add a native GPUI input and route sends through the shared DiscordRouter |
 | Gateway events | Not started | Must consume the existing gateway; no second gateway |
 | Notifications and unread state | Not started | Preserve existing read-state semantics |
@@ -36,6 +37,7 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 - Displays account/guild loading, channel loading, empty, error, and retry states.
 - Adds a native shell entrance fade and animated loading placeholders. This is an initial motion pass, not yet a complete reduced-motion system.
 - Loads the latest 50 messages for selected text channels through `DiscordRouter`, renders author/content/timestamp rows, and reports loading, empty, and error states.
+- Loads up to 100 guild members for the selected server through `DiscordRouter`; renders member initials and nicknames/global names in the right sidebar with loading, empty, and error states.
 
 ## Next slice: messages and gateway events
 
