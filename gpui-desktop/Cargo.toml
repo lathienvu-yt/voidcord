@@ -1,0 +1,13 @@
+[package]
+name = "voidcord-gpui-desktop"
+version = "0.1.0"
+description = "Experimental native GPUI desktop shell for VoidCord"
+edition = "2021"
+publish = false
+
+[target.'cfg(windows)'.dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["font-kit"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
