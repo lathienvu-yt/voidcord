@@ -34,6 +34,7 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "voidcord-core",
  "voidcord-gpui-desktop",
  "windows-sys 0.61.2",
 ]
@@ -9936,10 +9937,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "voidcord-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "iana-time-zone",
+ "log",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "tokio-util",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "voidcord-gpui-desktop"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "voidcord-core",
 ]
 
 [[package]]
