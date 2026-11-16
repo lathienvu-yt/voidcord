@@ -180,7 +180,7 @@ mod app {
                         .child(div().h(px(58.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child("#").child(div().w(px(8.0))).child(channel_name.clone()).child(div().flex_1()).child(div().text_size(px(11.0)).text_color(rgb(MUTED)).child(self.username.clone())))
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
                         .child(
-                            div().flex_1().w_full().flex().flex_col().px_5().py_4().gap_3().overflow_y_scroll()
+                            div().id("message-history").flex_1().w_full().flex().flex_col().px_5().py_4().gap_3().overflow_y_scroll()
                                 .when(self.loading_guilds, |el| el.child(status("Connecting to Discord…")).child(skeleton()).child(skeleton()))
                                 .when(self.error.is_some(), |el| el.child(div().text_color(rgb(0xff8b8b)).child(self.error.clone().unwrap_or_default())).child(retry_button(cx)))
                                 .when(!self.loading_guilds && self.error.is_none() && self.guilds.is_empty(), |el| el.child("No Discord servers found").child(status("Sign in using the stable VoidCord client, then retry.")))
