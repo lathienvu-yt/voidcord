@@ -103,6 +103,12 @@ pub struct AppState {
 }
 
 fn main() {
+    // Opt-in native UI mode. Stable Tauri remains the default launch path.
+    if std::env::args().any(|arg| arg == "--gpui-experimental") {
+        voidcord_gpui_desktop::run();
+        return;
+    }
+
     let default_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let thread = std::thread::current();
