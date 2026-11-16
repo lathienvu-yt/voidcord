@@ -34,6 +34,7 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "voidcord-gpui-desktop",
  "windows-sys 0.61.2",
 ]
 
@@ -9932,6 +9933,13 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "voidcord-gpui-desktop"
+version = "0.1.0"
+dependencies = [
+ "gpui",
 ]
 
 [[package]]
