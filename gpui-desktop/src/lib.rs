@@ -72,9 +72,9 @@ mod app {
                             this.username = account.username;
                             this.guilds = guilds;
                             this.active_server = if this.guilds.is_empty() { None } else { Some(0) };
-                            if let Some(guild) = this.guilds.first() {
-                                this.load_channels(guild.id.clone(), cx);
-                                this.load_members(guild.id.clone(), cx);
+                            if let Some(guild_id) = this.guilds.first().map(|guild| guild.id.clone()) {
+                                this.load_channels(guild_id.clone(), cx);
+                                this.load_members(guild_id, cx);
                             }
                         }
                         Err(error) => {
@@ -189,7 +189,7 @@ mod app {
                 )
                 .child(
                     div().w(px(248.0)).h_full().flex().flex_col().bg(rgb(0x1c1924))
-                        .child(div().h(px(58.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child(server_name.clone()).child(div().flex_1()).child(div().px_2().py_1().rounded_sm().text_color(rgb(MUTED)).child("↻").hover(|style| style.bg(rgb(HOVER))).on_click(cx.listener(|this, _, _, cx| { if let Some(guild) = this.active_server.and_then(|i| this.guilds.get(i)) { let id = guild.id.clone(); this.load_channels(id.clone(), cx); this.load_members(id, cx); } }))).child("⌄"))
+                        .child(div().h(px(58.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child(server_name.clone()).child(div().flex_1()).child(div().id("server-refresh").px_2().py_1().rounded_sm().text_color(rgb(MUTED)).child("↻").hover(|style| style.bg(rgb(HOVER))).on_click(cx.listener(|this, _, _, cx| { if let Some(guild) = this.active_server.and_then(|i| this.guilds.get(i)) { let id = guild.id.clone(); this.load_channels(id.clone(), cx); this.load_members(id, cx); } }))).child("⌄"))
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
                         .child(div().px_3().py_3().text_size(px(10.0)).text_color(rgb(MUTED)).child("CHANNELS"))
                         .when(self.loading_channels, |el| el.child(status("Loading channels…")).child(skeleton()).child(skeleton()).child(skeleton()))
@@ -206,7 +206,7 @@ mod app {
                             .child(channel_icon(active_channel.map(|c| c.kind).unwrap_or(0)))
                             .child(div().w(px(8.0)))
                             .child(div().flex().flex_col().gap_1().child(channel_name.clone()).when(!channel_topic.is_empty(), |el| el.child(div().text_size(px(9.0)).text_color(rgb(MUTED)).child(channel_topic.clone()))))
-                            .child(div().flex_1()).child(div().px_2().py_1().rounded_sm().text_size(px(12.0)).text_color(rgb(MUTED)).child("↻").hover(|style| style.bg(rgb(HOVER))).on_click(cx.listener(|this, _, _, cx| { if let Some(channel) = this.active_channel.and_then(|i| this.channels.get(i)) { this.load_messages(channel.id.clone(), cx); } }))).child(div().text_size(px(11.0)).text_color(rgb(MUTED)).child(self.username.clone())))
+                            .child(div().flex_1()).child(div().id("message-refresh").px_2().py_1().rounded_sm().text_size(px(12.0)).text_color(rgb(MUTED)).child("↻").hover(|style| style.bg(rgb(HOVER))).on_click(cx.listener(|this, _, _, cx| { if let Some(channel) = this.active_channel.and_then(|i| this.channels.get(i)) { this.load_messages(channel.id.clone(), cx); } }))).child(div().text_size(px(11.0)).text_color(rgb(MUTED)).child(self.username.clone())))
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
                         .child(
                             div().id("message-history").flex_1().w_full().flex().flex_col().px_5().py_4().gap_3().overflow_y_scroll()
@@ -370,9 +370,9 @@ mod app {
             .hover(|style| style.bg(rgb(if selected { 0x9a8cff } else { 0x40394f })))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.active_server = Some(index);
-                if let Some(guild) = this.guilds.get(index) {
-                    this.load_channels(guild.id.clone(), cx);
-                    this.load_members(guild.id.clone(), cx);
+                if let Some(guild_id) = this.guilds.get(index).map(|guild| guild.id.clone()) {
+                    this.load_channels(guild_id.clone(), cx);
+                    this.load_members(guild_id, cx);
                 }
                 cx.notify();
             }))
