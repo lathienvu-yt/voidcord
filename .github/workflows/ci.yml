@@ -43,6 +43,8 @@ jobs:
         with:
           workspaces: |
             src-tauri -> target
+            gpui-desktop -> target
+            voidcord-core -> target
 
       - name: Install frontend dependencies
         run: npm ci
@@ -55,6 +57,9 @@ jobs:
 
       - name: Check Rust backend
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Check shared Discord core
+        run: cargo check --manifest-path voidcord-core/Cargo.toml
 
       - name: Check native GPUI desktop shell
         run: cargo check --manifest-path gpui-desktop/Cargo.toml
