@@ -55,3 +55,6 @@ jobs:
 
       - name: Check Rust backend
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Check native GPUI desktop shell
+        run: cargo check --manifest-path gpui-desktop/Cargo.toml
