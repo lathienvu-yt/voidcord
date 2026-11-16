@@ -15,6 +15,7 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 | Feature | GPUI status | Notes |
 | --- | --- | --- |
 | Native window and app shell | Prototype | Standalone GPUI window launches independently of Tauri |
+| Shared Discord networking core | Extracted foundation | Existing `DiscordRouter` is now exposed through `voidcord-core`; both Tauri and GPUI depend on the same implementation |
 | Server rail | Interactive prototype | Server selection updates active styling and resets the selected channel; entries are still placeholders |
 | Guild/channel selection | Interactive prototype | Channel selection and collapsible text/voice categories work locally; no Discord data or persistence yet |
 | Channel list | Interactive prototype | Selectable rows and collapsible categories; currently demo entries |
@@ -27,14 +28,13 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 | Voice / screenshare | Not started | Keep current implementation until dedicated parity work |
 | Mobile / Android | Unchanged | Remains on `feat/mobile-client` |
 
-## Next slice: real server rail
+## Next slice: connect the authenticated account
 
-1. Define a UI-neutral guild/navigation snapshot and event contract.
-2. Extract the existing guild list and selected-guild state from Tauri command/event glue.
-3. Feed the same snapshot into GPUI.
-4. Port selection and active-state rendering.
-5. Verify loading, no-guild, network-error, and reconnect behavior.
-6. Keep the Tauri rail untouched until the GPUI rail reaches parity.
+1. Reuse the existing secure-token storage and account-selection settings.
+2. Initialize the shared `DiscordRouter` in the GPUI app without starting a second gateway.
+3. Fetch and normalize the authenticated user's guild list into a UI-neutral navigation snapshot.
+4. Render real guild names/icons and handle loading, empty, auth-error, network-error, and retry states.
+5. Keep Tauri's current account and navigation behavior untouched until parity.
 
 ## Experimental launch
 
