@@ -1,6 +1,7 @@
 #[cfg(windows)]
 mod app {
-    use gpui::{div, ease_in_out, millis, prelude::*, px, rgb, size, Animation, AnimationExt, App, Application, Bounds, Context, Render, TitlebarOptions, Window, WindowBounds, WindowOptions};
+    use gpui::{div, ease_in_out, prelude::*, px, rgb, size, Animation, AnimationExt, App, Application, Bounds, Context, Render, TitlebarOptions, Window, WindowBounds, WindowOptions};
+    use std::time::Duration;
     use serde_json::Value;
     use std::path::PathBuf;
     use voidcord_core::discord_router::{AccountIdentity, DiscordRouter, TokenManager};
@@ -122,7 +123,6 @@ mod app {
             }).collect::<Vec<_>>();
 
             div().size_full().flex().bg(rgb(BG)).text_color(rgb(FG))
-                .with_animation("voidcord-shell-enter", Animation::new(millis(280)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
                 .child(
                     div().w(px(76.0)).h_full().flex().flex_col().items_center().py_3().gap_2().bg(rgb(PANEL))
                         .child(div().w(px(44.0)).h(px(44.0)).flex().items_center().justify_center().rounded_sm().bg(rgb(ACCENT)).text_color(rgb(0xffffff)).child("V"))
@@ -168,6 +168,7 @@ mod app {
                         .child(div().px_3().py_2().text_size(px(12.0)).text_color(rgb(ACCENT)).child(self.username.clone()))
                         .child(div().px_3().text_size(px(11.0)).text_color(rgb(MUTED)).child(format!("Guilds: {}", self.guilds.len())))
                 )
+                .with_animation("voidcord-shell-enter", Animation::new(Duration::from_millis(280)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
         }
     }
 
@@ -234,12 +235,12 @@ mod app {
         div().id(("server", index)).w(px(44.0)).h(px(44.0)).flex().items_center().justify_center().rounded_sm()
             .bg(rgb(if selected { ACCENT } else { HOVER })).text_color(rgb(FG)).child(initials(&name))
             .hover(|style| style.bg(rgb(if selected { 0x9a8cff } else { 0x40394f })))
-            .with_animation(("server-entry", index), Animation::new(millis(220)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.active_server = Some(index);
                 if let Some(guild) = this.guilds.get(index) { this.load_channels(guild.id.clone(), cx); }
                 cx.notify();
             }))
+            .with_animation(("server-entry", index), Animation::new(Duration::from_millis(220)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
     }
 
     fn channel_button(name: String, index: usize, selected: bool, cx: &mut Context<DesktopShell>) -> impl IntoElement {
@@ -247,8 +248,8 @@ mod app {
             .bg(rgb(if selected { HOVER } else { 0x1c1924 })).text_size(px(13.0))
             .text_color(rgb(if selected { FG } else { MUTED })).child("#").child(div().w(px(8.0))).child(name)
             .hover(|style| style.bg(rgb(HOVER)))
-            .with_animation(("channel-entry", index), Animation::new(millis(180)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
             .on_click(cx.listener(move |this, _, _, cx| { this.active_channel = Some(index); cx.notify(); }))
+            .with_animation(("channel-entry", index), Animation::new(Duration::from_millis(180)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
     }
 
     fn status(message: impl Into<String>) -> impl IntoElement {
@@ -257,7 +258,7 @@ mod app {
 
     fn skeleton() -> impl IntoElement {
         div().mx_3().my_1().h(px(28.0)).w(px(180.0)).rounded_sm().bg(rgb(HOVER))
-            .with_animation("voidcord-loading-pulse", Animation::new(millis(850)).with_easing(ease_in_out), |element, progress| element.opacity(0.45 + progress * 0.55))
+            .with_animation("voidcord-loading-pulse", Animation::new(Duration::from_millis(850)).with_easing(ease_in_out), |element, progress| element.opacity(0.45 + progress * 0.55))
     }
 
     fn retry_button(cx: &mut Context<DesktopShell>) -> impl IntoElement {
