@@ -18,7 +18,7 @@ mod app {
     struct Guild { id: String, name: String }
 
     #[derive(Clone)]
-    struct Channel { id: String, name: String, kind: u64 }
+    struct Channel { id: String, name: String, kind: u64, topic: Option<String> }
 
     #[derive(Clone)]
     struct Message { author: String, content: String, timestamp: String }
@@ -165,16 +165,15 @@ mod app {
                 .and_then(|i| self.guilds.get(i))
                 .map(|g| g.name.clone())
                 .unwrap_or_else(|| "Servers".into());
-            let channel_name = self.active_channel
-                .and_then(|i| self.channels.get(i))
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| "Select a channel".into());
+            let active_channel = self.active_channel.and_then(|i| self.channels.get(i));
+            let channel_name = active_channel.map(|c| c.name.clone()).unwrap_or_else(|| "Select a channel".into());
+            let channel_topic = active_channel.and_then(|c| c.topic.clone()).unwrap_or_default();
 
             let server_items = self.guilds.iter().enumerate().map(|(i, guild)| {
                 server_button(guild.name.clone(), i, self.active_server == Some(i), cx)
             }).collect::<Vec<_>>();
             let channel_items = self.channels.iter().enumerate().map(|(i, channel)| {
-                channel_button(channel.name.clone(), i, self.active_channel == Some(i), cx)
+                channel_button(channel.name.clone(), channel.kind, i, self.active_channel == Some(i), cx)
             }).collect::<Vec<_>>();
             let message_items = self.messages.iter().map(|message| message_row(message.clone())).collect::<Vec<_>>();
             let member_items = self.members.iter().map(|member| member_row(member.clone())).collect::<Vec<_>>();
@@ -203,7 +202,11 @@ mod app {
                 )
                 .child(
                     div().flex_1().h_full().flex().flex_col()
-                        .child(div().h(px(58.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL)).child("#").child(div().w(px(8.0))).child(channel_name.clone()).child(div().flex_1()).child(div().text_size(px(11.0)).text_color(rgb(MUTED)).child(self.username.clone())))
+                        .child(div().h(px(58.0)).w_full().flex().items_center().px_4().bg(rgb(PANEL))
+                            .child(channel_icon(active_channel.map(|c| c.kind).unwrap_or(0)))
+                            .child(div().w(px(8.0)))
+                            .child(div().flex().flex_col().gap_1().child(channel_name.clone()).when(!channel_topic.is_empty(), |el| el.child(div().text_size(px(9.0)).text_color(rgb(MUTED)).child(channel_topic.clone()))))
+                            .child(div().flex_1()).child(div().text_size(px(11.0)).text_color(rgb(MUTED)).child(self.username.clone())))
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
                         .child(
                             div().id("message-history").flex_1().w_full().flex().flex_col().px_5().py_4().gap_3().overflow_y_scroll()
@@ -266,6 +269,7 @@ mod app {
             id: item.get("id")?.as_str()?.to_owned(),
             name: item.get("name")?.as_str()?.to_owned(),
             kind: item.get("type")?.as_u64()?,
+            topic: item.get("topic").and_then(Value::as_str).map(str::to_owned),
         })).collect::<Vec<_>>();
         channels.sort_by_key(|channel| (channel.kind == 4, channel.kind == 2 || channel.kind == 13));
         Ok(channels)
@@ -375,10 +379,15 @@ mod app {
             .with_animation(("server-entry", index), Animation::new(Duration::from_millis(220)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
     }
 
-    fn channel_button(name: String, index: usize, selected: bool, cx: &mut Context<DesktopShell>) -> impl IntoElement {
+    fn channel_icon(kind: u64) -> &'static str {
+        match kind { 2 | 13 => "◖", 4 => "▾", 5 => "◉", 15 | 16 => "▤",  announcement if announcement == 0 => "#", _ => "#" }
+    }
+
+    fn channel_button(name: String, kind: u64, index: usize, selected: bool, cx: &mut Context<DesktopShell>) -> impl IntoElement {
+        let icon = channel_icon(kind);
         div().id(("channel", index)).w_full().px_3().py_2().flex().items_center().rounded_sm()
             .bg(rgb(if selected { HOVER } else { 0x1c1924 })).text_size(px(13.0))
-            .text_color(rgb(if selected { FG } else { MUTED })).child("#").child(div().w(px(8.0))).child(name)
+            .text_color(rgb(if selected { FG } else { MUTED })).child(icon).child(div().w(px(8.0))).child(name)
             .hover(|style| style.bg(rgb(HOVER)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.active_channel = Some(index);
