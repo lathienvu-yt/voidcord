@@ -14,10 +14,10 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 
 | Feature | GPUI status | Notes |
 | --- | --- | --- |
-| Native window and app shell | In progress | Standalone GPUI shell is available; not yet wired to app state |
-| Server rail | Prototype | Current entries are placeholders; next real-data slice |
-| Guild/channel selection | Not started | Needs shared navigation state and event model |
-| Channel list | Prototype | Static rows only |
+| Native window and app shell | Prototype | Standalone GPUI window launches independently of Tauri |
+| Server rail | Interactive prototype | Server selection updates active styling and resets the selected channel; entries are still placeholders |
+| Guild/channel selection | Interactive prototype | Channel selection and collapsible text/voice categories work locally; no Discord data or persistence yet |
+| Channel list | Interactive prototype | Selectable rows and collapsible categories; currently demo entries |
 | Message history | Not started | Reuse existing message/cache services |
 | Message composer | Not started | Include uploads, replies, edits, and interaction responses |
 | Gateway events | Not started | Must consume the existing gateway; no second gateway |
