@@ -1,6 +1,6 @@
 # VoidCord GPUI Desktop
 
-This directory contains an isolated native desktop-shell prototype. It is intentionally separate from the existing Tauri application and from the Android/mobile branch.
+This crate contains the native GPUI desktop shell. It is embedded as a dependency of the desktop Rust application and can also be run through the dedicated experimental launch mode. It remains separate from the Android/mobile branch.
 
 ## Run (Windows)
 
@@ -10,11 +10,13 @@ Requirements:
 - The native build tools required by the GPUI 0.2.2 dependency
 - A working GPU driver
 
-From the repository root:
+From the repository root, launch the experimental mode through the normal VoidCord executable:
 
 ```powershell
-cargo run --manifest-path gpui-desktop/Cargo.toml
+npm run gpui:experimental
 ```
+
+This starts the same Rust application binary with `--gpui-experimental`. The default launch (for example `npm run tauri dev`) remains the stable Tauri UI. You can also pass `--gpui-experimental` to a built `VoidCord.exe` manually.
 
 The first build compiles GPUI and its native dependencies and can take a while.
 
@@ -26,7 +28,7 @@ This is not feature parity and is not yet connected to Discord. The visible cont
 
 ## Architecture boundary
 
-The existing Tauri application remains the production desktop client. The Android/mobile branch remains unchanged.
+The existing Tauri application remains the default stable desktop client. GPUI is opt-in via `--gpui-experimental`; the Android/mobile branch remains unchanged.
 
 The current backend is not yet a standalone crate:
 - `discord_router.rs` is the strongest existing extraction candidate; it owns REST routing and credential-scoped request logic without importing Tauri.
@@ -38,7 +40,7 @@ Do not duplicate or rewrite the Discord gateway. The next milestone should extra
 
 ## Planned milestones
 
-1. **Native shell** — this prototype.
+1. **Native shell + opt-in launch mode** — this prototype.
 2. **Shared core extraction** — isolate router, cache, settings, gateway lifecycle, and service state from Tauri-specific handles.
 3. **GPUI service adapter** — connect the native UI to the shared core with typed events and commands.
 4. **Feature migration** — accounts, guild/channel navigation, messages, uploads, notifications, settings, RPC, then voice and screenshare.
