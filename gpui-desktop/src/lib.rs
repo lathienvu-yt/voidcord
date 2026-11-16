@@ -233,6 +233,8 @@ mod app {
     fn server_button(name: String, index: usize, selected: bool, cx: &mut Context<DesktopShell>) -> impl IntoElement {
         div().id(("server", index)).w(px(44.0)).h(px(44.0)).flex().items_center().justify_center().rounded_sm()
             .bg(rgb(if selected { ACCENT } else { HOVER })).text_color(rgb(FG)).child(initials(&name))
+            .hover(|style| style.bg(rgb(if selected { 0x9a8cff } else { 0x40394f })))
+            .with_animation(("server-entry", index), Animation::new(millis(220)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.active_server = Some(index);
                 if let Some(guild) = this.guilds.get(index) { this.load_channels(guild.id.clone(), cx); }
@@ -244,6 +246,8 @@ mod app {
         div().id(("channel", index)).w_full().px_3().py_2().flex().items_center().rounded_sm()
             .bg(rgb(if selected { HOVER } else { 0x1c1924 })).text_size(px(13.0))
             .text_color(rgb(if selected { FG } else { MUTED })).child("#").child(div().w(px(8.0))).child(name)
+            .hover(|style| style.bg(rgb(HOVER)))
+            .with_animation(("channel-entry", index), Animation::new(millis(180)).with_easing(ease_in_out), |element, progress| element.opacity(progress))
             .on_click(cx.listener(move |this, _, _, cx| { this.active_channel = Some(index); cx.notify(); }))
     }
 
