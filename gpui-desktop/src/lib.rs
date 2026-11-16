@@ -15,11 +15,19 @@ mod app {
 
     pub struct DesktopShell {
         active_server: usize,
+        active_channel: usize,
+        text_channels_open: bool,
+        voice_channels_open: bool,
     }
 
     impl Default for DesktopShell {
         fn default() -> Self {
-            Self { active_server: 0 }
+            Self {
+                active_server: 0,
+                active_channel: 0,
+                text_channels_open: true,
+                voice_channels_open: true,
+            }
         }
     }
 
@@ -31,6 +39,13 @@ mod app {
                 2 => "Rustaceans",
                 3 => "Game Dev",
                 _ => "Community",
+            };
+            let channel_name = match self.active_channel {
+                0 => "general",
+                1 => "development",
+                2 => "showcase",
+                3 => "Lounge",
+                _ => "Co-working",
             };
 
             div()
@@ -47,6 +62,7 @@ mod app {
                         .flex_col()
                         .items_center()
                         .py_3()
+                        .gap_2()
                         .bg(rgb(PANEL))
                         .child(
                             div()
@@ -60,12 +76,25 @@ mod app {
                                 .text_color(rgb(0xffffff))
                                 .child("V"),
                         )
-                        .child(div().h(px(16.0)))
+                        .child(div().h(px(8.0)))
                         .child(server_button("V", 0, self.active_server == 0, cx))
                         .child(server_button("C", 1, self.active_server == 1, cx))
                         .child(server_button("R", 2, self.active_server == 2, cx))
                         .child(server_button("G", 3, self.active_server == 3, cx))
-                        .child(server_button("…", 4, self.active_server == 4, cx)),
+                        .child(server_button("…", 4, self.active_server == 4, cx))
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .w(px(38.0))
+                                .h(px(38.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .bg(rgb(0x3a3547))
+                                .text_size(px(12.0))
+                                .child("LV"),
+                        ),
                 )
                 // Channel list
                 .child(
@@ -83,31 +112,37 @@ mod app {
                                 .items_center()
                                 .px_4()
                                 .bg(rgb(PANEL))
-                                .text_color(rgb(TEXT))
-                                .child(server_name),
+                                .child(server_name)
+                                .child(div().flex_1())
+                                .child(div().text_color(rgb(MUTED)).child("⌄")),
                         )
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
+                        .child(category_header("TEXT CHANNELS", self.text_channels_open, true, cx))
+                        .when(self.text_channels_open, |this| {
+                            this.child(channel_button("#", "general", 0, self.active_channel, cx))
+                                .child(channel_button("#", "development", 1, self.active_channel, cx))
+                                .child(channel_button("#", "showcase", 2, self.active_channel, cx))
+                        })
+                        .child(category_header("VOICE CHANNELS", self.voice_channels_open, false, cx))
+                        .when(self.voice_channels_open, |this| {
+                            this.child(channel_button("◖", "Lounge", 3, self.active_channel, cx))
+                                .child(channel_button("◖", "Co-working", 4, self.active_channel, cx))
+                        })
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .h(px(1.0))
+                                .w_full()
+                                .bg(rgb(DIVIDER)),
+                        )
                         .child(
                             div()
                                 .px_3()
                                 .py_3()
                                 .text_size(px(11.0))
                                 .text_color(rgb(MUTED))
-                                .child("TEXT CHANNELS"),
-                        )
-                        .child(channel_row("#", "general", true))
-                        .child(channel_row("#", "development", false))
-                        .child(channel_row("#", "showcase", false))
-                        .child(
-                            div()
-                                .px_3()
-                                .py_3()
-                                .text_size(px(11.0))
-                                .text_color(rgb(MUTED))
-                                .child("VOICE CHANNELS"),
-                        )
-                        .child(channel_row("◖", "Lounge", false))
-                        .child(channel_row("◖", "Co-working", false)),
+                                .child("EXPERIMENTAL GPUI CLIENT"),
+                        ),
                 )
                 // Main conversation area
                 .child(
@@ -124,9 +159,9 @@ mod app {
                                 .items_center()
                                 .px_4()
                                 .bg(rgb(PANEL))
-                                .child(div().text_color(rgb(ACCENT)).child("#"))
+                                .child(div().text_color(rgb(ACCENT)).child(if self.active_channel < 3 { "#" } else { "◖" }))
                                 .child(div().w(px(8.0)))
-                                .child("general")
+                                .child(channel_name)
                                 .child(div().flex_1())
                                 .child(
                                     div()
@@ -149,14 +184,14 @@ mod app {
                                     div()
                                         .text_size(px(24.0))
                                         .text_color(rgb(TEXT))
-                                        .child("The native VoidCord shell"),
+                                        .child(format!("#{channel_name}")),
                                 )
                                 .child(div().h(px(12.0)))
                                 .child(
                                     div()
                                         .text_size(px(13.0))
                                         .text_color(rgb(MUTED))
-                                        .child("This is the first GPUI milestone. The Discord backend is not connected yet."),
+                                        .child(format!("You're viewing {channel_name} in {server_name}.")),
                                 )
                                 .child(div().h(px(24.0)))
                                 .child(
@@ -187,7 +222,7 @@ mod app {
                                         .bg(rgb(BACKGROUND))
                                         .text_size(px(12.0))
                                         .text_color(rgb(MUTED))
-                                        .child("Messaging will be wired to the shared Rust core in a later milestone…"),
+                                        .child("Messaging is the next subsystem to port…"),
                                 ),
                         ),
                 )
@@ -208,23 +243,23 @@ mod app {
                                 .px_3()
                                 .bg(rgb(PANEL))
                                 .text_size(px(12.0))
-                                .child("SERVER OVERVIEW"),
+                                .child("CHANNEL DETAILS"),
                         )
                         .child(div().h(px(1.0)).w_full().bg(rgb(DIVIDER)))
                         .child(
                             div()
                                 .px_3()
                                 .py_3()
-                                .text_size(px(12.0))
+                                .text_size(px(13.0))
                                 .text_color(rgb(TEXT))
-                                .child(server_name),
+                                .child(channel_name),
                         )
                         .child(
                             div()
                                 .px_3()
                                 .text_size(px(11.0))
                                 .text_color(rgb(MUTED))
-                                .child("Native UI prototype"),
+                                .child(server_name),
                         )
                         .child(div().h(px(20.0)))
                         .child(
@@ -240,14 +275,14 @@ mod app {
                                 .py_2()
                                 .text_size(px(12.0))
                                 .text_color(rgb(ACCENT))
-                                .child("Milestone 1 · Shell"),
+                                .child("Milestone 2 · Navigation"),
                         )
                         .child(
                             div()
                                 .px_3()
                                 .text_size(px(11.0))
                                 .text_color(rgb(MUTED))
-                                .child("No gateway, cache, voice, or account actions are connected in this prototype."),
+                                .child("Server and channel navigation are interactive. Discord data is not connected yet."),
                         ),
                 )
         }
@@ -272,22 +307,65 @@ mod app {
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.active_server = index;
+                this.active_channel = 0;
                 cx.notify();
             }))
     }
 
-    fn channel_row(prefix: &'static str, name: &'static str, selected: bool) -> impl IntoElement {
+    fn category_header(
+        label: &'static str,
+        expanded: bool,
+        is_text: bool,
+        cx: &mut Context<DesktopShell>,
+    ) -> impl IntoElement {
         div()
+            .id(if is_text { "text-category" } else { "voice-category" })
+            .w_full()
+            .px_3()
+            .py_3()
+            .flex()
+            .items_center()
+            .text_size(px(11.0))
+            .text_color(rgb(MUTED))
+            .child(if expanded { "⌄" } else { "›" })
+            .child(div().w(px(6.0)))
+            .child(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if is_text {
+                    this.text_channels_open = !this.text_channels_open;
+                } else {
+                    this.voice_channels_open = !this.voice_channels_open;
+                }
+                cx.notify();
+            }))
+    }
+
+    fn channel_button(
+        prefix: &'static str,
+        name: &'static str,
+        index: usize,
+        active_channel: usize,
+        cx: &mut Context<DesktopShell>,
+    ) -> impl IntoElement {
+        let selected = index == active_channel;
+        div()
+            .id(("channel", index))
             .w_full()
             .px_3()
             .py_2()
             .flex()
             .items_center()
+            .rounded_sm()
             .bg(rgb(if selected { PANEL_HOVER } else { 0x1c1924 }))
             .text_size(px(13.0))
+            .text_color(rgb(if selected { TEXT } else { MUTED }))
             .child(div().text_color(rgb(MUTED)).child(prefix))
             .child(div().w(px(8.0)))
             .child(name)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.active_channel = index;
+                cx.notify();
+            }))
     }
 
     pub fn run() {
