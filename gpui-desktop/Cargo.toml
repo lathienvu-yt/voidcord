@@ -5,6 +5,9 @@ description = "Experimental native GPUI desktop shell for VoidCord"
 edition = "2021"
 publish = false
 
+[dependencies]
+voidcord-core = { path = "../voidcord-core" }
+
 [target.'cfg(windows)'.dependencies]
 gpui = { version = "=0.2.2", default-features = false, features = ["font-kit"] }
 
