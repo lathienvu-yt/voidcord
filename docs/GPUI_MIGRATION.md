@@ -22,6 +22,7 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 | Message history | Initial REST slice | Loads the latest 50 text-channel messages through the shared DiscordRouter; loading, empty, and error states are rendered. Pagination and gateway updates remain pending |
 | Guild member sidebar | Initial REST slice | Loads up to 100 members for the selected guild, displays nicknames/global names, and includes loading, empty, and error states |
 | Channel metadata and type cues | Initial UI pass | Shows channel topic in the main header and distinguishes text, voice, category, announcement, and forum-style channels in navigation |
+| Native refresh controls | Initial interaction pass | Refreshes the selected server's channels and member list, reloads the active text channel's message history, and retries the saved-account guild load from the account avatar |
 | Message composer | Not started | Add a native GPUI input and route sends through the shared DiscordRouter |
 | Gateway events | Not started | Must consume the existing gateway; no second gateway |
 | Notifications and unread state | Not started | Preserve existing read-state semantics |
