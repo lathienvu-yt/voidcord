@@ -260,7 +260,7 @@ mod app {
         cx: &mut Context<DesktopShell>,
     ) -> impl IntoElement {
         div()
-            .id(format!("server-{index}"))
+            .id(("server", index))
             .w(px(44.0))
             .h(px(44.0))
             .flex()
