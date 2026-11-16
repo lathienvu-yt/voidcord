@@ -2,7 +2,7 @@
 
 mod cache;
 mod commands;
-mod discord_router;
+use voidcord_core::discord_router;
 mod gpui_console;
 mod gateway_ipc;
 mod rpc;
