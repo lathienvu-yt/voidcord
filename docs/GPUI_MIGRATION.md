@@ -19,8 +19,8 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 | Server rail | Live data foundation | Loads the active saved account and renders real guild initials; selecting a server fetches its channels |
 | Guild/channel selection | Live data foundation | Fetches guilds and channel lists through the shared DiscordRouter; selection is session-local |
 | Channel list | Live data foundation | Fetches real guild channels and handles loading, empty, and error states |
-| Message history | Not started | Reuse existing message/cache services |
-| Message composer | Not started | Include uploads, replies, edits, and interaction responses |
+| Message history | Initial REST slice | Loads the latest 50 text-channel messages through the shared DiscordRouter; loading, empty, and error states are rendered. Pagination and gateway updates remain pending |
+| Message composer | Not started | Add a native GPUI input and route sends through the shared DiscordRouter |
 | Gateway events | Not started | Must consume the existing gateway; no second gateway |
 | Notifications and unread state | Not started | Preserve existing read-state semantics |
 | Settings | Not started | Reuse settings persistence and proto serialization |
@@ -35,11 +35,12 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 - Uses the shared `DiscordRouter` to fetch `/users/@me/guilds` and `guilds/{id}/channels`; it does not start a second gateway.
 - Displays account/guild loading, channel loading, empty, error, and retry states.
 - Adds a native shell entrance fade and animated loading placeholders. This is an initial motion pass, not yet a complete reduced-motion system.
+- Loads the latest 50 messages for selected text channels through `DiscordRouter`, renders author/content/timestamp rows, and reports loading, empty, and error states.
 
 ## Next slice: messages and gateway events
 
-1. Fetch message history and implement a composer using the existing REST/cache behavior.
-2. Extract gateway event delivery into a UI-neutral subscription so GPUI can consume the existing gateway implementation.
+1. Finish the native message composer and send flow using the existing REST behavior.
+2. Add older-message pagination and consume existing gateway message events without starting another gateway.
 3. Add account switching and refresh without duplicating token persistence.
 
 ## Experimental launch
