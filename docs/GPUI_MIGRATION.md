@@ -14,11 +14,11 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 
 | Feature | GPUI status | Notes |
 | --- | --- | --- |
-| Native window and app shell | Prototype | Standalone GPUI window launches independently of Tauri |
+| Native window and app shell | Prototype + motion | Standalone GPUI window with native entrance and animated loading placeholders |
 | Shared Discord networking core | Extracted foundation | Existing `DiscordRouter` is now exposed through `voidcord-core`; both Tauri and GPUI depend on the same implementation |
-| Server rail | Interactive prototype | Server selection updates active styling and resets the selected channel; entries are still placeholders |
-| Guild/channel selection | Interactive prototype | Channel selection and collapsible text/voice categories work locally; no Discord data or persistence yet |
-| Channel list | Interactive prototype | Selectable rows and collapsible categories; currently demo entries |
+| Server rail | Live data foundation | Loads the active saved account and renders real guild initials; selecting a server fetches its channels |
+| Guild/channel selection | Live data foundation | Fetches guilds and channel lists through the shared DiscordRouter; selection is session-local |
+| Channel list | Live data foundation | Fetches real guild channels and handles loading, empty, and error states |
 | Message history | Not started | Reuse existing message/cache services |
 | Message composer | Not started | Include uploads, replies, edits, and interaction responses |
 | Gateway events | Not started | Must consume the existing gateway; no second gateway |
@@ -28,13 +28,19 @@ The desktop migration is incremental. Tauri remains the stable default; GPUI is 
 | Voice / screenshare | Not started | Keep current implementation until dedicated parity work |
 | Mobile / Android | Unchanged | Remains on `feat/mobile-client` |
 
-## Next slice: connect the authenticated account
+## Account and navigation slice (implemented foundation)
 
-1. Reuse the existing secure-token storage and account-selection settings.
-2. Initialize the shared `DiscordRouter` in the GPUI app without starting a second gateway.
-3. Fetch and normalize the authenticated user's guild list into a UI-neutral navigation snapshot.
-4. Render real guild names/icons and handle loading, empty, auth-error, network-error, and retry states.
-5. Keep Tauri's current account and navigation behavior untouched until parity.
+- Reads `accounts` and `active_account_id` from the existing `voidcord-v1.json` settings store in the Windows app-data directory.
+- Retrieves the selected account credential from the same Windows keyring service and key naming convention as Tauri (`voidcord` / `discord_token_<user id>`). Raw credentials are not read from the JSON store.
+- Uses the shared `DiscordRouter` to fetch `/users/@me/guilds` and `guilds/{id}/channels`; it does not start a second gateway.
+- Displays account/guild loading, channel loading, empty, error, and retry states.
+- Adds a native shell entrance fade and animated loading placeholders. This is an initial motion pass, not yet a complete reduced-motion system.
+
+## Next slice: messages and gateway events
+
+1. Fetch message history and implement a composer using the existing REST/cache behavior.
+2. Extract gateway event delivery into a UI-neutral subscription so GPUI can consume the existing gateway implementation.
+3. Add account switching and refresh without duplicating token persistence.
 
 ## Experimental launch
 
