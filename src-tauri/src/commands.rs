@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use sysinfo::{ProcessesToUpdate, System};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use zeroize::Zeroizing;
 
 use crate::discord_router::{AccountIdentity, TokenManager};
 use crate::settings_proto::SettingsProtoV1Envelope;
@@ -157,6 +158,59 @@ async fn rebuild_router(state: &AppState, token: &str) {
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────
+
+/// Start a single Discord email/password login attempt.
+/// Password memory is zeroized when this command returns; it is never persisted or logged.
+#[tauri::command]
+pub async fn login_with_password(
+    login: String,
+    password: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let password = Zeroizing::new(password);
+    let login = login.trim();
+    if login.is_empty() || login.len() > 320 || login.chars().any(char::is_control) {
+        return Err("Enter a valid email address or phone number".to_owned());
+    }
+    if password.len() < 8 || password.len() > 72 {
+        return Err("Discord passwords must be between 8 and 72 characters".to_owned());
+    }
+    state
+        .router
+        .login_with_password(login, password.as_str())
+        .await
+        .map_err(map_err)
+}
+
+/// Complete a TOTP or backup-code challenge returned by password login.
+#[tauri::command]
+pub async fn verify_mfa_login(
+    ticket: String,
+    login_instance_id: Option<String>,
+    fingerprint: String,
+    code: String,
+    authenticator_type: String,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let code = Zeroizing::new(code);
+    if ticket.is_empty() || ticket.len() > 4096
+        || fingerprint.is_empty() || fingerprint.len() > 512
+        || code.is_empty() || code.len() > 128
+    {
+        return Err("The MFA challenge is invalid or expired. Start login again.".to_owned());
+    }
+    state
+        .router
+        .verify_mfa_login(
+            &authenticator_type,
+            &ticket,
+            login_instance_id.as_deref(),
+            &fingerprint,
+            code.as_str(),
+        )
+        .await
+        .map_err(map_err)
+}
 
 /// Save a user or bot token and validate it by fetching /users/@me.
 /// Emits `discord:ready` with the user object on success.
