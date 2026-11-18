@@ -1217,14 +1217,104 @@ async function updateAccountRole(userId: string, newRole: AccountRole, accounts:
   return memoryAccounts;
 }
 
+type PasswordLoginResponse = {
+  token?: string;
+  mfa?: boolean;
+  ticket?: string;
+  login_instance_id?: string;
+  voidcord_fingerprint?: string;
+  totp?: boolean;
+  backup?: boolean;
+  sms?: boolean;
+  required_actions?: string[];
+};
+
 function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: SavedDiscordAccount[]) => void }) {
+  const [mode, setMode] = useState<"password" | "token">("password");
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [captchaPrompt, setCaptchaPrompt] = useState<CaptchaPromptState | null>(null);
+  const [mfa, setMfa] = useState<PasswordLoginResponse | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaType, setMfaType] = useState<"totp" | "backup">("totp");
 
-  const submit = async () => {
-    if (!token.trim()) return;
+  const finishLogin = async (candidate: string) => {
+    if (!candidate) throw new Error("Discord did not return a usable authentication token.");
+    const user = await tauriInvoke<DiscordUser>("set_token", { token: candidate });
+    const accounts = await persistDiscordAccount(user, candidate);
+    setPassword("");
+    setToken("");
+    onLogin(user, accounts);
+  };
+
+  const submitPassword = async () => {
+    if (!login.trim() || !password || loading) return;
+    setLoading(true);
+    setError("");
+    setMfa(null);
+    try {
+      // The password exists only in component memory for this request. Clear the
+      // controlled input as soon as the native command has received its payload.
+      const request = tauriInvoke<PasswordLoginResponse>("login_with_password", {
+        login: login.trim(),
+        password,
+      });
+      setPassword("");
+      const response = await request;
+
+      if (response.required_actions?.length) {
+        throw new Error(`Discord requires an additional account action: ${response.required_actions.join(", ")}. Complete it through Discord, then sign in again.`);
+      }
+      if (response.mfa) {
+        if (!response.ticket || !response.voidcord_fingerprint) {
+          throw new Error("Discord returned an incomplete MFA challenge. Start login again.");
+        }
+        if (!response.totp && !response.backup) {
+          throw new Error("This account requires SMS or another unsupported verification method. Complete sign-in through Discord, then use the token option.");
+        }
+        setMfa(response);
+        setMfaType(response.totp ? "totp" : "backup");
+        return;
+      }
+      if (response.suspended_user_token) {
+        throw new Error("This account is suspended and cannot sign in to the regular client.");
+      }
+      await finishLogin(response.token || "");
+    } catch (reason: any) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitMfa = async () => {
+    if (!mfa?.ticket || !mfa.voidcord_fingerprint || !mfaCode.trim() || loading) return;
+    setLoading(true);
+    setError("");
+    try {
+      const request = tauriInvoke<{ token?: string }>("verify_mfa_login", {
+        ticket: mfa.ticket,
+        loginInstanceId: mfa.login_instance_id || null,
+        fingerprint: mfa.voidcord_fingerprint,
+        code: mfaCode.trim(),
+        authenticatorType: mfaType,
+      });
+      setMfaCode("");
+      const response = await request;
+      setMfa(null);
+      await finishLogin(response.token || "");
+    } catch (reason: any) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitToken = async () => {
+    if (!token.trim() || loading) return;
     setLoading(true);
     setError("");
     try {
@@ -1249,9 +1339,10 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
         });
       }
       const accounts = await persistDiscordAccount(user, token.trim());
+      setToken("");
       onLogin(user, accounts);
-    } catch (e: any) {
-      setError(String(e));
+    } catch (reason: any) {
+      setError(String(reason));
     } finally {
       setLoading(false);
     }
@@ -1263,27 +1354,52 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
         <div className="login-card">
           <div className="login-logo">V</div>
           <h1 className="login-title">Welcome to VoidCord</h1>
-          <p className="login-sub">
-            Enter your Discord user token to connect.<br />
-            <span className="login-warn">⚠ Keep your token private. Never share it.</span>
-          </p>
-          <label className="login-label">Discord Token</label>
-          <input
-            className="login-input"
-            type="password"
-            placeholder="Paste a user token or Bot token here…"
-            value={token}
-            onChange={e => setToken(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && submit()}
-            autoFocus
-          />
+          <p className="login-sub">Connect an existing Discord account.</p>
+          <div className="login-mode-tabs" role="tablist" aria-label="Sign-in method">
+            <button type="button" className={mode === "password" ? "active" : ""} onClick={() => { setMode("password"); setError(""); setMfa(null); }}>Email &amp; Password</button>
+            <button type="button" className={mode === "token" ? "active" : ""} onClick={() => { setMode("token"); setError(""); setMfa(null); }}>Token</button>
+          </div>
+          {mode === "password" && !mfa && (
+            <>
+              <label className="login-label" htmlFor="discord-login">Email or phone number</label>
+              <input id="discord-login" className="login-input" type="text" autoComplete="username" placeholder="Email address or phone number" value={login} onChange={event => setLogin(event.target.value)} onKeyDown={event => event.key === "Enter" && void submitPassword()} autoFocus />
+              <label className="login-label" htmlFor="discord-password">Password</label>
+              <input id="discord-password" className="login-input" type="password" autoComplete="current-password" placeholder="Discord password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => event.key === "Enter" && void submitPassword()} />
+              <p className="login-hint">Your password is sent directly to Discord over HTTPS for this sign-in attempt. VoidCord does not save it. Discord may require additional verification or CAPTCHA; VoidCord will not bypass those checks.</p>
+              <button className="login-btn" onClick={() => void submitPassword()} disabled={loading || !login.trim() || !password}>
+                {loading ? <Loader2 size={16} className="spinning" /> : "Sign in with Discord"}
+              </button>
+            </>
+          )}
+          {mode === "password" && mfa && (
+            <>
+              <p className="login-sub">Discord requires multi-factor authentication to finish signing in.</p>
+              <label className="login-label" htmlFor="discord-mfa-type">Verification method</label>
+              <select id="discord-mfa-type" className="login-input" value={mfaType} onChange={event => setMfaType(event.target.value as "totp" | "backup")}>
+                {mfa.totp && <option value="totp">Authenticator app</option>}
+                {mfa.backup && <option value="backup">Backup code</option>}
+              </select>
+              <label className="login-label" htmlFor="discord-mfa-code">{mfaType === "backup" ? "Backup code" : "Authenticator code"}</label>
+              <input id="discord-mfa-code" className="login-input" type="password" autoComplete="one-time-code" value={mfaCode} onChange={event => setMfaCode(event.target.value)} onKeyDown={event => event.key === "Enter" && void submitMfa()} placeholder="Enter your code" autoFocus />
+              <button className="login-btn" onClick={() => void submitMfa()} disabled={loading || !mfaCode.trim()}>
+                {loading ? <Loader2 size={16} className="spinning" /> : "Verify and sign in"}
+              </button>
+              <button type="button" className="login-secondary-btn" onClick={() => { setMfa(null); setMfaCode(""); setError(""); }}>Back to sign in</button>
+            </>
+          )}
+          {mode === "token" && (
+            <>
+              <p className="login-sub">Use an existing Discord user or bot token.</p>
+              <label className="login-label" htmlFor="discord-token">Discord Token</label>
+              <input id="discord-token" className="login-input" type="password" autoComplete="off" placeholder="Paste a user token or Bot token here…" value={token} onChange={event => setToken(event.target.value)} onKeyDown={event => event.key === "Enter" && void submitToken()} />
+              <p className="login-warn">⚠ Keep your token private. Never share it.</p>
+              <button className="login-btn" onClick={() => void submitToken()} disabled={loading || !token.trim()}>
+                {loading ? <Loader2 size={16} className="spinning" /> : "Connect with token"}
+              </button>
+              <p className="login-hint">Bot accounts: enter the token as <code>Bot &lt;token&gt;</code>. Bots can access servers and channels they joined, but Discord does not provide user DMs or friends for bots.</p>
+            </>
+          )}
           {error && <div className="login-error">{error}</div>}
-          <button className="login-btn" onClick={submit} disabled={loading || !token.trim()}>
-            {loading ? <Loader2 size={16} className="spinning" /> : "Connect"}
-          </button>
-          <p className="login-hint">
-            Bot accounts: enter the token as <code>Bot &lt;token&gt;</code>. Bots can access servers and channels they joined, but Discord does not provide user DMs or friends for bots.
-          </p>
         </div>
       </div>
       {captchaPrompt && <CaptchaDialog challenge={captchaPrompt.challenge} onSolve={captchaPrompt.onSolve} onCancel={captchaPrompt.onCancel} />}
