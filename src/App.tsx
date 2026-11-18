@@ -1385,7 +1385,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
               <input id="discord-login" className="login-input" type="text" autoComplete="username" placeholder="Email address or phone number" value={login} onChange={event => setLogin(event.target.value)} onKeyDown={event => event.key === "Enter" && void submitPassword()} autoFocus />
               <label className="login-label" htmlFor="discord-password">Password</label>
               <input id="discord-password" className="login-input" type="password" autoComplete="current-password" placeholder="Discord password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => event.key === "Enter" && void submitPassword()} />
-              <p className="login-hint">Your password is sent directly to Discord over HTTPS for this sign-in attempt. VoidCord does not save it. Discord may require additional verification or CAPTCHA; VoidCord will not bypass those checks.</p>
+              <p className="login-hint">This uses an undocumented Discord login endpoint and may trigger account security checks or stop working if Discord changes it. Your password is sent directly to Discord over HTTPS and is not saved. Complete any verification through Discord; VoidCord will not bypass CAPTCHA or account checks.</p>
               <button className="login-btn" onClick={() => void submitPassword()} disabled={loading || !login.trim() || !password}>
                 {loading ? <Loader2 size={16} className="spinning" /> : "Sign in with Discord"}
               </button>
