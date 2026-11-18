@@ -89,7 +89,28 @@ export interface DiscordGuild {
   id: string;
   name: string;
   icon: string | null;
+  banner?: string | null;
+  splash?: string | null;
+  description?: string | null;
   owner?: boolean;
+  owner_id?: string;
+  features?: string[];
+  verification_level?: number;
+  default_message_notifications?: number;
+  explicit_content_filter?: number;
+  afk_channel_id?: string | null;
+  afk_timeout?: number;
+  system_channel_id?: string | null;
+  system_channel_flags?: number;
+  rules_channel_id?: string | null;
+  public_updates_channel_id?: string | null;
+  safety_alerts_channel_id?: string | null;
+  preferred_locale?: string;
+  premium_tier?: number;
+  premium_subscription_count?: number;
+  premium_progress_bar_enabled?: boolean;
+  approximate_member_count?: number;
+  approximate_presence_count?: number;
 }
 
 export interface DiscordChannel {
@@ -215,6 +236,13 @@ export interface DiscordMessageSnapshot {
   attachments?: DiscordAttachment[];
   embeds?: DiscordEmbed[];
   stickers?: unknown[];
+  message?: {
+    content?: string;
+    timestamp?: string;
+    attachments?: DiscordAttachment[];
+    embeds?: DiscordEmbed[];
+    stickers?: unknown[];
+  };
 }
 
 export interface DiscordMessage {
@@ -382,10 +410,26 @@ export function guildIconUrl(guild: DiscordGuild, size = 64): string | null {
   return `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${ext}?size=${s}`;
 }
 
-export function bannerUrl(user: DiscordUser, size = 512): string | null {
-  if (!user.banner) return null;
+export function guildBannerUrl(
+  guild: Pick<DiscordGuild, "id" | "banner"> | null | undefined,
+  size = 1024
+): string | null {
+  if (!guild?.banner || !guild.id) return null;
+
+  const s = normalizeCdnSize(size);
+  const ext = guild.banner.startsWith("a_") ? "gif" : "webp";
+
+  return `https://cdn.discordapp.com/banners/${guild.id}/${guild.banner}.${ext}?size=${s}`;
+}
+export function bannerUrl(
+  user: DiscordUser | null | undefined,
+  size = 512
+): string | null {
+  if (!user?.banner || !user.id) return null;
+
   const s = normalizeCdnSize(size);
   const ext = user.banner.startsWith("a_") ? "gif" : "webp";
+
   return `https://cdn.discordapp.com/banners/${user.id}/${user.banner}.${ext}?size=${s}`;
 }
 

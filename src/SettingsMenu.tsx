@@ -78,6 +78,7 @@ const defaults: SettingsState = {
 
 type Props = {
   embedded?: boolean;
+  initialTab?: Tab;
   onClose: () => void;
   onThemeChange: (theme: Theme) => void;
   ignoredUserIds: Set<string>;
@@ -89,6 +90,7 @@ type Props = {
 
 export default function SettingsMenu({
   embedded = false,
+  initialTab = "appearance",
   onClose,
   onThemeChange,
   ignoredUserIds,
@@ -97,7 +99,9 @@ export default function SettingsMenu({
   onBlockUser,
   onOpenClientSettings,
 }: Props) {
-  const [tab, setTab] = useState<Tab>("appearance");
+  const [tab, setTab] = useState<Tab>(initialTab);
+
+  useEffect(() => { setTab(initialTab); }, [initialTab]);
   const [settings, setSettings] = useState<SettingsState>(defaults);
   const [userId, setUserId] = useState("");
   const [notice, setNotice] = useState("");

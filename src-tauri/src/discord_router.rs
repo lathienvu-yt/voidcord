@@ -1226,7 +1226,10 @@ impl DiscordRouter {
                 } else if status.is_success() && is_current_user_route {
                     self.record_credential_health(token.0.as_ref(), true).await;
                 }
-                if (status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN)
+                let is_application_command_route =
+                    path.starts_with("applications/") && path.contains("/commands");
+                if (status == StatusCode::UNAUTHORIZED
+                    || (status == StatusCode::FORBIDDEN && !is_application_command_route))
                     && idx + 1 < candidate_count
                 {
                     if quiet_auth_failure {

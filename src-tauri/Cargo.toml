@@ -1,6 +1,6 @@
 [package]
 name = "VoidCord"
-version = "0.3.0"
+version = "0.3.1"
 description = "A customizable, offline-friendly Discord client shell"
 authors = ["lathienvu_XD"]
 edition = "2021"

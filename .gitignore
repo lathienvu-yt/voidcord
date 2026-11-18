@@ -23,4 +23,10 @@ Desktop.ini
 .idea/
 settings.json
 .vscode/
+<<<<<<< Updated upstream
 vencord-repo/
+=======
+vencord-repo/
+gpui-desktop/target/
+voidcord-core/target/
+>>>>>>> Stashed changes
