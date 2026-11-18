@@ -1219,6 +1219,7 @@ async function updateAccountRole(userId: string, newRole: AccountRole, accounts:
 
 type PasswordLoginResponse = {
   token?: string;
+  suspended_user_token?: string;
   mfa?: boolean;
   ticket?: string;
   login_instance_id?: string;
@@ -1243,7 +1244,26 @@ function LoginScreen({ onLogin }: { onLogin: (user: DiscordUser, accounts: Saved
 
   const finishLogin = async (candidate: string) => {
     if (!candidate) throw new Error("Discord did not return a usable authentication token.");
-    const user = await tauriInvoke<DiscordUser>("set_token", { token: candidate });
+    let user: DiscordUser;
+    try {
+      user = await tauriInvoke<DiscordUser>("set_token", { token: candidate });
+    } catch (requestError) {
+      const challenge = parseCaptchaChallenge(requestError);
+      if (!challenge) throw requestError;
+      user = await new Promise<DiscordUser>((resolve, reject) => {
+        setCaptchaPrompt({
+          challenge,
+          onSolve: captchaKey => {
+            setCaptchaPrompt(null);
+            void tauriInvoke<DiscordUser>("retry_captcha_request", { requestId: challenge.request_id, captchaKey }).then(resolve, reject);
+          },
+          onCancel: () => {
+            setCaptchaPrompt(null);
+            reject(new Error("CAPTCHA challenge cancelled"));
+          },
+        });
+      });
+    }
     const accounts = await persistDiscordAccount(user, candidate);
     setPassword("");
     setToken("");
