@@ -1526,6 +1526,7 @@ function AccountSwitcher({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [captchaPrompt, setCaptchaPrompt] = useState<CaptchaPromptState | null>(null);
+  const [passwordLoginOpen, setPasswordLoginOpen] = useState(false);
 
   const authenticate = async (candidate: string) => {
     try {
@@ -1642,14 +1643,32 @@ function AccountSwitcher({
           })}
           {accounts.length === 0 && <p className="account-switcher-empty">No saved accounts yet.</p>}
         </div>
+        <div className="account-add-form">
+          <label>Add another account</label>
+          <button type="button" className="account-password-login-button" onClick={() => setPasswordLoginOpen(true)}>
+            <span>Sign in with email &amp; password</span><span aria-hidden="true">→</span>
+          </button>
+        </div>
         <form className="account-add-form" onSubmit={event => { event.preventDefault(); void connect(token); }}>
-          <label htmlFor="add-account-token">Add another account</label>
+          <label htmlFor="add-account-token">Or connect with a token</label>
           <div className="account-add-row"><input id="add-account-token" type="password" autoComplete="off" placeholder="User token or Bot &lt;token&gt;" value={token} onChange={event => setToken(event.target.value)} /><button type="submit" disabled={busy || !token.trim()}>{busy && !busyId ? <Loader2 size={14} className="spinning" /> : "Add"}</button></div>
           {busy && <small className="account-switcher-progress">{busyId ? "Switching account…" : "Connecting account…"}</small>}
           {error && <p className="account-switcher-error">{error}</p>}
         </form>
       </section>
       {captchaPrompt && <CaptchaDialog challenge={captchaPrompt.challenge} onSolve={captchaPrompt.onSolve} onCancel={captchaPrompt.onCancel} />}
+      {passwordLoginOpen && (
+        <div className="account-password-login-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setPasswordLoginOpen(false); }}>
+          <section className="account-password-login-modal" role="dialog" aria-modal="true" aria-label="Sign in to another Discord account" onMouseDown={event => event.stopPropagation()}>
+            <button type="button" className="account-password-login-close" onClick={() => setPasswordLoginOpen(false)} aria-label="Close sign-in dialog"><X size={17} /></button>
+            <LoginScreen onLogin={(user, nextAccounts) => {
+              const connectedToken = nextAccounts.find(account => account.user.id === user.id)?.token || "";
+              setPasswordLoginOpen(false);
+              onConnected(user, connectedToken, nextAccounts);
+            }} />
+          </section>
+        </div>
+      )}
     </div>
   );
 }
