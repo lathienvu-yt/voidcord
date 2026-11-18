@@ -172,7 +172,7 @@ pub async fn login_with_password(
     if login.is_empty() || login.len() > 320 || login.chars().any(char::is_control) {
         return Err("Enter a valid email address or phone number".to_owned());
     }
-    if password.len() < 8 || password.len() > 72 {
+    if password.chars().count() < 8 || password.chars().count() > 72 {
         return Err("Discord passwords must be between 8 and 72 characters".to_owned());
     }
     state
