@@ -236,6 +236,13 @@ export interface DiscordMessageSnapshot {
   attachments?: DiscordAttachment[];
   embeds?: DiscordEmbed[];
   stickers?: unknown[];
+  message?: {
+    content?: string;
+    timestamp?: string;
+    attachments?: DiscordAttachment[];
+    embeds?: DiscordEmbed[];
+    stickers?: unknown[];
+  };
 }
 
 export interface DiscordMessage {
@@ -403,17 +410,26 @@ export function guildIconUrl(guild: DiscordGuild, size = 64): string | null {
   return `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${ext}?size=${s}`;
 }
 
-export function guildBannerUrl(guild: Pick<DiscordGuild, "id" | "banner">, size = 1024): string | null {
-  if (!guild.banner || !guild.id) return null;
+export function guildBannerUrl(
+  guild: Pick<DiscordGuild, "id" | "banner"> | null | undefined,
+  size = 1024
+): string | null {
+  if (!guild?.banner || !guild.id) return null;
+
   const s = normalizeCdnSize(size);
   const ext = guild.banner.startsWith("a_") ? "gif" : "webp";
+
   return `https://cdn.discordapp.com/banners/${guild.id}/${guild.banner}.${ext}?size=${s}`;
 }
+export function bannerUrl(
+  user: DiscordUser | null | undefined,
+  size = 512
+): string | null {
+  if (!user?.banner || !user.id) return null;
 
-export function bannerUrl(user: DiscordUser, size = 512): string | null {
-  if (!user.banner) return null;
   const s = normalizeCdnSize(size);
   const ext = user.banner.startsWith("a_") ? "gif" : "webp";
+
   return `https://cdn.discordapp.com/banners/${user.id}/${user.banner}.${ext}?size=${s}`;
 }
 

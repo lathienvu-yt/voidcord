@@ -968,6 +968,16 @@ function getDisplayNameStyleProps(
   };
 }
 
+function profileCoverBackground(banner: string | null, accent: string, tint: number): string {
+  const clampedTint = Math.max(0, Math.min(80, tint));
+  const alpha = Math.round(clampedTint / 100 * 255).toString(16).padStart(2, "0");
+  const accentWithAlpha = `${accent}${alpha}`;
+  if (!banner) {
+    return `linear-gradient(135deg, ${accent} 0%, #1a1e2b 100%)`;
+  }
+  return `linear-gradient(135deg, ${accentWithAlpha} 0%, rgba(12,12,16,.12) 78%), url("${banner}") center/cover no-repeat`;
+}
+
 function StyledDisplayName({
   user,
   children,
@@ -1815,6 +1825,8 @@ export default function App() {
   const [serverActionError, setServerActionError] = useState("");
   const [profileEditOpen, setProfileEditOpen] = useState(false);
   const [profileCardOpen, setProfileCardOpen] = useState(false);
+  const [profileAppearance, setProfileAppearance] = useState({ accent: "#5865f2", bannerTint: 28 });
+  const [profileAppearanceLoadedFor, setProfileAppearanceLoadedFor] = useState("");
   const [ownProfileLoading, setOwnProfileLoading] = useState(false);
   const [fullProfileOpen, setFullProfileOpen] = useState(false);
   const [bioEditing, setBioEditing] = useState(false);
@@ -1901,6 +1913,31 @@ export default function App() {
     window.addEventListener("voidcord-startup-progress", handleStartupProgress);
     return () => window.removeEventListener("voidcord-startup-progress", handleStartupProgress);
   }, []);
+
+  useEffect(() => {
+    if (!me?.id) return;
+    let appearance = { accent: "#5865f2", bannerTint: 28 };
+    try {
+      const stored = JSON.parse(localStorage.getItem(`voidcord:profile-appearance:${me.id}`) || "null");
+      if (stored && typeof stored === "object") {
+        if (typeof stored.accent === "string" && /^#[\da-f]{6}$/i.test(stored.accent)) {
+          appearance.accent = stored.accent;
+        }
+        if (Number.isFinite(stored.bannerTint)) {
+          appearance.bannerTint = Math.max(0, Math.min(80, Math.round(stored.bannerTint)));
+        }
+      }
+    } catch { /* use defaults when the local profile preference is unavailable */ }
+    setProfileAppearance(appearance);
+    setProfileAppearanceLoadedFor(me.id);
+  }, [me?.id]);
+
+  useEffect(() => {
+    if (!me?.id || profileAppearanceLoadedFor !== me.id) return;
+    try {
+      localStorage.setItem(`voidcord:profile-appearance:${me.id}`, JSON.stringify(profileAppearance));
+    } catch { /* local profile appearance is an optional preference */ }
+  }, [me?.id, profileAppearanceLoadedFor, profileAppearance]);
 
   const listRef = useRef<HTMLDivElement>(null);
   const touchDraggedGuildRef = useRef<string | null>(null);
@@ -6000,6 +6037,7 @@ export default function App() {
   const selectedProfileBio = memberProfileData?.user?.bio || memberProfileData?.user_profile?.bio || "";
   const selectedProfileUser = memberProfileData?.user || selectedMemberProfile;
   const selectedProfileIsOwn = !!me && !!selectedMemberProfile && selectedMemberProfile.id === me.id;
+  const selectedProfileBanner = bannerUrl(selectedProfileUser, 512);
   const selectedProfileRoleColorInfo = !isDmView && selectedMemberProfile
     ? getUserRoleColorInfo(selectedMemberProfile.id, guildMembers, guildRoles)
     : {};
@@ -6495,11 +6533,11 @@ export default function App() {
                 return (
                   <>
                     <div className="profile-popover-cover" style={{
-                      background: profileBanner
-                        ? `url(${profileBanner}) center/cover`
-                        : profileUser.accent_color
-                          ? `linear-gradient(135deg, #${profileUser.accent_color.toString(16).padStart(6, "0")}, #1b1b2b)`
-                          : "linear-gradient(135deg, #404b84, #1b1b2b)"
+                      background: profileCoverBackground(
+                        profileBanner,
+                        profileAppearance.accent,
+                        profileAppearance.bannerTint,
+                      ),
                     }} />
               <div className="profile-popover-content">
                 <div className="profile-popover-avatar-wrap">
@@ -8116,9 +8154,11 @@ export default function App() {
             <div
               className="profile-banner"
               style={{
-                background: bannerUrl(memberProfileData?.user || selectedMemberProfile, 512)
-                  ? `url(${bannerUrl(memberProfileData?.user || selectedMemberProfile, 512)}) center/cover no-repeat`
-                  : "linear-gradient(135deg, #2b3040 0%, #1a1e2b 100%)",
+                background: selectedProfileIsOwn
+                  ? profileCoverBackground(selectedProfileBanner, profileAppearance.accent, profileAppearance.bannerTint)
+                  : selectedProfileBanner
+                    ? `url(${selectedProfileBanner}) center/cover no-repeat`
+                    : "linear-gradient(135deg, #2b3040 0%, #1a1e2b 100%)",
                 position: 'relative',
               }}
             >
@@ -8175,6 +8215,42 @@ export default function App() {
                       <div className="profile-customize-item">
                         <span>Profile Effect</span>
                         <strong>{selectedProfileUser?.profile_effect?.id || selectedProfileUser?.profile_effect_id ? "Effect applied" : "No effect applied"}</strong>
+                      </div>
+                      <div className="profile-customize-item">
+                        <span>Local Profile Accent</span>
+                        <div className="profile-accent-controls">
+                          <input
+                            type="color"
+                            value={profileAppearance.accent}
+                            aria-label="Choose local profile accent"
+                            onChange={event => setProfileAppearance(current => ({ ...current, accent: event.target.value }))}
+                          />
+                          {[["#5865f2", "Discord blue"], ["#eb459e", "Pink"], ["#45c46a", "Green"], ["#f0a43a", "Amber"]].map(([color, label]) => (
+                            <button
+                              type="button"
+                              key={color}
+                              className={profileAppearance.accent.toLowerCase() === color ? "active" : ""}
+                              style={{ backgroundColor: color }}
+                              aria-label={`${label} profile accent`}
+                              title={label}
+                              onClick={() => setProfileAppearance(current => ({ ...current, accent: color }))}
+                            />
+                          ))}
+                        </div>
+                        <small>Shown on your VoidCord profile card only.</small>
+                      </div>
+                      <div className="profile-customize-item">
+                        <label htmlFor="profile-banner-tint">Banner tint · {profileAppearance.bannerTint}%</label>
+                        <input
+                          id="profile-banner-tint"
+                          className="profile-banner-tint"
+                          type="range"
+                          min="0"
+                          max="80"
+                          value={profileAppearance.bannerTint}
+                          onChange={event => setProfileAppearance(current => ({ ...current, bannerTint: Number(event.target.value) }))}
+                        />
+                        <small>Adjust how strongly your accent colors your local profile banner.</small>
                       </div>
                     </aside>
                   )}
@@ -9908,49 +9984,54 @@ function MessageContent({
       {m.message_reference && m.message_reference.type !== 1 && (
         <div className="reply-message-reference"><span>↪ {m.referenced_message ? displayName(m.referenced_message.author) : "Reply to message"}</span><div>{m.referenced_message?.content || (m.referenced_message ? "Attachment or system message" : "Original message unavailable")}</div></div>
       )}
-      {m.message_reference?.type === 1 && m.message_snapshots?.map((snapshot, index) => (
-        <div className="forwarded-message" key={`${m.id}-snapshot-${index}`}>
-          <div className="forwarded-message-label">↗ Forwarded message</div>
-          {snapshot.content && (
-            <div className="msg-text">
-              <DiscordMarkdown content={snapshot.content} channels={channels} users={users} onChannelClick={onChannelClick} />
-            </div>
-          )}
-          {snapshot.embeds?.map((embed, embedIndex) => (
-            <DiscordEmbedView
-              key={`${m.id}-snapshot-${index}-embed-${embedIndex}`}
-              embed={embed}
-              attachments={snapshot.attachments || []}
-              channels={channels}
-              users={users}
-              onChannelClick={onChannelClick}
-              onMediaOpen={onMediaOpen}
-            />
-          ))}
-          {snapshot.attachments?.filter(isImageAttachment).map(attachment => (
-            <RefreshableAttachmentImage
-              key={attachment.id}
-              channelId={m.channel_id || channelId || ""}
-              messageId={m.id}
-              attachment={attachment}
-              alt={attachment.filename}
-              className="msg-attachment-img"
-              role="button"
-              tabIndex={0}
-              onClick={url => onMediaOpen?.(url, "image", attachment.filename)}
-            />
-          ))}
-          {snapshot.attachments?.filter(isVideoAttachment).map(attachment => (
-            <div className="msg-video-attachment" key={attachment.id}>
-              <video src={attachment.url} controls preload="metadata" autoPlay={autoplayVideos} muted={autoplayVideos} />
-              <button type="button" onClick={() => onMediaOpen?.(attachment.url, "video", attachment.filename)}>Open video</button>
-            </div>
-          ))}
-          {snapshot.attachments?.filter(attachment => !isImageAttachment(attachment) && !isVideoAttachment(attachment)).map(attachment => (
-            <a key={attachment.id} href={attachment.url} target="_blank" rel="noopener noreferrer" className="msg-file-link">📎 {attachment.filename}</a>
-          ))}
-        </div>
-      ))}
+      {m.message_reference?.type === 1 && m.message_snapshots?.map((snapshot, index) => {
+        // Discord nests the forwarded message under `message`; some cached gateway
+        // payloads use the older flattened snapshot shape.
+        const original = snapshot.message || snapshot;
+        return (
+          <div className="forwarded-message" key={`${m.id}-snapshot-${index}`}>
+            <div className="forwarded-message-label">↗ Forwarded message</div>
+            {original.content && (
+              <div className="msg-text">
+                <DiscordMarkdown content={original.content} channels={channels} users={users} onChannelClick={onChannelClick} />
+              </div>
+            )}
+            {original.embeds?.map((embed, embedIndex) => (
+              <DiscordEmbedView
+                key={`${m.id}-snapshot-${index}-embed-${embedIndex}`}
+                embed={embed}
+                attachments={original.attachments || []}
+                channels={channels}
+                users={users}
+                onChannelClick={onChannelClick}
+                onMediaOpen={onMediaOpen}
+              />
+            ))}
+            {original.attachments?.filter(isImageAttachment).map(attachment => (
+              <RefreshableAttachmentImage
+                key={attachment.id}
+                channelId={m.channel_id || channelId || ""}
+                messageId={m.id}
+                attachment={attachment}
+                alt={attachment.filename}
+                className="msg-attachment-img"
+                role="button"
+                tabIndex={0}
+                onClick={url => onMediaOpen?.(url, "image", attachment.filename)}
+              />
+            ))}
+            {original.attachments?.filter(isVideoAttachment).map(attachment => (
+              <div className="msg-video-attachment" key={attachment.id}>
+                <video src={attachment.url} controls preload="metadata" autoPlay={autoplayVideos} muted={autoplayVideos} />
+                <button type="button" onClick={() => onMediaOpen?.(attachment.url, "video", attachment.filename)}>Open video</button>
+              </div>
+            ))}
+            {original.attachments?.filter(attachment => !isImageAttachment(attachment) && !isVideoAttachment(attachment)).map(attachment => (
+              <a key={attachment.id} href={attachment.url} target="_blank" rel="noopener noreferrer" className="msg-file-link">📎 {attachment.filename}</a>
+            ))}
+          </div>
+        );
+      })}
 
       {(m.type === 3 || m.call) && (
         <div className="msg-special-card msg-call-card" role="note">

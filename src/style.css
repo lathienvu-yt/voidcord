@@ -2551,6 +2551,13 @@ input, textarea { font-family: inherit; }
 .profile-customize-item > span:first-child { color: var(--text-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .profile-customize-item > strong,
 .profile-customize-item > span:not(:first-child) { color: var(--text-secondary); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.profile-accent-controls { display: flex; align-items: center; gap: 7px; }
+.profile-accent-controls input[type="color"] { width: 30px; height: 30px; padding: 2px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg-input); cursor: pointer; }
+.profile-accent-controls button { width: 20px; height: 20px; border: 2px solid transparent; border-radius: 50%; cursor: pointer; }
+.profile-accent-controls button:hover,
+.profile-accent-controls button.active { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.profile-customize-item > small { color: var(--text-dim); font-size: 10px; line-height: 1.4; }
+.profile-banner-tint { width: 100%; accent-color: var(--accent); }
 .profile-full-content { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
 .profile-full-identity { display: flex; flex-direction: column; gap: 5px; }
 .profile-full-body h2 { margin: 0; color: #fff; font-size: 22px; }
@@ -6452,11 +6459,14 @@ input, textarea { font-family: inherit; }
 .dn-effect-6,
 .dn-effect-7,
 .dn-effect-8 {
+  display: inline-block;
   color: transparent;
   background: var(--dn-gradient);
   background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  mask-image: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
 }
 .dn-effect-3 { color: var(--dn-color); text-shadow: 0 0 4px var(--dn-color), 0 0 12px var(--dn-color); }
 .dn-effect-4 {
@@ -6532,7 +6542,7 @@ input, textarea { font-family: inherit; }
 .guild-settings-upload small { color:var(--text-muted); font-weight:400; }
 
 /* Server banner at the top of the channel rail */
-.server-channel-banner { position:relative; display:flex; align-items:flex-end; min-height:104px; margin:0 10px 8px; padding:12px; box-sizing:border-box; border-radius:8px; overflow:hidden; background-color:var(--background-secondary); background-position:center; background-size:cover; }
+.server-channel-banner { position:relative; display:flex; align-items:flex-start; flex:0 0 112px; height:112px; min-height:112px; margin:0 10px 8px; padding:10px; box-sizing:border-box; border-radius:8px; overflow:hidden; background-color:var(--background-secondary); background-position:center; background-size:cover; }
 .server-channel-banner > span { color:#fff; font-size:14px; font-weight:800; line-height:1.2; text-shadow:0 1px 5px #000; overflow-wrap:anywhere; }
 .guild-settings-info-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .guild-settings-info-grid > div,.guild-settings-info-card { display:flex; flex-direction:column; gap:5px; min-width:0; padding:12px; border-radius:7px; background:var(--background-secondary); }
@@ -6552,8 +6562,7 @@ input, textarea { font-family: inherit; }
 
 /* Server sidebar header actions */
 .server-channel-banner {
-  align-items: flex-start;
-  padding: 10px;
+  isolation: isolate;
 }
 .server-banner-topline {
   width: 100%;
@@ -6564,26 +6573,31 @@ input, textarea { font-family: inherit; }
 }
 .server-banner-title-frame {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
   padding: 7px 9px;
-  border: 1px solid transparent;
+  border: 1px solid rgba(255,255,255,.16);
   border-radius: 7px;
-  background: rgba(12, 12, 16, .08);
-  opacity: .72;
+  background: linear-gradient(100deg, rgba(12,12,16,.82), rgba(12,12,16,.5));
+  opacity: 1;
   transition: opacity .18s ease, background .18s ease, border-color .18s ease, transform .18s ease;
-  transform: translateY(-2px);
+  transform: none;
 }
 .server-channel-banner:hover .server-banner-title-frame,
 .server-channel-banner:focus-within .server-banner-title-frame {
   opacity: 1;
-  background: rgba(12, 12, 16, .76);
+  background: linear-gradient(100deg, rgba(12,12,16,.9), rgba(12,12,16,.62));
   border-color: rgba(255,255,255,.24);
   transform: translateY(0);
 }
 .server-banner-title-frame > span:first-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #fff;
   font-size: 14px;
   font-weight: 800;

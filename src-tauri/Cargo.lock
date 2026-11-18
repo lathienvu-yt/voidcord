@@ -9935,6 +9935,41 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< Updated upstream
+=======
+name = "voidcord-core"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "iana-time-zone",
+ "log",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "tokio-util",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "voidcord-gpui-desktop"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "keyring",
+ "reqwest 0.12.28",
+ "serde_json",
+ "smol",
+ "tokio",
+ "voidcord-core",
+]
+
+[[package]]
+>>>>>>> Stashed changes
 name = "vswhom"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
