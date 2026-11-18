@@ -658,6 +658,118 @@ impl DiscordRouter {
         *self.tokens.write().await = tokens;
     }
 
+    /// Perform one unauthenticated email/password login attempt.
+    /// Passwords are only sent in the HTTPS request body and are never logged or retained.
+    pub async fn login_with_password(
+        &self,
+        login: &str,
+        password: &str,
+    ) -> Result<Value, DiscordError> {
+        let experiments = self
+            .client
+            .get(format!("{DISCORD_API}/experiments"))
+            .send()
+            .await?;
+        let experiments_status = experiments.status();
+        let experiments_body: Value = experiments.json().await.unwrap_or(Value::Null);
+        if !experiments_status.is_success() {
+            return Err(DiscordError::Http {
+                status: experiments_status,
+                body: redact_json(&experiments_body).to_string(),
+            });
+        }
+        let fingerprint = experiments_body
+            .get("fingerprint")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| DiscordError::Http {
+                status: StatusCode::BAD_GATEWAY,
+                body: "Discord did not provide an authentication fingerprint".to_owned(),
+            })?;
+
+        let response = self
+            .client
+            .post(format!("{DISCORD_API}/auth/login"))
+            .header("X-Fingerprint", fingerprint)
+            .json(&serde_json::json!({ "login": login, "password": password }))
+            .send()
+            .await?;
+        let status = response.status();
+        let mut body: Value = response.json().await.unwrap_or(Value::Null);
+
+        if body.get("suspended_user_token").is_some() {
+            return Err(DiscordError::Http {
+                status: StatusCode::FORBIDDEN,
+                body: "This account is suspended. VoidCord cannot use suspended-account credentials.".to_owned(),
+            });
+        }
+        if !status.is_success() {
+            let captcha = body.get("captcha_key").is_some()
+                || body.get("captcha_sitekey").is_some()
+                || body.get("captcha_service").is_some();
+            if captcha {
+                return Err(DiscordError::CaptchaRequired(
+                    "Discord requires an interactive CAPTCHA. Complete verification through Discord, then try again.".to_owned(),
+                ));
+            }
+            return Err(DiscordError::Http {
+                status,
+                body: redact_json(&body).to_string(),
+            });
+        }
+
+        // Keep the fingerprint only in the transient response so the MFA step
+        // can use the same unauthenticated session. It is not a credential.
+        if let Some(object) = body.as_object_mut() {
+            object.insert("voidcord_fingerprint".to_owned(), Value::String(fingerprint.to_owned()));
+        }
+        Ok(body)
+    }
+
+    /// Complete an MFA challenge from a prior password login.
+    /// Only TOTP and backup-code challenges are accepted here; no verification bypasses.
+    pub async fn verify_mfa_login(
+        &self,
+        authenticator_type: &str,
+        ticket: &str,
+        login_instance_id: Option<&str>,
+        fingerprint: &str,
+        code: &str,
+    ) -> Result<Value, DiscordError> {
+        if !matches!(authenticator_type, "totp" | "backup") {
+            return Err(DiscordError::Http {
+                status: StatusCode::BAD_REQUEST,
+                body: "Unsupported MFA method. Use an authenticator app or backup code.".to_owned(),
+            });
+        }
+        let mut payload = serde_json::json!({ "ticket": ticket, "code": code });
+        if let Some(instance_id) = login_instance_id.filter(|value| !value.is_empty()) {
+            payload["login_instance_id"] = Value::String(instance_id.to_owned());
+        }
+        let response = self
+            .client
+            .post(format!("{DISCORD_API}/auth/mfa/{authenticator_type}"))
+            .header("X-Fingerprint", fingerprint)
+            .json(&payload)
+            .send()
+            .await?;
+        let status = response.status();
+        let body: Value = response.json().await.unwrap_or(Value::Null);
+        if body.get("suspended_user_token").is_some() {
+            return Err(DiscordError::Http {
+                status: StatusCode::FORBIDDEN,
+                body: "This account is suspended. VoidCord cannot use suspended-account credentials.".to_owned(),
+            });
+        }
+        if !status.is_success() {
+            return Err(DiscordError::Http {
+                status,
+                body: redact_json(&body).to_string(),
+            });
+        }
+        Ok(body)
+    }
+
     pub async fn record_credential_health(&self, token: &str, available: bool) {
         self.credential_health.lock().await.insert(
             hash_rate_limit_key(token),
