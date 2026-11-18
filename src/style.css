@@ -6878,3 +6878,11 @@ input, textarea { font-family: inherit; }
   .poll-editor-row { align-items: stretch; flex-direction: column; gap: 8px; }
   .poll-modal { padding: 15px; }
 }
+
+
+/* Email/password authentication */
+.login-mode-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 0 0 18px; padding: 4px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg-chat); }
+.login-mode-tabs button { min-height: 32px; border-radius: 6px; color: var(--text-secondary); background: transparent; font-size: 11px; font-weight: 650; }
+.login-mode-tabs button.active { color: var(--text-primary); background: var(--bg-elevated); box-shadow: 0 1px 3px #0003; }
+.login-secondary-btn { width: 100%; margin-top: 8px; padding: 9px; border-radius: 7px; color: var(--text-secondary); background: var(--bg-chat); font-size: 11px; }
+.login-secondary-btn:disabled { opacity: .5; }
