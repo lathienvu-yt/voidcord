@@ -297,6 +297,8 @@ fn main() {
             cache::cache_migration_complete,
             cache::cache_finish_migration,
             cache::cache_get_deleted_messages_for_channel,
+            commands::login_with_password,
+            commands::verify_mfa_login,
             commands::set_token,
             commands::set_router_accounts,
             commands::get_current_user,
