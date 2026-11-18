@@ -6886,3 +6886,81 @@ input, textarea { font-family: inherit; }
 .login-mode-tabs button.active { color: var(--text-primary); background: var(--bg-elevated); box-shadow: 0 1px 3px #0003; }
 .login-secondary-btn { width: 100%; margin-top: 8px; padding: 9px; border-radius: 7px; color: var(--text-secondary); background: var(--bg-chat); font-size: 11px; }
 .login-secondary-btn:disabled { opacity: .5; }
+
+
+/* Password login launched from the account switcher */
+.account-password-login-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-chat);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+  transition: border-color .15s, background .15s;
+}
+.account-password-login-button:hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.account-password-login-button span:last-child { color: var(--accent-bright); font-size: 16px; }
+.account-password-login-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0,0,0,.72);
+  backdrop-filter: blur(7px);
+}
+.account-password-login-modal {
+  position: relative;
+  width: min(480px, 100%);
+  max-height: min(760px, 92vh);
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  box-shadow: 0 28px 90px rgba(0,0,0,.7);
+  animation: popIn var(--dur-slow) var(--ease-spring);
+}
+.account-password-login-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background: var(--bg-chat);
+}
+.account-password-login-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+.account-password-login-modal .login-screen {
+  height: auto;
+  min-height: 0;
+  background: transparent;
+}
+.account-password-login-modal .login-body {
+  padding: 24px 18px;
+  background: transparent;
+}
+.account-password-login-modal .login-card {
+  width: min(390px, 100%);
+  padding: 24px;
+  box-shadow: none;
+  border-color: transparent;
+}
+@media (max-width: 520px) {
+  .account-password-login-backdrop { padding: 12px; }
+  .account-password-login-modal .login-body { padding: 12px 8px; }
+  .account-password-login-modal .login-card { padding: 22px 16px; }
+}
