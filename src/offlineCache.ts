@@ -555,13 +555,23 @@ export function buildReplayTimeline(bundle: VoidCordCacheBundle): ReplayCoreEven
       if (channel?.id) channelNames.set(channel.id, String(channel.name || channel.id));
     }
   }
+  const includedMessages = new Set<string>();
   for (const group of bundle.messages || []) {
     for (const message of group.messages || []) {
-      events.push({ id: message.id, channelId: group.channelId, timestamp: messageTime(message), kind: "message", message, channelName: channelNames.get(group.channelId) });
+      includedMessages.add(`${group.channelId}:${message.id}`);
+      events.push({
+        id: message.id,
+        channelId: group.channelId,
+        timestamp: messageTime(message),
+        kind: message.deleted_at ? "deleted" : "message",
+        message,
+        channelName: channelNames.get(group.channelId),
+      });
     }
   }
   for (const entry of bundle.deletedMessages || []) {
-    if (!events.some(event => event.id === entry.message.id && event.channelId === entry.channelId)) {
+    const key = `${entry.channelId}:${entry.message.id}`;
+    if (!includedMessages.has(key)) {
       events.push({ id: `deleted:${entry.id}`, channelId: entry.channelId, timestamp: entry.deletedAt, kind: "deleted", message: entry.message, channelName: entry.channelName });
     }
   }
