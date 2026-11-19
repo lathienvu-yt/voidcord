@@ -52,7 +52,7 @@ export default function QuestsStorePanel({ mode }: { mode: "quests" | "shop" }) 
   const [storeError, setStoreError] = useState("");
   const [searched, setSearched] = useState(false);
 
-  const loadQuests = useCallback(async (showClaimed = claimed) => {
+  const loadQuests = useCallback(async (showClaimed: boolean) => {
     setQuestBusy(true);
     setQuestError("");
     try {
@@ -63,7 +63,7 @@ export default function QuestsStorePanel({ mode }: { mode: "quests" | "shop" }) 
     } finally {
       setQuestBusy(false);
     }
-  }, [claimed]);
+  }, []);
 
   const loadStore = useCallback(async (event?: React.FormEvent) => {
     event?.preventDefault();
@@ -93,7 +93,7 @@ export default function QuestsStorePanel({ mode }: { mode: "quests" | "shop" }) 
     return <section className="directory-area quest-store-area">
       <header className="directory-header">
         <div><h2><Trophy size={20} /> Quests</h2><p>View current and previously claimed Discord quests. Progress is reported by Discord.</p></div>
-        <button className="directory-add-button" onClick={() => void loadQuests()} disabled={questBusy}><RefreshCw size={14} /> Refresh</button>
+        <button className="directory-add-button" onClick={() => void loadQuests(claimed)} disabled={questBusy}><RefreshCw size={14} /> Refresh</button>
       </header>
       <nav className="friend-filter-tabs" aria-label="Quest filters">
         <button className={!claimed ? "active" : ""} onClick={() => { setClaimed(false); void loadQuests(false); }}>Available</button>
