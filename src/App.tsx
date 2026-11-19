@@ -1809,8 +1809,9 @@ export default function App() {
 
   const mergeThreads = useCallback((incoming: DiscordChannel[]) => {
     if (!incoming || !incoming.length) return;
+    const selfId = gatewayListenerStateRef.current.me?.id;
     const interacted = incoming.filter(thread =>
-      thread?.id && (thread.owner_id === me?.id || thread.member?.user_id === me?.id || thread.member?.id === me?.id
+      thread?.id && (thread.owner_id === selfId || thread.member?.user_id === selfId || thread.member?.id === selfId
         || (!!thread.member && !thread.member.user_id && !thread.member.id))
     ).map(thread => thread.id);
     if (interacted.length) setJoinedForumThreadIds(previous => new Set([...previous, ...interacted]));
@@ -1822,7 +1823,7 @@ export default function App() {
       activeThreadsRef.current = next;
       return next;
     });
-  }, [me?.id]);
+  }, []);
 
   const removeThread = useCallback((threadId: string) => {
     if (!threadId) return;
