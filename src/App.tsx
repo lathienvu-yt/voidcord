@@ -1804,6 +1804,7 @@ export default function App() {
   const [forumTagFilter, setForumTagFilter] = useState<string | null>(null);
   const [showOnlyJoinedForumThreads, setShowOnlyJoinedForumThreads] = useState(true);
   const [joinedForumThreadIds, setJoinedForumThreadIds] = useState<Set<string>>(() => new Set());
+  useEffect(() => { setJoinedForumThreadIds(new Set()); }, [me?.id]);
   const [forumThreadLimit, setForumThreadLimit] = useState(25);
 
   const mergeThreads = useCallback((incoming: DiscordChannel[]) => {
@@ -3702,7 +3703,9 @@ export default function App() {
         }
         if (payload.message?.author?.id === gatewayListenerStateRef.current.me?.id) {
           setRecentlyMessaged(order => [payload.channel_id, ...order.filter(id => id !== payload.channel_id)]);
-          if (activeThreadsRef.current.some(thread => thread.id === payload.channel_id)) {
+          if (activeThreadsRef.current.some(thread => thread.id === payload.channel_id)
+            || (gatewayListenerStateRef.current.selectedChannel?.id === payload.channel_id
+              && isThreadChannel(gatewayListenerStateRef.current.selectedChannel))) {
             setJoinedForumThreadIds(previous => new Set(previous).add(payload.channel_id));
           }
         } else if (payload.channel_id !== gatewayListenerStateRef.current.selectedChannel?.id || (gatewayListenerStateRef.current.isDmView && gatewayListenerStateRef.current.activeDmTab !== "chat")) {
