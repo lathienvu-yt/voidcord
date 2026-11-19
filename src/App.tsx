@@ -4464,19 +4464,25 @@ export default function App() {
             .filter(message => message?.author?.id === me?.id && message.channel_id)
             .map(message => message.channel_id)
         );
-        const interactionResults = await Promise.all(allThreads.map(async thread => {
+
+        if (requestId !== channelLoadRequest.current) return;
+        if (firstMessageThreadIds.size) setJoinedForumThreadIds(previous => new Set([...previous, ...firstMessageThreadIds]));
+        setForumThreads(allThreads);
+        mergeThreads(allThreads);
+
+        // Do cache-based authorship checks in the background so the forum list
+        // renders immediately instead of waiting on up to 100 RocksDB reads.
+        void Promise.all(allThreads.map(async thread => {
           if (thread.owner_id === me?.id || thread.member?.user_id === me?.id || thread.member?.id === me?.id
             || (!!thread.member && !thread.member.user_id && !thread.member.id)
             || firstMessageThreadIds.has(thread.id)) return thread.id;
           const cached = await readCachedMessages(thread.id).catch(() => undefined);
           return cached?.some(message => message.author?.id === me?.id) ? thread.id : null;
-        }));
-        const interactedIds = interactionResults.filter((id): id is string => !!id);
-
-        if (requestId !== channelLoadRequest.current) return;
-        if (interactedIds.length) setJoinedForumThreadIds(previous => new Set([...previous, ...interactedIds]));
-        setForumThreads(allThreads);
-        mergeThreads(allThreads);
+        })).then(results => {
+          if (requestId !== channelLoadRequest.current) return;
+          const interactedIds = results.filter((id): id is string => !!id);
+          if (interactedIds.length) setJoinedForumThreadIds(previous => new Set([...previous, ...interactedIds]));
+        }).catch(error => console.warn("Could not restore forum thread interaction state", error));
       } catch (error) {
         if (requestId === channelLoadRequest.current) {
           const fallback = activeThreadsRef.current.filter(t => t.parent_id === channel.id);
