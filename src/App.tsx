@@ -1802,9 +1802,17 @@ export default function App() {
   const [forumQuery, setForumQuery] = useState("");
   const [forumFilter, setForumFilter] = useState<"all" | "active" | "archived">("all");
   const [forumTagFilter, setForumTagFilter] = useState<string | null>(null);
+  const [showOnlyJoinedForumThreads, setShowOnlyJoinedForumThreads] = useState(true);
+  const [joinedForumThreadIds, setJoinedForumThreadIds] = useState<Set<string>>(() => new Set());
+  const [forumThreadLimit, setForumThreadLimit] = useState(25);
 
   const mergeThreads = useCallback((incoming: DiscordChannel[]) => {
     if (!incoming || !incoming.length) return;
+    const interacted = incoming.filter(thread =>
+      thread?.id && (thread.owner_id === me?.id || thread.member?.user_id === me?.id || thread.member?.id === me?.id
+        || (!!thread.member && !thread.member.user_id && !thread.member.id))
+    ).map(thread => thread.id);
+    if (interacted.length) setJoinedForumThreadIds(previous => new Set([...previous, ...interacted]));
     setActiveThreads(prev => {
       const map = new Map<string, DiscordChannel>();
       for (const t of prev) if (t?.id) map.set(t.id, t);
@@ -1813,7 +1821,7 @@ export default function App() {
       activeThreadsRef.current = next;
       return next;
     });
-  }, []);
+  }, [me?.id]);
 
   const removeThread = useCallback((threadId: string) => {
     if (!threadId) return;
@@ -1828,15 +1836,17 @@ export default function App() {
 
   const filteredForumThreads = useMemo(() => {
     return forumThreads.filter(thread => {
-      if (forumQuery.trim() && !thread.name?.toLowerCase().includes(forumQuery.trim().toLowerCase())) {
-        return false;
-      }
+      const interacted = joinedForumThreadIds.has(thread.id) || thread.owner_id === me?.id
+        || thread.member?.user_id === me?.id || thread.member?.id === me?.id;
+      if (showOnlyJoinedForumThreads && !interacted) return false;
+      if (forumQuery.trim() && !thread.name?.toLowerCase().includes(forumQuery.trim().toLowerCase())) return false;
       if (forumFilter === "active" && thread.thread_metadata?.archived) return false;
       if (forumFilter === "archived" && !thread.thread_metadata?.archived) return false;
       if (forumTagFilter && !thread.applied_tags?.includes(forumTagFilter)) return false;
       return true;
-    });
-  }, [forumThreads, forumQuery, forumFilter, forumTagFilter]);
+    }).sort((a, b) => (b.last_message_id || b.id).localeCompare(a.last_message_id || a.id));
+  }, [forumThreads, forumQuery, forumFilter, forumTagFilter, joinedForumThreadIds, showOnlyJoinedForumThreads, me?.id]);
+  const displayedForumThreads = filteredForumThreads.slice(0, forumThreadLimit);
   const selectedChannelRef = useRef<DiscordChannel | null>(null);
   const [channelAccess, setChannelAccess] = useState<"ok" | "MISSING_ACCESS" | "MISSING_PERMS">("ok");
   const [knownLockedChannels, setKnownLockedChannels] = useState<Set<string>>(new Set());
@@ -3692,6 +3702,9 @@ export default function App() {
         }
         if (payload.message?.author?.id === gatewayListenerStateRef.current.me?.id) {
           setRecentlyMessaged(order => [payload.channel_id, ...order.filter(id => id !== payload.channel_id)]);
+          if (activeThreadsRef.current.some(thread => thread.id === payload.channel_id)) {
+            setJoinedForumThreadIds(previous => new Set(previous).add(payload.channel_id));
+          }
         } else if (payload.channel_id !== gatewayListenerStateRef.current.selectedChannel?.id || (gatewayListenerStateRef.current.isDmView && gatewayListenerStateRef.current.activeDmTab !== "chat")) {
           const incomingMessage = payload.message as DiscordMessage & { mentions?: DiscordUser[] };
           const isDirectPing = Array.isArray(incomingMessage.mentions) && incomingMessage.mentions.some(user => user.id === gatewayListenerStateRef.current.me?.id);
@@ -4107,6 +4120,32 @@ export default function App() {
       if (payload?.id) mergeThreads([payload]);
     }).then(u => unsubs.push(u));
 
+    listen<any>("discord:thread_member_update", ({ payload }) => {
+      const threadId = payload?.id || payload?.thread_id;
+      const userId = payload?.user_id || payload?.member?.user_id || payload?.member?.id;
+      if (threadId && userId === gatewayListenerStateRef.current.me?.id) {
+        setJoinedForumThreadIds(previous => new Set(previous).add(String(threadId)));
+      }
+    }).then(u => unsubs.push(u));
+
+    listen<any>("discord:thread_members_update", ({ payload }) => {
+      const threadId = payload?.id || payload?.thread_id;
+      if (!threadId) return;
+      const selfId = gatewayListenerStateRef.current.me?.id;
+      const added = Array.isArray(payload?.added_members) ? payload.added_members : [];
+      const removed = Array.isArray(payload?.removed_member_ids) ? payload.removed_member_ids : [];
+      if (selfId && added.some((member: any) => member?.user_id === selfId || member?.id === selfId)) {
+        setJoinedForumThreadIds(previous => new Set(previous).add(String(threadId)));
+      }
+      if (selfId && removed.includes(selfId)) {
+        setJoinedForumThreadIds(previous => {
+          const next = new Set(previous);
+          next.delete(String(threadId));
+          return next;
+        });
+      }
+    }).then(u => unsubs.push(u));
+
     listen<any>("discord:thread_delete", ({ payload }) => {
       if (payload?.id) removeThread(payload.id);
     }).then(u => unsubs.push(u));
@@ -4399,6 +4438,7 @@ export default function App() {
       setCanSend(false);
       setForumQuery("");
       setForumTagFilter(null);
+      setForumThreadLimit(25);
       try {
         const localKnown = activeThreadsRef.current.filter(t => t.parent_id === channel.id);
         const response = await invoke<{ threads?: DiscordChannel[]; first_messages?: DiscordMessage[] }>(
@@ -4409,13 +4449,25 @@ export default function App() {
         const fetched = Array.isArray(response?.threads) ? response.threads : [];
         const merged = new Map<string, DiscordChannel>();
         for (const t of localKnown) if (t?.id) merged.set(t.id, t);
-        for (const t of fetched) if (t?.id) merged.set(t.id, { ...(merged.get(t.id) || {}), ...t });
+        for (const t of fetched) if (t?.id) merged.set(t.id, mergeDiscordChannel(merged.get(t.id), t));
 
         const allThreads = [...merged.values()]
           .filter(t => !t.parent_id || t.parent_id === channel.id)
           .sort((a, b) => (b.last_message_id || b.id).localeCompare(a.last_message_id || a.id));
 
+        const interactedIds: string[] = [];
+        for (const thread of allThreads) {
+          if (thread.owner_id === me?.id || thread.member?.user_id === me?.id || thread.member?.id === me?.id
+            || (!!thread.member && !thread.member.user_id && !thread.member.id)) {
+            interactedIds.push(thread.id);
+            continue;
+          }
+          const cached = await readCachedMessages(thread.id).catch(() => undefined);
+          if (cached?.some(message => message.author?.id === me?.id)) interactedIds.push(thread.id);
+        }
+
         if (requestId !== channelLoadRequest.current) return;
+        if (interactedIds.length) setJoinedForumThreadIds(previous => new Set([...previous, ...interactedIds]));
         setForumThreads(allThreads);
         mergeThreads(allThreads);
       } catch (error) {
@@ -7511,6 +7563,9 @@ export default function App() {
                   </div>
 
                   <div className="forum-status-filter">
+                    <button type="button" className={showOnlyJoinedForumThreads ? "active" : ""} onClick={() => setShowOnlyJoinedForumThreads(value => !value)}>
+                      {showOnlyJoinedForumThreads ? "My threads" : "Show all"} 
+                    </button>
                     <button type="button" className={forumFilter === "all" ? "active" : ""} onClick={() => setForumFilter("all")}>All</button>
                     <button type="button" className={forumFilter === "active" ? "active" : ""} onClick={() => setForumFilter("active")}>Active</button>
                     <button type="button" className={forumFilter === "archived" ? "active" : ""} onClick={() => setForumFilter("archived")}>Archived</button>
@@ -7544,7 +7599,7 @@ export default function App() {
                 )}
 
                 <div className="forum-post-list">
-                  {filteredForumThreads.map(thread => {
+                  {displayedForumThreads.map(thread => {
                     const isArchived = !!thread.thread_metadata?.archived;
                     const tags = (selectedChannel.available_tags || []).filter(tag => thread.applied_tags?.includes(tag.id));
                     return (
@@ -7574,6 +7629,14 @@ export default function App() {
                     );
                   })}
                 </div>
+                {filteredForumThreads.length > displayedForumThreads.length && forumThreadLimit < 100 && (
+                  <button type="button" className="forum-load-more" onClick={() => setForumThreadLimit(limit => Math.min(100, limit + 25))}>
+                    Load more threads ({displayedForumThreads.length} of {filteredForumThreads.length})
+                  </button>
+                )}
+                {filteredForumThreads.length > displayedForumThreads.length && forumThreadLimit >= 100 && (
+                  <div className="forum-browser-state">Showing the 100-thread display limit.</div>
+                )}
               </section>
             )}
             {olderMessagesLoading && (
