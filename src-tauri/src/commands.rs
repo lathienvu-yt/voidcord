@@ -418,6 +418,23 @@ pub async fn acknowledge_message(
         .map_err(map_err)
 }
 
+/// Fetch the current user's active quests or claimed quest history.
+#[tauri::command]
+pub async fn get_my_quests(claimed: Option<bool>, state: State<'_, AppState>) -> Result<Value, String> {
+    let path = if claimed.unwrap_or(false) { "quests/@me/claimed" } else { "quests/@me" };
+    state.router.rest(AccountIdentity::ReadOnly, Method::GET, path, None).await.map_err(map_err)
+}
+
+/// Read published store listings for an application. This is browse-only; VoidCord does not initiate purchases.
+#[tauri::command]
+pub async fn get_published_store_listings(application_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    if application_id.parse::<u64>().is_err() {
+        return Err("Enter a valid Discord application ID".to_owned());
+    }
+    let path = format!("store/published-listings/skus?application_id={application_id}&country_code=VN&localize=true");
+    state.router.rest(AccountIdentity::ReadOnly, Method::GET, &path, None).await.map_err(map_err)
+}
+
 /// Fetch Discord's client-internal content inventory for the current user's activity feed.
 /// The optional refresh token is kept in the frontend session and is never logged.
 #[tauri::command]
