@@ -21,6 +21,7 @@ type Listing = {
   description?: string | Record<string,string>;
   thumbnail?: string;
   image?: string;
+  external_purchase_url?: string;
 };
 type QuestResponse = { quests?: Quest[]; excluded_quests?: unknown[]; quest_enrollment_blocked_until?: string | null };
 type StoreResponse = Listing[] | { listings?: Listing[]; skus?: Listing[] };
