@@ -6981,3 +6981,21 @@ input, textarea { font-family: inherit; }
 .quest-store-card-body p { margin: 2px 0; color: var(--text-muted, #aaa); font-size: 13px; line-height: 1.45; }
 .quest-store-card-body a { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-color, #a99bff); font-size: 12px; text-decoration: none; }
 @media (max-width: 680px) { .quest-store-search { align-items: stretch; flex-direction: column; } .quest-store-search > button { justify-content: center; } }
+
+
+.forum-load-more {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-color, rgba(255,255,255,.12));
+  border-radius: 8px;
+  background: var(--background-secondary, rgba(255,255,255,.04));
+  color: var(--text-normal, inherit);
+  cursor: pointer;
+}
+.forum-load-more:hover {
+  background: var(--background-modifier-hover, rgba(255,255,255,.08));
+}
