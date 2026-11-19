@@ -603,6 +603,8 @@ function CachePanel() {
   const [replayChannelId, setReplayChannelId] = useState("all");
   const [replaySearch, setReplaySearch] = useState("");
   const [replayLimit, setReplayLimit] = useState(100);
+  const [replayCursor, setReplayCursor] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refreshStats = () => {
@@ -693,6 +695,7 @@ function CachePanel() {
     setReplayChannelId("all");
     setReplaySearch("");
     setReplayLimit(100);
+    setReplayPlaying(false);
     setStatusMsg(`✓ Imported ${messagesCount} messages across ${channelsCount} channels${sourceName ? ` from ${sourceName}` : ""}. ReplayCore is ready.`);
     refreshStats();
   };
@@ -749,7 +752,24 @@ function CachePanel() {
     && (!replaySearch.trim() || item.message.content?.toLowerCase().includes(replaySearch.trim().toLowerCase())
       || item.message.author?.username?.toLowerCase().includes(replaySearch.trim().toLowerCase()))
   ), [replayEvents, replayChannelId, replaySearch]);
-  const displayedReplayEvents = visibleReplayEvents.slice(Math.max(0, visibleReplayEvents.length - replayLimit));
+  useEffect(() => {
+    setReplayPlaying(false);
+    setReplayCursor(Math.max(0, visibleReplayEvents.length - 1));
+  }, [replayBundle, replayChannelId, replaySearch]);
+
+  useEffect(() => {
+    if (!replayPlaying || visibleReplayEvents.length === 0) return;
+    const timer = window.setInterval(() => {
+      setReplayCursor(current => Math.min(current + 1, visibleReplayEvents.length - 1));
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, [replayPlaying, visibleReplayEvents.length]);
+
+  useEffect(() => {
+    if (replayPlaying && replayCursor >= visibleReplayEvents.length - 1) setReplayPlaying(false);
+  }, [replayCursor, replayPlaying, visibleReplayEvents.length]);
+
+  const displayedReplayEvents = visibleReplayEvents.slice(Math.max(0, replayCursor - replayLimit + 1), replayCursor + 1);
 
   const visibleChannels = (catalog?.channels || []).filter(channel =>
     selectedServerIds.length === 0 || (!!channel.serverId && selectedServerIds.includes(channel.serverId))
@@ -854,6 +874,15 @@ function CachePanel() {
               {replayChannels.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
             </select>
             <input value={replaySearch} onChange={event => { setReplaySearch(event.target.value); setReplayLimit(100); }} placeholder="Search replay messages…" />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "auto auto minmax(140px, 1fr) auto", alignItems: "center", gap: 8 }}>
+            <button type="button" className="proto-cache-btn" disabled={visibleReplayEvents.length === 0} onClick={() => {
+              if (replayCursor >= visibleReplayEvents.length - 1) setReplayCursor(0);
+              setReplayPlaying(value => !value);
+            }}>{replayPlaying ? "Pause" : "Play"}</button>
+            <button type="button" className="proto-cache-btn" disabled={visibleReplayEvents.length === 0} onClick={() => { setReplayPlaying(false); setReplayCursor(0); }}>Restart</button>
+            <input aria-label="Replay timeline" type="range" min={0} max={Math.max(0, visibleReplayEvents.length - 1)} value={Math.min(replayCursor, Math.max(0, visibleReplayEvents.length - 1))} disabled={visibleReplayEvents.length === 0} onChange={event => { setReplayPlaying(false); setReplayCursor(Number(event.target.value)); }} />
+            <small>{visibleReplayEvents.length ? `${replayCursor + 1} / ${visibleReplayEvents.length}` : "0 / 0"}</small>
           </div>
           <div style={{ display: "grid", gap: 8, maxHeight: 520, overflow: "auto", padding: 10, border: "1px solid var(--border-color, rgba(255,255,255,.12))", borderRadius: 10 }}>
             {displayedReplayEvents.map(item => (
