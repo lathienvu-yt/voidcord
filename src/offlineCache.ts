@@ -309,11 +309,35 @@ export async function writeCachedDraft(channelId: string, content: string): Prom
   }
 }
 
+export interface VccExportFilters {
+  from?: string | null;
+  to?: string | null;
+  serverIds?: string[];
+  channelIds?: string[];
+}
+
+export interface VccExportCatalog {
+  servers: Array<{ id: string; name: string }>;
+  channels: Array<{ id: string; name: string; serverId?: string; serverName?: string }>;
+  messagesCount: number;
+}
+
 export interface VoidCordCacheBundle {
   version: number;
   format: "voidcord-cache";
   exportedAt: string;
   client: "VoidCord";
+  exportScope?: {
+    partial: boolean;
+    from: string | null;
+    to: string | null;
+    serverIds: string[];
+    channelIds: string[];
+    sourceChannelsCount: number;
+    exportedChannelsCount: number;
+    sourceMessagesCount: number;
+    exportedMessagesCount: number;
+  };
   messages: Array<{ channelId: string; messages: DiscordMessage[] }>;
   appData: Array<{ key: string; value: any }>;
   deletedMessages?: DeletedMessageLog[];
@@ -321,7 +345,24 @@ export interface VoidCordCacheBundle {
   deletedChannels?: DeletedChannelLog[];
 }
 
-export async function exportCacheToVcc(): Promise<string> {
+function messageTime(message: DiscordMessage): number {
+  const parsed = Date.parse(message.timestamp || "");
+  if (Number.isFinite(parsed)) return parsed;
+  try { return Number((BigInt(message.id) >> 22n) + 1420070400000n); } catch { return 0; }
+}
+
+function parseFilterTime(value?: string | null, label = "date"): number | null {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  if (!Number.isFinite(parsed)) throw new Error(`Invalid export ${label} date.`);
+  return parsed;
+}
+
+function withinRange(timestamp: number, from: number | null, to: number | null): boolean {
+  return (from === null || timestamp >= from) && (to === null || timestamp <= to);
+}
+
+async function readExportSource() {
   const [messages, appData, deletedMessages, editedMessages, deletedChannels] = await Promise.all([
     cacheGetAll<{ channelId: string; messages: DiscordMessage[] }>("messages"),
     cacheGetAll<{ key: string; value: any }>("appData"),
@@ -329,11 +370,123 @@ export async function exportCacheToVcc(): Promise<string> {
     cacheGetAll<EditedMessageLog>("editedMessages"),
     cacheGetAll<DeletedChannelLog>("deletedChannels"),
   ]);
+  return { messages, appData, deletedMessages, editedMessages, deletedChannels };
+}
+
+function channelIndex(appData: Array<{ key: string; value: any }>) {
+  const byId = new Map<string, { serverId?: string; serverName?: string; name: string }>();
+  const serverNames = new Map<string, string>();
+  for (const entry of appData) {
+    if (entry.key === "guilds" && Array.isArray(entry.value)) {
+      for (const guild of entry.value) if (guild?.id) serverNames.set(String(guild.id), String(guild.name || guild.id));
+    }
+    if (entry.key.startsWith("guild-data:")) {
+      const serverId = entry.key.slice("guild-data:".length);
+      for (const channel of Array.isArray(entry.value?.channels) ? entry.value.channels : []) {
+        if (channel?.id) byId.set(String(channel.id), {
+          serverId: String(channel.guild_id || serverId),
+          serverName: serverNames.get(serverId),
+          name: String(channel.name || "Unknown channel"),
+        });
+      }
+    }
+  }
+  return { byId, serverNames };
+}
+
+export async function getVccExportCatalog(): Promise<VccExportCatalog> {
+  const { messages, appData } = await readExportSource();
+  const { byId, serverNames } = channelIndex(appData);
+  const serverIds = new Set<string>();
+  const channelIds = new Set<string>();
+  for (const item of messages) {
+    if (!item?.channelId) continue;
+    channelIds.add(item.channelId);
+    const meta = byId.get(item.channelId);
+    if (meta?.serverId) serverIds.add(meta.serverId);
+  }
+  const servers = [...serverIds].map(id => ({ id, name: serverNames.get(id) || id })).sort((a, b) => a.name.localeCompare(b.name));
+  const channels = [...channelIds].map(id => {
+    const meta = byId.get(id);
+    return { id, name: meta?.name || id, serverId: meta?.serverId, serverName: meta?.serverName };
+  }).sort((a, b) => (a.serverName || "").localeCompare(b.serverName || "") || a.name.localeCompare(b.name));
+  return { servers, channels, messagesCount: messages.reduce((sum, item) => sum + (item.messages?.length || 0), 0) };
+}
+
+export async function previewVccExport(filters: VccExportFilters = {}): Promise<{ channelsCount: number; messagesCount: number }> {
+  const { messages, appData } = await readExportSource();
+  const { byId } = channelIndex(appData);
+  const from = parseFilterTime(filters.from, "From");
+  const to = parseFilterTime(filters.to, "To");
+  if (from !== null && to !== null && from > to) throw new Error("From must be earlier than or equal to To.");
+  const servers = new Set(filters.serverIds || []);
+  const channels = new Set(filters.channelIds || []);
+  const selected = messages.filter(item => {
+    const meta = byId.get(item.channelId);
+    if (servers.size && (!meta?.serverId || !servers.has(meta.serverId))) return false;
+    if (channels.size && !channels.has(item.channelId)) return false;
+    return (item.messages || []).some(message => withinRange(messageTime(message), from, to));
+  }).map(item => ({ ...item, messages: item.messages.filter(message => withinRange(messageTime(message), from, to)) }));
+  return { channelsCount: selected.length, messagesCount: selected.reduce((sum, item) => sum + item.messages.length, 0) };
+}
+
+export async function exportCacheToVcc(filters: VccExportFilters = {}): Promise<string> {
+  const { messages: sourceMessages, appData: sourceAppData, deletedMessages: sourceDeleted, editedMessages: sourceEdited, deletedChannels: sourceDeletedChannels } = await readExportSource();
+  const { byId } = channelIndex(sourceAppData);
+  const from = parseFilterTime(filters.from, "From");
+  const to = parseFilterTime(filters.to, "To");
+  if (from !== null && to !== null && from > to) throw new Error("From must be earlier than or equal to To.");
+  const servers = new Set(filters.serverIds || []);
+  const channels = new Set(filters.channelIds || []);
+  const selectedChannel = (channelId: string) => {
+    const meta = byId.get(channelId);
+    if (servers.size && (!meta?.serverId || !servers.has(meta.serverId))) return false;
+    if (channels.size && !channels.has(channelId)) return false;
+    return true;
+  };
+  const messages = sourceMessages.filter(item => selectedChannel(item.channelId))
+    .map(item => ({ ...item, messages: (item.messages || []).filter(message => withinRange(messageTime(message), from, to)) }))
+    .filter(item => item.messages.length > 0);
+  const inRangeLog = (timestamp: number) => withinRange(timestamp, from, to);
+  const deletedMessages = sourceDeleted.filter(item => selectedChannel(item.channelId) && inRangeLog(item.deletedAt));
+  const editedMessages = sourceEdited.filter(item => selectedChannel(item.channelId) && inRangeLog(item.editedAt));
+  const deletedChannels = sourceDeletedChannels.filter(item =>
+    (!servers.size || (!!item.guildId && servers.has(item.guildId))) && inRangeLog(item.deletedAt)
+  );
+  const appData = sourceAppData.flatMap(entry => {
+    if (entry.key === "guilds" && Array.isArray(entry.value)) {
+      const value = servers.size ? entry.value.filter((guild: any) => servers.has(String(guild?.id))) : entry.value;
+      return [{ ...entry, value }];
+    }
+    if (entry.key.startsWith("guild-data:")) {
+      const serverId = entry.key.slice("guild-data:".length);
+      if (servers.size && !servers.has(serverId)) return [];
+      const value = entry.value && typeof entry.value === "object" ? {
+        ...entry.value,
+        channels: (entry.value.channels || []).filter((channel: DiscordChannel) =>
+          (!channels.size || channels.has(channel.id)) && (!servers.size || servers.has(String(channel.guild_id || serverId)))
+        ),
+      } : entry.value;
+      return [{ ...entry, value }];
+    }
+    return [{ ...entry }];
+  });
   const bundle: VoidCordCacheBundle = {
-    version: 1,
+    version: 2,
     format: "voidcord-cache",
     exportedAt: new Date().toISOString(),
     client: "VoidCord",
+    exportScope: {
+      partial: !!(filters.from || filters.to || servers.size || channels.size),
+      from: filters.from || null,
+      to: filters.to || null,
+      serverIds: [...servers],
+      channelIds: [...channels],
+      sourceChannelsCount: sourceMessages.length,
+      exportedChannelsCount: messages.length,
+      sourceMessagesCount: sourceMessages.reduce((sum, item) => sum + (item.messages?.length || 0), 0),
+      exportedMessagesCount: messages.reduce((sum, item) => sum + item.messages.length, 0),
+    },
     messages,
     appData,
     deletedMessages,
@@ -355,39 +508,70 @@ export function downloadVccFile(jsonContent: string, filename?: string): void {
   URL.revokeObjectURL(url);
 }
 
-export async function importCacheFromVcc(vccContent: string): Promise<{ messagesCount: number; channelsCount: number }> {
-  let bundle: VoidCordCacheBundle;
-  try {
-    bundle = JSON.parse(vccContent);
-  } catch {
-    throw new Error("Invalid .vcc file: file is not valid JSON.");
+export function parseVccBundle(vccContent: string): VoidCordCacheBundle {
+  let parsed: any;
+  try { parsed = JSON.parse(vccContent); }
+  catch { throw new Error("Invalid .vcc file: file is not valid JSON."); }
+  if (!parsed || parsed.format !== "voidcord-cache" || ![1, 2].includes(parsed.version) || !Array.isArray(parsed.messages)) {
+    throw new Error("Invalid .vcc file: unsupported or unrecognized VoidCord Cache format.");
   }
+  const messages = parsed.messages.filter((item: any) =>
+    item && typeof item.channelId === "string" && Array.isArray(item.messages)
+  ).map((item: any) => ({
+    channelId: item.channelId,
+    messages: item.messages.filter((message: any) => message && typeof message.id === "string" && typeof message.timestamp === "string"),
+  }));
+  return {
+    ...parsed,
+    messages,
+    appData: Array.isArray(parsed.appData) ? parsed.appData.filter((item: any) => item && typeof item.key === "string") : [],
+    deletedMessages: Array.isArray(parsed.deletedMessages) ? parsed.deletedMessages.filter((item: any) => item && item.id && item.message) : [],
+    editedMessages: Array.isArray(parsed.editedMessages) ? parsed.editedMessages.filter((item: any) => item && item.id && item.message) : [],
+    deletedChannels: Array.isArray(parsed.deletedChannels) ? parsed.deletedChannels.filter((item: any) => item && item.id && item.channel) : [],
+  } as VoidCordCacheBundle;
+}
 
-  if (bundle.format !== "voidcord-cache" || !Array.isArray(bundle.messages)) {
-    throw new Error("Invalid .vcc file: not a recognized VoidCord Cache format.");
-  }
+export interface ReplayCoreEvent {
+  id: string;
+  channelId: string;
+  timestamp: number;
+  kind: "message" | "deleted" | "edited";
+  message: DiscordMessage;
+  channelName?: string;
+}
 
-  const messages: CacheRecord[] = [];
-  let totalMessages = 0;
-  for (const item of bundle.messages) {
-    if (item && item.channelId && Array.isArray(item.messages)) {
-      messages.push({ key: item.channelId, value: item });
-      totalMessages += item.messages.length;
+export function buildReplayTimeline(bundle: VoidCordCacheBundle): ReplayCoreEvent[] {
+  const events: ReplayCoreEvent[] = [];
+  const channelNames = new Map<string, string>();
+  for (const entry of bundle.appData || []) {
+    if (!entry.key.startsWith("guild-data:")) continue;
+    for (const channel of entry.value?.channels || []) {
+      if (channel?.id) channelNames.set(channel.id, String(channel.name || channel.id));
     }
   }
-  const appData = (Array.isArray(bundle.appData) ? bundle.appData : [])
-    .filter(item => item && item.key)
-    .map(item => ({ key: item.key, value: item }));
-  const deletedMessages = (Array.isArray(bundle.deletedMessages) ? bundle.deletedMessages : [])
-    .filter(item => item && item.id)
-    .map(item => ({ key: item.id, value: item }));
-  const editedMessages = (Array.isArray(bundle.editedMessages) ? bundle.editedMessages : [])
-    .filter(item => item && item.id)
-    .map(item => ({ key: item.id, value: item }));
-  const deletedChannels = (Array.isArray(bundle.deletedChannels) ? bundle.deletedChannels : [])
-    .filter(item => item && item.id)
-    .map(item => ({ key: item.id, value: item }));
+  for (const group of bundle.messages || []) {
+    for (const message of group.messages || []) {
+      events.push({ id: message.id, channelId: group.channelId, timestamp: messageTime(message), kind: "message", message, channelName: channelNames.get(group.channelId) });
+    }
+  }
+  for (const entry of bundle.deletedMessages || []) {
+    if (!events.some(event => event.id === entry.message.id && event.channelId === entry.channelId)) {
+      events.push({ id: `deleted:${entry.id}`, channelId: entry.channelId, timestamp: entry.deletedAt, kind: "deleted", message: entry.message, channelName: entry.channelName });
+    }
+  }
+  for (const entry of bundle.editedMessages || []) {
+    events.push({ id: `edited:${entry.id}`, channelId: entry.channelId, timestamp: entry.editedAt, kind: "edited", message: entry.message, channelName: entry.channelName });
+  }
+  return events.sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+}
 
+export async function importCacheFromVcc(vccContent: string): Promise<{ messagesCount: number; channelsCount: number; bundle: VoidCordCacheBundle }> {
+  const bundle = parseVccBundle(vccContent);
+  const messages: CacheRecord[] = bundle.messages.map(item => ({ key: item.channelId, value: item }));
+  const appData = bundle.appData.map(item => ({ key: item.key, value: item }));
+  const deletedMessages = (bundle.deletedMessages || []).map(item => ({ key: item.id, value: item }));
+  const editedMessages = (bundle.editedMessages || []).map(item => ({ key: item.id, value: item }));
+  const deletedChannels = (bundle.deletedChannels || []).map(item => ({ key: item.id, value: item }));
   await Promise.all([
     cachePutMany("messages", messages),
     cachePutMany("appData", appData),
@@ -395,7 +579,11 @@ export async function importCacheFromVcc(vccContent: string): Promise<{ messages
     cachePutMany("editedMessages", editedMessages),
     cachePutMany("deletedChannels", deletedChannels),
   ]);
-  return { messagesCount: totalMessages, channelsCount: bundle.messages.length };
+  return {
+    messagesCount: bundle.messages.reduce((sum, item) => sum + item.messages.length, 0),
+    channelsCount: bundle.messages.length,
+    bundle,
+  };
 }
 
 export async function getCacheStats(): Promise<{ channelsCount: number; messagesCount: number; deletedMessagesCount: number; editedMessagesCount: number }> {
