@@ -4448,7 +4448,7 @@ export default function App() {
         const response = await invoke<{ threads?: DiscordChannel[]; first_messages?: DiscordMessage[] }>(
           "get_channel_threads",
           { channelId: channel.id }
-        ).catch(() => ({ threads: [] }));
+        ).catch(() => ({ threads: [], first_messages: [] }));
 
         const fetched = Array.isArray(response?.threads) ? response.threads : [];
         const merged = new Map<string, DiscordChannel>();
@@ -4466,7 +4466,7 @@ export default function App() {
         );
 
         if (requestId !== channelLoadRequest.current) return;
-        if (firstMessageThreadIds.size) setJoinedForumThreadIds(previous => new Set([...previous, ...firstMessageThreadIds]));
+        if (firstMessageThreadIds.size) setJoinedForumThreadIds(previous => new Set<string>([...previous, ...firstMessageThreadIds]));
         setForumThreads(allThreads);
         mergeThreads(allThreads);
 
