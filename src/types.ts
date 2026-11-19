@@ -126,6 +126,7 @@ export interface DiscordChannel {
   last_message_id?: string | null;
   message_count?: number;
   member_count?: number;
+  member?: { user_id?: string; join_timestamp?: string; flags?: number; id?: string } | null;
   last_pin_timestamp?: string | null;
   is_message_request?: boolean;
   is_message_request_timestamp?: string | null;
