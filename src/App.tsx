@@ -36,6 +36,7 @@ import { ReviewModal } from "./plugins/reviewDB/ReviewModal";
 import { ReviewType } from "./plugins/reviewDB/entities";
 import { getStoredReviewDbToken, setStoredReviewDbToken } from "./plugins/reviewDB/reviewDbApi";
 import { PluginHub } from "./plugins/PluginHub";
+import QuestsStorePanel from "./QuestsStorePanel";
 import "./style.css";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -6795,7 +6796,9 @@ export default function App() {
         </aside>
 
         {/* Friends and requests */}
-        {showingDirectory ? (
+        {isDmView && (activeDmTab === "quests" || activeDmTab === "shop") ? (
+          <QuestsStorePanel mode={activeDmTab} />
+        ) : showingDirectory ? (
           <section className="directory-area">
             <header className="directory-header">
               <div>
