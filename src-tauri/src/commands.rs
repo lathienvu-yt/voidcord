@@ -623,7 +623,7 @@ pub async fn get_channel_threads(
     }
 
     let mut search_endpoint = format!(
-        "channels/{channel_id}/threads/search?sort_by=last_message_time&sort_order=desc&limit=50"
+        "channels/{channel_id}/threads/search?sort_by=last_message_time&sort_order=desc&limit=100"
     );
     if let Some(archived_flag) = archived {
         search_endpoint.push_str(&format!("&archived={archived_flag}"));
