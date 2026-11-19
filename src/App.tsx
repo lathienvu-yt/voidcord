@@ -4459,16 +4459,19 @@ export default function App() {
           .filter(t => !t.parent_id || t.parent_id === channel.id)
           .sort((a, b) => (b.last_message_id || b.id).localeCompare(a.last_message_id || a.id));
 
-        const interactedIds: string[] = [];
-        for (const thread of allThreads) {
+        const firstMessageThreadIds = new Set(
+          (Array.isArray(response?.first_messages) ? response.first_messages : [])
+            .filter(message => message?.author?.id === me?.id && message.channel_id)
+            .map(message => message.channel_id)
+        );
+        const interactionResults = await Promise.all(allThreads.map(async thread => {
           if (thread.owner_id === me?.id || thread.member?.user_id === me?.id || thread.member?.id === me?.id
-            || (!!thread.member && !thread.member.user_id && !thread.member.id)) {
-            interactedIds.push(thread.id);
-            continue;
-          }
+            || (!!thread.member && !thread.member.user_id && !thread.member.id)
+            || firstMessageThreadIds.has(thread.id)) return thread.id;
           const cached = await readCachedMessages(thread.id).catch(() => undefined);
-          if (cached?.some(message => message.author?.id === me?.id)) interactedIds.push(thread.id);
-        }
+          return cached?.some(message => message.author?.id === me?.id) ? thread.id : null;
+        }));
+        const interactedIds = interactionResults.filter((id): id is string => !!id);
 
         if (requestId !== channelLoadRequest.current) return;
         if (interactedIds.length) setJoinedForumThreadIds(previous => new Set([...previous, ...interactedIds]));
