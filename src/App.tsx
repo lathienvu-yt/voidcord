@@ -20,6 +20,7 @@ import {
   CHANNEL_TYPE_ANNOUNCEMENT, CHANNEL_TYPE_STAGE, CHANNEL_TYPE_FORUM,
   CHANNEL_TYPE_ANNOUNCEMENT_THREAD, CHANNEL_TYPE_PUBLIC_THREAD, CHANNEL_TYPE_PRIVATE_THREAD,
   displayNameFontClass, roleColorStyle } from './types';
+import { isObfuscatedChannel, mergeDiscordChannel, mergeDiscordChannelList } from "./channelMetadata";
 import { DiscordMarkdown } from "./DiscordMarkdown";
 import { DiscordEmbedView } from "./DiscordEmbedView";
 import { DiscordComponents } from "./DiscordComponents";
@@ -185,15 +186,16 @@ function isMessageChannel(c?: DiscordChannel | null): boolean {
 }
 function channelDisplayName(c?: DiscordChannel | null) {
   if (!c || typeof c !== "object") return "Select a channel";
-  if (c.name) return c.name;
-  if (c.type === CHANNEL_TYPE_DM) {
+  let name = c.name || "";
+  if (!name && c.type === CHANNEL_TYPE_DM) {
     const recipient = c.recipients?.[0];
-    return recipient ? displayName(recipient) : "Direct Message";
+    name = recipient ? displayName(recipient) : "Direct Message";
   }
-  if (c.type === CHANNEL_TYPE_GROUP_DM) {
-    return c.recipients?.map(displayName).join(", ") || "Group Message";
+  if (!name && c.type === CHANNEL_TYPE_GROUP_DM) {
+    name = c.recipients?.map(displayName).join(", ") || "Group Message";
   }
-  return "Select a channel";
+  if (!name) name = "Select a channel";
+  return isObfuscatedChannel(c) ? `${name} · Hidden` : name;
 }
 function isVoiceChannel(c?: DiscordChannel | null): boolean {
   if (!c) return false;
@@ -1806,7 +1808,7 @@ export default function App() {
     setActiveThreads(prev => {
       const map = new Map<string, DiscordChannel>();
       for (const t of prev) if (t?.id) map.set(t.id, t);
-      for (const t of incoming) if (t?.id) map.set(t.id, { ...(map.get(t.id) || {}), ...t });
+      for (const t of incoming) if (t?.id) map.set(t.id, mergeDiscordChannel(map.get(t.id), t));
       const next = [...map.values()];
       activeThreadsRef.current = next;
       return next;
@@ -3881,14 +3883,17 @@ export default function App() {
 
     listen<DiscordChannel>("discord:channel_delete", ({ payload }) => {
       if (!payload?.id) return;
-      const guild = gatewayListenerStateRef.current.guilds.find(item => item.id === payload.guild_id)
-        || (gatewayListenerStateRef.current.selectedGuild?.id === payload.guild_id ? gatewayListenerStateRef.current.selectedGuild : undefined);
+      const knownChannel = gatewayListenerStateRef.current.channels.find(channel => channel.id === payload.id);
+      const deletedChannel = mergeDiscordChannel(knownChannel, payload);
+      const guildId = deletedChannel.guild_id || payload.guild_id;
+      const guild = gatewayListenerStateRef.current.guilds.find(item => item.id === guildId)
+        || (gatewayListenerStateRef.current.selectedGuild?.id === guildId ? gatewayListenerStateRef.current.selectedGuild : undefined);
       const entry: DeletedChannelLog = {
         id: payload.id,
         deletedAt: Date.now(),
-        guildId: payload.guild_id,
+        guildId,
         guildName: guild?.name,
-        channel: payload,
+        channel: deletedChannel,
       };
       void writeDeletedChannel(entry)
         .then(() => {
@@ -3898,7 +3903,48 @@ export default function App() {
         })
         .catch(error => gatewayListenerStateRef.current.notify(`Could not save deleted channel metadata: ${error}`));
       setChannels(previous => previous.filter(channel => channel.id !== payload.id));
+      if (guildId) {
+        void readCachedAppData<any>(`guild-data:${guildId}`).then(cached => {
+          if (!cached) return;
+          return writeCachedAppData(`guild-data:${guildId}`, {
+            ...cached,
+            channels: (cached.channels || []).filter((channel: DiscordChannel) => channel.id !== payload.id),
+          });
+        }).catch(error => console.warn("Could not remove explicitly deleted channel from metadata cache", error));
+      }
+      setSelectedChannel(previous => previous?.id === payload.id ? null : previous);
     }).then(u => unsubs.push(u));
+
+    const applyChannelUpdate = (payload: DiscordChannel) => {
+      if (!payload?.id) return;
+      const guildId = payload.guild_id || gatewayListenerStateRef.current.selectedGuild?.id;
+      if (!guildId || gatewayListenerStateRef.current.selectedGuild?.id === guildId) {
+        setChannels(previous => mergeDiscordChannelList(previous, [payload], guildId));
+      }
+      setSelectedChannel(previous => previous?.id === payload.id
+        ? (isObfuscatedChannel(payload) ? null : mergeDiscordChannel(previous, payload))
+        : previous);
+      if (isObfuscatedChannel(payload) && gatewayListenerStateRef.current.selectedChannel?.id === payload.id) {
+        ++channelLoadRequest.current;
+        setMessages([]);
+        setCanSend(false);
+        setMsgLoading(false);
+      }
+      if (guildId) {
+        const cacheKey = `guild-data:${guildId}`;
+        void readCachedAppData<any>(cacheKey).then(cached => writeCachedAppData(cacheKey, {
+          ...(cached || {}),
+          channels: mergeDiscordChannelList(cached?.channels || [], [payload], guildId),
+          roles: cached?.roles || [],
+          memberRoles: cached?.memberRoles || [],
+        })).catch(error => console.warn("Could not persist channel metadata update", error));
+      }
+    };
+
+    listen<DiscordChannel>("discord:channel_create", ({ payload }) => applyChannelUpdate(payload))
+      .then(u => unsubs.push(u));
+    listen<DiscordChannel>("discord:channel_update", ({ payload }) => applyChannelUpdate(payload))
+      .then(u => unsubs.push(u));
 
     const applyPresenceUpdates = (presences: any[]) => {
       const updates = presences.filter((presence: any) =>
@@ -4018,6 +4064,18 @@ export default function App() {
     }).then(u => unsubs.push(u));
 
     listen<any>("discord:guild_create", ({ payload }) => {
+      if (Array.isArray(payload?.channels) && gatewayListenerStateRef.current.selectedGuild?.id === payload.id) {
+        const guildId = String(payload.id);
+        const incoming = payload.channels.filter((channel: DiscordChannel) => channel?.id);
+        setChannels(previous => mergeDiscordChannelList(previous, incoming, guildId));
+        const cacheKey = `guild-data:${guildId}`;
+        void readCachedAppData<any>(cacheKey).then(cached => writeCachedAppData(cacheKey, {
+          ...(cached || {}),
+          channels: mergeDiscordChannelList(cached?.channels || [], incoming, guildId),
+          roles: cached?.roles || [],
+          memberRoles: cached?.memberRoles || [],
+        })).catch(error => console.warn("Could not persist guild channel snapshot", error));
+      }
       if (payload?.id && typeof payload.name === "string") {
         setGuilds(current => normalizeGuildList([
           ...current.filter(guild => guild.id !== payload.id),
@@ -4136,8 +4194,8 @@ export default function App() {
         getChannelPermissions(channel, guild.id, me?.id || "", memberRoles, roles, !!guild.owner)?.canView === false
       ).map(channel => channel.id)));
       const cachedTarget = preferredChannelId
-        ? cachedChannels.find(channel => channel.id === preferredChannelId && isTextChannel(channel))
-        : cachedChannels.find(isTextChannel);
+        ? cachedChannels.find(channel => channel.id === preferredChannelId && isTextChannel(channel) && !isObfuscatedChannel(channel))
+        : cachedChannels.find(channel => isTextChannel(channel) && !isObfuscatedChannel(channel));
       if (cachedTarget) void selectChannel(cachedTarget);
     }
     if (!navigator.onLine) {
@@ -4150,9 +4208,11 @@ export default function App() {
       if (requestId !== guildLoadRequest.current) return;
       const list = await invoke<DiscordChannel[]>("get_channels", { guildId: guild.id });
       if (requestId !== guildLoadRequest.current) return;
-      const sorted = (Array.isArray(list) ? list : [])
-        .filter(channel => channel?.id)
-        .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      const sorted = mergeDiscordChannelList(
+        cachedGuildData?.channels || [],
+        (Array.isArray(list) ? list : []).filter(channel => channel?.id),
+        guild.id,
+      );
       const rolesAndMember = cachedGuildData
         ? [
             { status: "fulfilled", value: cachedGuildData.roles || [] },
@@ -4302,6 +4362,11 @@ export default function App() {
   }, [channels, dmChannels, forwardTarget?.channel.id, guilds, me?.id, selectedChannel?.id]);
 
   const selectChannel = async (channel: DiscordChannel) => {
+    // Cached metadata is display-only; it must never grant access to a hidden channel.
+    if (isObfuscatedChannel(channel)) {
+      notify("Discord marks this channel as hidden for your account. Its last-known metadata is retained, but it cannot be opened.");
+      return;
+    }
     // Re-selecting the active channel must be a no-op: clearing/reloading its
     // messages remounts the message list and replays the channel-entry animation.
     if (selectedChannelRef.current?.id === channel.id || selectedChannel?.id === channel.id) return;

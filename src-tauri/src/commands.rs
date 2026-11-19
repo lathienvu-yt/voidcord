@@ -3539,6 +3539,12 @@ pub async fn start_gateway(state: State<'_, AppState>, app: AppHandle) -> Result
                         "GUILD_MEMBER_REMOVE" => {
                             emit_gateway_event(&app2, "discord:guild_member_remove", d);
                         }
+                        "CHANNEL_CREATE" => {
+                            emit_gateway_event(&app2, "discord:channel_create", d);
+                        }
+                        "CHANNEL_UPDATE" => {
+                            emit_gateway_event(&app2, "discord:channel_update", d);
+                        }
                         "CHANNEL_DELETE" => {
                             emit_gateway_event(&app2, "discord:channel_delete", d);
                         }
