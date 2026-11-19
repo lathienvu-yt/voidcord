@@ -380,12 +380,16 @@ function channelIndex(appData: Array<{ key: string; value: any }>) {
     if (entry.key === "guilds" && Array.isArray(entry.value)) {
       for (const guild of entry.value) if (guild?.id) serverNames.set(String(guild.id), String(guild.name || guild.id));
     }
-    if (entry.key.startsWith("guild-data:")) {
-      const serverId = entry.key.slice("guild-data:".length);
-      for (const channel of Array.isArray(entry.value?.channels) ? entry.value.channels : []) {
-        if (channel?.id) byId.set(String(channel.id), {
-          serverId: String(channel.guild_id || serverId),
-          serverName: serverNames.get(serverId),
+  }
+  for (const entry of appData) {
+    if (!entry.key.startsWith("guild-data:")) continue;
+    const serverId = entry.key.slice("guild-data:".length);
+    for (const channel of Array.isArray(entry.value?.channels) ? entry.value.channels : []) {
+      if (channel?.id) {
+        const channelServerId = String(channel.guild_id || serverId);
+        byId.set(String(channel.id), {
+          serverId: channelServerId,
+          serverName: serverNames.get(channelServerId),
           name: String(channel.name || "Unknown channel"),
         });
       }
@@ -451,7 +455,9 @@ export async function exportCacheToVcc(filters: VccExportFilters = {}): Promise<
   const deletedMessages = sourceDeleted.filter(item => selectedChannel(item.channelId) && inRangeLog(item.deletedAt));
   const editedMessages = sourceEdited.filter(item => selectedChannel(item.channelId) && inRangeLog(item.editedAt));
   const deletedChannels = sourceDeletedChannels.filter(item =>
-    (!servers.size || (!!item.guildId && servers.has(item.guildId))) && inRangeLog(item.deletedAt)
+    (!servers.size || (!!item.guildId && servers.has(item.guildId)))
+    && (!channels.size || channels.has(item.id))
+    && inRangeLog(item.deletedAt)
   );
   const appData = sourceAppData.flatMap(entry => {
     if (entry.key === "guilds" && Array.isArray(entry.value)) {
