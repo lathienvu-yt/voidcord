@@ -7592,9 +7592,11 @@ export default function App() {
                 {!forumThreadsLoading && forumThreadsError && <div className="forum-browser-state forum-browser-error">Could not load forum posts: {forumThreadsError}</div>}
                 {!forumThreadsLoading && !forumThreadsError && filteredForumThreads.length === 0 && (
                   <div className="forum-browser-state">
-                    {forumQuery || forumTagFilter || forumFilter !== "all"
-                      ? "No forum posts match your filters."
-                      : "No posts found in this forum."}
+                    {showOnlyJoinedForumThreads
+                      ? "No joined threads yet. Switch to Show all to browse other forum posts."
+                      : forumQuery || forumTagFilter || forumFilter !== "all"
+                        ? "No forum posts match your filters."
+                        : "No posts found in this forum."}
                   </div>
                 )}
 
