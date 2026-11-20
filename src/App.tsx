@@ -5342,6 +5342,9 @@ export default function App() {
           scrollToBottom();
         }
         setRecentlyMessaged(order => [sendingChannel.id, ...order.filter(id => id !== sendingChannel.id)]);
+        setDmChannels(previous => previous.map(channel =>
+          channel.id === sendingChannel.id ? { ...channel, last_message_id: sent.id } : channel
+        ));
       }
     } catch (e) {
       notify(`Send failed: ${e}`);
@@ -5599,15 +5602,15 @@ export default function App() {
 
   const orderedDmChannels = useMemo(() => {
     return [...dmChannels].sort((a, b) => {
-      // Discord's last_message_id is the authoritative activity clock for a DM.
-      // Compare it first so incoming messages reorder conversations too; the
-      // local interaction list is only a stable fallback when timestamps tie.
-      const activityOrder = String(b.last_message_id || "").localeCompare(String(a.last_message_id || ""));
-      if (activityOrder !== 0) return activityOrder;
+      // Recent local activity wins immediately; last_message_id provides the
+      // initial ordering for conversations not seen in this session.
       const ai = recentlyMessaged.indexOf(a.id);
       const bi = recentlyMessaged.indexOf(b.id);
-      return (ai === -1 ? Number.MAX_SAFE_INTEGER : ai)
-        - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
+      if (ai !== -1 || bi !== -1) {
+        return (ai === -1 ? Number.MAX_SAFE_INTEGER : ai)
+          - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
+      }
+      return String(b.last_message_id || "").localeCompare(String(a.last_message_id || ""));
     });
   }, [dmChannels, recentlyMessaged]);
 
