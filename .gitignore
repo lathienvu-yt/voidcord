@@ -24,3 +24,4 @@ Desktop.ini
 settings.json
 .vscode/
 vencord-repo/
+gpui-desktop/target/

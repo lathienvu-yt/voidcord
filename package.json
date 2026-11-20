@@ -1,12 +1,13 @@
 {
   "name": "voidcord",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "gpui:experimental": "cargo run --manifest-path src-tauri/Cargo.toml -- --gpui-experimental"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

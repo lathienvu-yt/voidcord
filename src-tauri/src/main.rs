@@ -2,14 +2,16 @@
 
 mod cache;
 mod commands;
-mod discord_router;
+use voidcord_core::discord_router;
 mod gpui_console;
+mod gateway_ipc;
 mod rpc;
 mod settings_menu;
 mod settings_proto;
 mod voice_gateway;
 
 use cache::LocalCache;
+use gateway_ipc::GatewayIpc;
 use discord_router::{DiscordRouter, TokenManager};
 use rpc::RpcState;
 use std::{
@@ -101,6 +103,12 @@ pub struct AppState {
 }
 
 fn main() {
+    // Opt-in native UI mode. Stable Tauri remains the default launch path.
+    if std::env::args().any(|arg| arg == "--gpui-experimental") {
+        voidcord_gpui_desktop::run();
+        return;
+    }
+
     let default_panic_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let thread = std::thread::current();
@@ -255,6 +263,9 @@ fn main() {
             app.on_menu_event(|app, event| {
                 let _ = app.emit("native-menu-action", event.id().as_ref());
             });
+            let gateway_ipc = GatewayIpc::start()?;
+            log::info!("Gateway IPC listening on {}", gateway_ipc.address());
+            app.manage(gateway_ipc);
             let app_data_dir = app.path().app_data_dir()?;
             let cache_path = app_data_dir.join("rocksdb-cache");
             let cache = LocalCache::open(&cache_path)
@@ -286,6 +297,8 @@ fn main() {
             cache::cache_migration_complete,
             cache::cache_finish_migration,
             cache::cache_get_deleted_messages_for_channel,
+            commands::login_with_password,
+            commands::verify_mfa_login,
             commands::set_token,
             commands::set_router_accounts,
             commands::get_current_user,
@@ -293,7 +306,12 @@ fn main() {
             commands::submit_oauth2_authorize,
             commands::complete_oauth2_redirect,
             commands::get_content_inventory,
+            commands::get_my_quests,
+            commands::get_published_store_listings,
             commands::get_guilds,
+            commands::get_guild_settings,
+            commands::update_guild_settings,
+            commands::leave_guild,
             commands::retry_captcha_request,
             commands::join_guild_invite,
             commands::create_guild,
@@ -330,6 +348,9 @@ fn main() {
             commands::acknowledge_message,
             commands::archive_message_media,
             commands::send_message,
+            commands::create_poll,
+            commands::vote_poll,
+            commands::end_poll,
             commands::send_message_with_files,
             commands::get_rpc_application,
             commands::get_global_application_commands,
@@ -352,6 +373,7 @@ fn main() {
             commands::set_guild_channel_locked,
             commands::delete_guild_channel,
             commands::start_gateway,
+            commands::get_gateway_ipc_config,
             commands::toggle_devtools,
             commands::open_rust_console,
             commands::request_guild_member_list,

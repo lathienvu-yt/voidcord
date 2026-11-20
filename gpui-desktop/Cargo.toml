@@ -1,0 +1,21 @@
+[package]
+name = "voidcord-gpui-desktop"
+version = "0.1.0"
+description = "Experimental native GPUI desktop shell for VoidCord"
+edition = "2021"
+publish = false
+
+[dependencies]
+voidcord-core = { path = "../voidcord-core" }
+serde_json = "1"
+smol = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "io-util", "fs", "sync", "macros"] }
+
+[target.'cfg(windows)'.dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["font-kit"] }
+keyring = "4.2.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
