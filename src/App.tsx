@@ -3702,8 +3702,17 @@ export default function App() {
             .catch(error => gatewayListenerStateRef.current.notify(`Could not cache message: ${error}`));
           void gatewayListenerStateRef.current.archiveMessageMedia(payload.message);
         }
-        if (payload.message?.author?.id === gatewayListenerStateRef.current.me?.id) {
+        const dmConversation = gatewayListenerStateRef.current.dmChannels.find(channel => channel.id === payload.channel_id);
+        const incomingMessageId = String(payload.message?.id || "");
+        if (dmConversation && incomingMessageId
+          && incomingMessageId.localeCompare(String(dmConversation.last_message_id || "")) > 0) {
+          setDmChannels(previous => previous.map(channel =>
+            channel.id === payload.channel_id ? { ...channel, last_message_id: incomingMessageId } : channel
+          ));
           setRecentlyMessaged(order => [payload.channel_id, ...order.filter(id => id !== payload.channel_id)]);
+        }
+        if (payload.message?.author?.id === gatewayListenerStateRef.current.me?.id) {
+          if (!dmConversation) setRecentlyMessaged(order => [payload.channel_id, ...order.filter(id => id !== payload.channel_id)]);
           if (activeThreadsRef.current.some(thread => thread.id === payload.channel_id)
             || (gatewayListenerStateRef.current.selectedChannel?.id === payload.channel_id
               && isThreadChannel(gatewayListenerStateRef.current.selectedChannel))) {
@@ -4185,6 +4194,7 @@ export default function App() {
     hasOlderMessagesRef.current = false;
     setOlderMessagesLoading(false);
     setHasOlderMessages(false);
+    setIsDmView(false);
     setSelectedGuild(guild);
     selectedGuildRef.current = guild;
     // Fetch the authoritative guild payload (including premium_tier) as soon
@@ -4237,7 +4247,8 @@ export default function App() {
         getChannelPermissions(channel, guild.id, me?.id || "", memberRoles, roles, !!guild.owner)?.canView === false
       ).map(channel => channel.id)));
       const cachedTarget = preferredChannelId
-        ? cachedChannels.find(channel => channel.id === preferredChannelId && isTextChannel(channel) && !isObfuscatedChannel(channel))
+        ? cachedChannels.find(channel => channel.id === preferredChannelId
+          && (isMessageChannel(channel) || isForumChannel(channel)) && !isObfuscatedChannel(channel))
         : cachedChannels.find(channel => isTextChannel(channel) && !isObfuscatedChannel(channel));
       if (cachedTarget) void selectChannel(cachedTarget);
     }
@@ -4301,8 +4312,9 @@ export default function App() {
         .catch(error => console.warn("Could not request guild members over the gateway", error));
 
       const target = preferredChannelId
-        ? sorted.find(channel => channel.id === preferredChannelId && isTextChannel(channel))
-        : sorted.find(isTextChannel);
+        ? sorted.find(channel => channel.id === preferredChannelId
+          && (isMessageChannel(channel) || isForumChannel(channel)) && !isObfuscatedChannel(channel))
+        : sorted.find(channel => isTextChannel(channel) && !isObfuscatedChannel(channel));
       if (target && requestId === guildLoadRequest.current) await selectChannel(target);
     } catch (e) {
       if (requestId !== guildLoadRequest.current) return;
@@ -5587,10 +5599,15 @@ export default function App() {
 
   const orderedDmChannels = useMemo(() => {
     return [...dmChannels].sort((a, b) => {
+      // Discord's last_message_id is the authoritative activity clock for a DM.
+      // Compare it first so incoming messages reorder conversations too; the
+      // local interaction list is only a stable fallback when timestamps tie.
+      const activityOrder = String(b.last_message_id || "").localeCompare(String(a.last_message_id || ""));
+      if (activityOrder !== 0) return activityOrder;
       const ai = recentlyMessaged.indexOf(a.id);
       const bi = recentlyMessaged.indexOf(b.id);
-      if (ai !== -1 || bi !== -1) return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
-      return 0;
+      return (ai === -1 ? Number.MAX_SAFE_INTEGER : ai)
+        - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
     });
   }, [dmChannels, recentlyMessaged]);
 
