@@ -4417,6 +4417,22 @@ export default function App() {
   }, [channels, dmChannels, forwardTarget?.channel.id, guilds, me?.id, selectedChannel?.id]);
 
   const selectChannel = async (channel: DiscordChannel) => {
+    // A channel carries its own guild context. If a stale list or asynchronous
+    // navigation hands us a channel from another server, switch to that server
+    // first instead of rendering it under the previously selected guild.
+    if (channel.guild_id && selectedGuildRef.current?.id !== channel.guild_id) {
+      const owningGuild = guilds.find(guild => guild.id === channel.guild_id);
+      if (!owningGuild) {
+        notify("That channel belongs to a server that is not currently available");
+        return;
+      }
+      setIsDmView(false);
+      await selectGuild(owningGuild, channel.id);
+      return;
+    }
+    if (channel.type === CHANNEL_TYPE_DM || channel.type === CHANNEL_TYPE_GROUP_DM) {
+      setIsDmView(true);
+    }
     // Cached metadata is display-only; it must never grant access to a hidden channel.
     if (isObfuscatedChannel(channel)) {
       notify("Discord marks this channel as hidden for your account. Its last-known metadata is retained, but it cannot be opened.");
