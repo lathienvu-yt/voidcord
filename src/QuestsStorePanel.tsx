@@ -138,7 +138,9 @@ export default function QuestsStorePanel({ mode }: { mode: "quests" | "shop" }) 
       const sku = listing.sku || listing;
       const title = localized(sku.name) || "Store listing";
       const summary = localized(sku.summary) || localized(sku.description);
-      const externalUrl = typeof sku.external_purchase_url === "string" ? sku.external_purchase_url : "";
+      const externalUrl = "external_purchase_url" in sku && typeof sku.external_purchase_url === "string"
+        ? sku.external_purchase_url
+        : "";
       return <article className="quest-store-card" key={sku.id || listing.id || index}>
         <div className="quest-store-card-icon"><ShoppingBag size={20} /></div>
         <div className="quest-store-card-body">

@@ -14,7 +14,8 @@ use cacophony::{
         discord::{EncodeConfig, PacketEncoder, PcmFrame},
         Decoder,
     },
-    Connection, ConnectionConfig, ConnectionConnect, SpeakingFlags,
+    Connection, ConnectionConfig, ConnectionConnect, ConnectionOptions, DaveIdentityKey,
+    SpeakingFlags,
 };
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -95,6 +96,16 @@ impl VoiceSession {
         let server_id = parse_id("voice server", &config.server_id)?;
         let channel_id = parse_id("channel", &config.channel_id)?;
         let user_id = parse_id("user", &config.user_id)?;
+        // Discord's current voice gateway is v9. Do not pin AES-GCM: Discord
+        // guarantees XChaCha20-Poly1305 support, while AES-GCM is hardware-dependent.
+        // DAVE is mandatory for ordinary calls, so provide an identity and negotiate
+        // the crate's current supported DAVE protocol version.
+        let options = ConnectionOptions {
+            gateway_version: 9,
+            required_mode: None,
+            dave_identity: Some(DaveIdentityKey::generate_ephemeral()),
+            ..ConnectionOptions::default()
+        };
         let connection = ConnectionConfig {
             guild_id: server_id,
             channel_id,
@@ -103,6 +114,7 @@ impl VoiceSession {
             token: config.token,
             endpoint: config.endpoint,
         }
+        .with_options(options)
         .connect()
         .await
         .map_err(|error| format!("Voice connection failed: {error}"))?;

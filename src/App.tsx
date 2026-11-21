@@ -8,7 +8,7 @@ import { load } from "@tauri-apps/plugin-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle, Archive, Ban, Bell, BellOff, Check, ChevronDown, ChevronRight, Compass, Copy, Download, Edit3, ExternalLink, Flame, Flag, Gamepad2, Gift, Hash, History, ListChecks, LogOut,
-  Headphones, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
+  Headphones, Link2, Loader2, LockKeyhole, MessageSquare, Mic, MoreHorizontal, Pause, Phone, Pin, Play, Search, Send, Settings, ShoppingBag,
   Maximize2, RotateCcw, ShieldCheck, SmilePlus, Sparkles, Star, Sticker, Terminal, Trash2, Trophy, UserPlus, UserX, Users, Volume2, VolumeX, WifiOff, Wrench, X,
   ZoomIn, ZoomOut, Folder
 } from "lucide-react";
@@ -38,6 +38,8 @@ import { ReviewType } from "./plugins/reviewDB/entities";
 import { getStoredReviewDbToken, setStoredReviewDbToken } from "./plugins/reviewDB/reviewDbApi";
 import { PluginHub } from "./plugins/PluginHub";
 import QuestsStorePanel from "./QuestsStorePanel";
+import CheckpointPanel from "./CheckpointPanel";
+import ConnectionsPanel from "./ConnectionsPanel";
 import "./style.css";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -1707,7 +1709,7 @@ export default function App() {
     } catch { return []; }
   });
   const [isDmView, setIsDmView] = useState(true);
-  const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "notifications" | "nitro" | "shop" | "quests" | "chat">("friends");
+  const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "notifications" | "nitro" | "shop" | "quests" | "checkpoint" | "connections" | "chat">("friends");
   const [relationships, setRelationships] = useState<DiscordRelationship[]>([]);
   const [ignoredUserIds, setIgnoredUserIds] = useState<Set<string>>(() => {
     try {
@@ -3702,8 +3704,17 @@ export default function App() {
             .catch(error => gatewayListenerStateRef.current.notify(`Could not cache message: ${error}`));
           void gatewayListenerStateRef.current.archiveMessageMedia(payload.message);
         }
-        if (payload.message?.author?.id === gatewayListenerStateRef.current.me?.id) {
+        const dmConversation = gatewayListenerStateRef.current.dmChannels.find(channel => channel.id === payload.channel_id);
+        const incomingMessageId = String(payload.message?.id || "");
+        if (dmConversation && incomingMessageId
+          && incomingMessageId.localeCompare(String(dmConversation.last_message_id || "")) > 0) {
+          setDmChannels(previous => previous.map(channel =>
+            channel.id === payload.channel_id ? { ...channel, last_message_id: incomingMessageId } : channel
+          ));
           setRecentlyMessaged(order => [payload.channel_id, ...order.filter(id => id !== payload.channel_id)]);
+        }
+        if (payload.message?.author?.id === gatewayListenerStateRef.current.me?.id) {
+          if (!dmConversation) setRecentlyMessaged(order => [payload.channel_id, ...order.filter(id => id !== payload.channel_id)]);
           if (activeThreadsRef.current.some(thread => thread.id === payload.channel_id)
             || (gatewayListenerStateRef.current.selectedChannel?.id === payload.channel_id
               && isThreadChannel(gatewayListenerStateRef.current.selectedChannel))) {
@@ -4185,6 +4196,7 @@ export default function App() {
     hasOlderMessagesRef.current = false;
     setOlderMessagesLoading(false);
     setHasOlderMessages(false);
+    setIsDmView(false);
     setSelectedGuild(guild);
     selectedGuildRef.current = guild;
     // Fetch the authoritative guild payload (including premium_tier) as soon
@@ -4237,7 +4249,8 @@ export default function App() {
         getChannelPermissions(channel, guild.id, me?.id || "", memberRoles, roles, !!guild.owner)?.canView === false
       ).map(channel => channel.id)));
       const cachedTarget = preferredChannelId
-        ? cachedChannels.find(channel => channel.id === preferredChannelId && isTextChannel(channel) && !isObfuscatedChannel(channel))
+        ? cachedChannels.find(channel => channel.id === preferredChannelId
+          && (isMessageChannel(channel) || isForumChannel(channel)) && !isObfuscatedChannel(channel))
         : cachedChannels.find(channel => isTextChannel(channel) && !isObfuscatedChannel(channel));
       if (cachedTarget) void selectChannel(cachedTarget);
     }
@@ -4301,8 +4314,9 @@ export default function App() {
         .catch(error => console.warn("Could not request guild members over the gateway", error));
 
       const target = preferredChannelId
-        ? sorted.find(channel => channel.id === preferredChannelId && isTextChannel(channel))
-        : sorted.find(isTextChannel);
+        ? sorted.find(channel => channel.id === preferredChannelId
+          && (isMessageChannel(channel) || isForumChannel(channel)) && !isObfuscatedChannel(channel))
+        : sorted.find(channel => isTextChannel(channel) && !isObfuscatedChannel(channel));
       if (target && requestId === guildLoadRequest.current) await selectChannel(target);
     } catch (e) {
       if (requestId !== guildLoadRequest.current) return;
@@ -4405,6 +4419,22 @@ export default function App() {
   }, [channels, dmChannels, forwardTarget?.channel.id, guilds, me?.id, selectedChannel?.id]);
 
   const selectChannel = async (channel: DiscordChannel) => {
+    // A channel carries its own guild context. If a stale list or asynchronous
+    // navigation hands us a channel from another server, switch to that server
+    // first instead of rendering it under the previously selected guild.
+    if (channel.guild_id && selectedGuildRef.current?.id !== channel.guild_id) {
+      const owningGuild = guilds.find(guild => guild.id === channel.guild_id);
+      if (!owningGuild) {
+        notify("That channel belongs to a server that is not currently available");
+        return;
+      }
+      setIsDmView(false);
+      await selectGuild(owningGuild, channel.id);
+      return;
+    }
+    if (channel.type === CHANNEL_TYPE_DM || channel.type === CHANNEL_TYPE_GROUP_DM) {
+      setIsDmView(true);
+    }
     // Cached metadata is display-only; it must never grant access to a hidden channel.
     if (isObfuscatedChannel(channel)) {
       notify("Discord marks this channel as hidden for your account. Its last-known metadata is retained, but it cannot be opened.");
@@ -5330,6 +5360,9 @@ export default function App() {
           scrollToBottom();
         }
         setRecentlyMessaged(order => [sendingChannel.id, ...order.filter(id => id !== sendingChannel.id)]);
+        setDmChannels(previous => previous.map(channel =>
+          channel.id === sendingChannel.id ? { ...channel, last_message_id: sent.id } : channel
+        ));
       }
     } catch (e) {
       notify(`Send failed: ${e}`);
@@ -5587,10 +5620,15 @@ export default function App() {
 
   const orderedDmChannels = useMemo(() => {
     return [...dmChannels].sort((a, b) => {
+      // Recent local activity wins immediately; last_message_id provides the
+      // initial ordering for conversations not seen in this session.
       const ai = recentlyMessaged.indexOf(a.id);
       const bi = recentlyMessaged.indexOf(b.id);
-      if (ai !== -1 || bi !== -1) return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi);
-      return 0;
+      if (ai !== -1 || bi !== -1) {
+        return (ai === -1 ? Number.MAX_SAFE_INTEGER : ai)
+          - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
+      }
+      return String(b.last_message_id || "").localeCompare(String(a.last_message_id || ""));
     });
   }, [dmChannels, recentlyMessaged]);
 
@@ -6604,6 +6642,8 @@ export default function App() {
                   <button className={`dm-nav-item ${activeDmTab === "nitro" ? "active" : ""}`} onClick={() => setActiveDmTab("nitro")}><Flame size={16} /><span>Nitro Home</span></button>
                   <button className={`dm-nav-item ${activeDmTab === "shop" ? "active" : ""}`} onClick={() => setActiveDmTab("shop")}><ShoppingBag size={16} /><span>Shop</span></button>
                   <button className={`dm-nav-item ${activeDmTab === "quests" ? "active" : ""}`} onClick={() => setActiveDmTab("quests")}><Trophy size={16} /><span>Quests</span></button>
+                  <button className={`dm-nav-item ${activeDmTab === "checkpoint" ? "active" : ""}`} onClick={() => setActiveDmTab("checkpoint")}><Sparkles size={16} /><span>Checkpoint</span></button>
+                  <button className={`dm-nav-item ${activeDmTab === "connections" ? "active" : ""}`} onClick={() => setActiveDmTab("connections")}><Link2 size={16} /><span>Connections</span></button>
                 </div>
 
                 <div className="section-caption" style={{ marginTop: 8 }}>DIRECT MESSAGES</div>
@@ -6926,7 +6966,11 @@ export default function App() {
         </aside>
 
         {/* Friends and requests */}
-        {isDmView && (activeDmTab === "quests" || activeDmTab === "shop") ? (
+        {isDmView && activeDmTab === "connections" ? (
+          <ConnectionsPanel />
+        ) : isDmView && activeDmTab === "checkpoint" ? (
+          <CheckpointPanel />
+        ) : isDmView && (activeDmTab === "quests" || activeDmTab === "shop") ? (
           <QuestsStorePanel mode={activeDmTab} />
         ) : showingDirectory ? (
           <section className="directory-area">
