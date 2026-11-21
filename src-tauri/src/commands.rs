@@ -425,6 +425,81 @@ pub async fn get_my_quests(claimed: Option<bool>, state: State<'_, AppState>) ->
     state.router.rest(AccountIdentity::ReadOnly, Method::GET, path, None).await.map_err(map_err)
 }
 
+/// List connected third-party accounts for the authenticated user.
+#[tauri::command]
+pub async fn get_user_connections(state: State<'_, AppState>) -> Result<Value, String> {
+    state.router.rest(AccountIdentity::ReadOnly, Method::GET, "users/@me/connections", None).await.map_err(map_err)
+}
+
+/// Update visibility and activity preferences for a connected account.
+#[tauri::command]
+pub async fn update_user_connection(
+    connection_type: String,
+    connection_id: String,
+    name: Option<String>,
+    show_activity: Option<bool>,
+    friend_sync: Option<bool>,
+    metadata_visibility: Option<u8>,
+    visibility: Option<u8>,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    validate_connection_path(&connection_type, &connection_id)?;
+    let mut body = serde_json::Map::new();
+    if let Some(value) = name { body.insert("name".into(), json!(value)); }
+    if let Some(value) = show_activity { body.insert("show_activity".into(), json!(value)); }
+    if let Some(value) = friend_sync { body.insert("friend_sync".into(), json!(value)); }
+    if let Some(value) = metadata_visibility {
+        if value > 1 { return Err("Metadata visibility must be 0 (private) or 1 (everyone)".into()); }
+        body.insert("metadata_visibility".into(), json!(value));
+    }
+    if let Some(value) = visibility {
+        if value > 1 { return Err("Connection visibility must be 0 (private) or 1 (everyone)".into()); }
+        body.insert("visibility".into(), json!(value));
+    }
+    if body.is_empty() { return Err("No connection settings were supplied".into()); }
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::PATCH,
+        &format!("users/@me/connections/{}/{}", connection_type, connection_id),
+        Some(Value::Object(body)),
+    ).await.map_err(map_err)
+}
+
+/// Refresh a connected provider account.
+#[tauri::command]
+pub async fn refresh_user_connection(connection_type: String, connection_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    validate_connection_path(&connection_type, &connection_id)?;
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::POST,
+        &format!("users/@me/connections/{}/{}/refresh", connection_type, connection_id),
+        Some(json!({})),
+    ).await.map_err(map_err)
+}
+
+/// Remove a linked provider account. Discord also removes guild memberships tied to its integrations.
+#[tauri::command]
+pub async fn delete_user_connection(connection_type: String, connection_id: String, state: State<'_, AppState>) -> Result<Value, String> {
+    validate_connection_path(&connection_type, &connection_id)?;
+    state.router.rest(
+        AccountIdentity::Primary,
+        Method::DELETE,
+        &format!("users/@me/connections/{}/{}", connection_type, connection_id),
+        None,
+    ).await.map_err(map_err)
+}
+
+fn validate_connection_path(connection_type: &str, connection_id: &str) -> Result<(), String> {
+    if connection_type.is_empty() || connection_type.len() > 40
+        || !connection_type.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        || connection_id.is_empty() || connection_id.len() > 128
+        || !connection_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' )
+    {
+        return Err("Invalid connected account type or ID".into());
+    }
+    Ok(())
+}
+
 /// Fetch Discord's official yearly activity checkpoint for the authenticated account.
 #[tauri::command]
 pub async fn get_checkpoint(state: State<'_, AppState>) -> Result<Value, String> {
