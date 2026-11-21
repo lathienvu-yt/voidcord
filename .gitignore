@@ -25,3 +25,4 @@ settings.json
 .vscode/
 vencord-repo/
 gpui-desktop/target/
+voidcord-core/target/
