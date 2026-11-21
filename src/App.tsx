@@ -39,6 +39,7 @@ import { getStoredReviewDbToken, setStoredReviewDbToken } from "./plugins/review
 import { PluginHub } from "./plugins/PluginHub";
 import QuestsStorePanel from "./QuestsStorePanel";
 import CheckpointPanel from "./CheckpointPanel";
+import ConnectionsPanel from "./ConnectionsPanel";
 import "./style.css";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -1708,7 +1709,7 @@ export default function App() {
     } catch { return []; }
   });
   const [isDmView, setIsDmView] = useState(true);
-  const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "notifications" | "nitro" | "shop" | "quests" | "checkpoint" | "chat">("friends");
+  const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "notifications" | "nitro" | "shop" | "quests" | "checkpoint" | "connections" | "chat">("friends");
   const [relationships, setRelationships] = useState<DiscordRelationship[]>([]);
   const [ignoredUserIds, setIgnoredUserIds] = useState<Set<string>>(() => {
     try {
@@ -6642,6 +6643,7 @@ export default function App() {
                   <button className={`dm-nav-item ${activeDmTab === "shop" ? "active" : ""}`} onClick={() => setActiveDmTab("shop")}><ShoppingBag size={16} /><span>Shop</span></button>
                   <button className={`dm-nav-item ${activeDmTab === "quests" ? "active" : ""}`} onClick={() => setActiveDmTab("quests")}><Trophy size={16} /><span>Quests</span></button>
                   <button className={`dm-nav-item ${activeDmTab === "checkpoint" ? "active" : ""}`} onClick={() => setActiveDmTab("checkpoint")}><Sparkles size={16} /><span>Checkpoint</span></button>
+                  <button className={`dm-nav-item ${activeDmTab === "connections" ? "active" : ""}`} onClick={() => setActiveDmTab("connections")}><Link2 size={16} /><span>Connections</span></button>
                 </div>
 
                 <div className="section-caption" style={{ marginTop: 8 }}>DIRECT MESSAGES</div>
@@ -6964,7 +6966,9 @@ export default function App() {
         </aside>
 
         {/* Friends and requests */}
-        {isDmView && activeDmTab === "checkpoint" ? (
+        {isDmView && activeDmTab === "connections" ? (
+          <ConnectionsPanel />
+        ) : isDmView && activeDmTab === "checkpoint" ? (
           <CheckpointPanel />
         ) : isDmView && (activeDmTab === "quests" || activeDmTab === "shop") ? (
           <QuestsStorePanel mode={activeDmTab} />
