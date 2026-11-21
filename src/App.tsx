@@ -38,6 +38,7 @@ import { ReviewType } from "./plugins/reviewDB/entities";
 import { getStoredReviewDbToken, setStoredReviewDbToken } from "./plugins/reviewDB/reviewDbApi";
 import { PluginHub } from "./plugins/PluginHub";
 import QuestsStorePanel from "./QuestsStorePanel";
+import CheckpointPanel from "./CheckpointPanel";
 import "./style.css";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -1707,7 +1708,7 @@ export default function App() {
     } catch { return []; }
   });
   const [isDmView, setIsDmView] = useState(true);
-  const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "notifications" | "nitro" | "shop" | "quests" | "chat">("friends");
+  const [activeDmTab, setActiveDmTab] = useState<"friends" | "friend-requests" | "message-requests" | "notifications" | "nitro" | "shop" | "quests" | "checkpoint" | "chat">("friends");
   const [relationships, setRelationships] = useState<DiscordRelationship[]>([]);
   const [ignoredUserIds, setIgnoredUserIds] = useState<Set<string>>(() => {
     try {
@@ -6640,6 +6641,7 @@ export default function App() {
                   <button className={`dm-nav-item ${activeDmTab === "nitro" ? "active" : ""}`} onClick={() => setActiveDmTab("nitro")}><Flame size={16} /><span>Nitro Home</span></button>
                   <button className={`dm-nav-item ${activeDmTab === "shop" ? "active" : ""}`} onClick={() => setActiveDmTab("shop")}><ShoppingBag size={16} /><span>Shop</span></button>
                   <button className={`dm-nav-item ${activeDmTab === "quests" ? "active" : ""}`} onClick={() => setActiveDmTab("quests")}><Trophy size={16} /><span>Quests</span></button>
+                  <button className={`dm-nav-item ${activeDmTab === "checkpoint" ? "active" : ""}`} onClick={() => setActiveDmTab("checkpoint")}><Sparkles size={16} /><span>Checkpoint</span></button>
                 </div>
 
                 <div className="section-caption" style={{ marginTop: 8 }}>DIRECT MESSAGES</div>
@@ -6962,7 +6964,9 @@ export default function App() {
         </aside>
 
         {/* Friends and requests */}
-        {isDmView && (activeDmTab === "quests" || activeDmTab === "shop") ? (
+        {isDmView && activeDmTab === "checkpoint" ? (
+          <CheckpointPanel />
+        ) : isDmView && (activeDmTab === "quests" || activeDmTab === "shop") ? (
           <QuestsStorePanel mode={activeDmTab} />
         ) : showingDirectory ? (
           <section className="directory-area">
