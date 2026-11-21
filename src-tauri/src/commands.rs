@@ -425,6 +425,31 @@ pub async fn get_my_quests(claimed: Option<bool>, state: State<'_, AppState>) ->
     state.router.rest(AccountIdentity::ReadOnly, Method::GET, path, None).await.map_err(map_err)
 }
 
+/// Fetch Discord's official yearly activity checkpoint for the authenticated account.
+#[tauri::command]
+pub async fn get_checkpoint(state: State<'_, AppState>) -> Result<Value, String> {
+    state
+        .router
+        .rest(AccountIdentity::ReadOnly, Method::GET, "checkpoint", None)
+        .await
+        .map_err(map_err)
+}
+
+/// Claim the free avatar decoration offered by the current checkpoint.
+#[tauri::command]
+pub async fn claim_checkpoint_loot(state: State<'_, AppState>) -> Result<Value, String> {
+    state
+        .router
+        .rest(
+            AccountIdentity::Primary,
+            Method::POST,
+            "checkpoint/loot",
+            Some(json!({})),
+        )
+        .await
+        .map_err(map_err)
+}
+
 /// Read published store listings for an application. This is browse-only; VoidCord does not initiate purchases.
 #[tauri::command]
 pub async fn get_published_store_listings(application_id: String, state: State<'_, AppState>) -> Result<Value, String> {
