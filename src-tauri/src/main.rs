@@ -307,6 +307,8 @@ fn main() {
             commands::complete_oauth2_redirect,
             commands::get_content_inventory,
             commands::get_my_quests,
+            commands::get_checkpoint,
+            commands::claim_checkpoint_loot,
             commands::get_published_store_listings,
             commands::get_guilds,
             commands::get_guild_settings,
